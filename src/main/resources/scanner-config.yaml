@@ -1,0 +1,69 @@
+# Market Intelligence Engine - Scanner Configuration
+# V1.1 - Progressive Quant Architecture
+# Configuration Locked Per Final Approval
+
+scanner:
+  mode: strict  # strict | ultra_strict (locked: use strict for V1.1)
+  
+  # Universe Configuration
+  universe:
+    max_stocks: 100
+    min_historical_days: 250
+    
+  # Data Quality (LOCKED CONFIGURATION)
+  quality_checks:
+    enabled: true
+    min_volume: 1000
+    max_price_gap_percent: 50.0
+    
+  # Indicator Periods
+  indicators:
+    sma_short: 50
+    sma_long: 200
+    atr_period: 14
+    volume_avg_period: 20
+    lookback_period: 20
+    
+  # Scanner Rules Configuration
+  rules:
+    # STRICT MODE Thresholds (LOCKED CONFIGURATION)
+    strict:
+      volume_threshold: 1.4
+      compression_days_min: 10
+      atr_compression_ratio: 0.70
+      breakout_buffer: 1.01
+      close_in_range_top: 0.80
+      require_golden_cross: true
+      min_avg_volume: 100000
+      high_confidence_volume: 1.8
+      high_confidence_compression: 15
+      max_gap_percent: 5.0  # Gap filter threshold (configurable)
+      
+    # ULTRA STRICT MODE Thresholds (Phase 2)
+    ultra_strict:
+      volume_threshold: 1.8
+      compression_days_min: 15
+      atr_compression_ratio: 0.60
+      breakout_buffer: 1.02
+      close_in_range_top: 0.85
+      require_golden_cross: true
+      min_avg_volume: 200000
+      high_confidence_volume: 2.0
+      high_confidence_compression: 20
+      max_gap_percent: 3.0
+      
+  # Active Rules (Enable/Disable)
+  active_rules:
+    - BREAKOUT_CONFIRMED
+    # - COMPRESSION_WATCH  # Phase 2
+    # - WEAK_AVOID  # Phase 2
+    
+  # Output Configuration
+  output:
+    store_results: true
+    log_level: DEBUG
+    
+  # Phase 2 Features (Disabled for V1.1)
+  advanced:
+    calculate_forward_returns: false  # Schema ready, computation deferred
+    ai_summary: false  # Not implemented in V1.1
