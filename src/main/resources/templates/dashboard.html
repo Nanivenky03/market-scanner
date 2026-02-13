@@ -3,350 +3,385 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Market Intelligence Engine - Dashboard</title>
+    <title>Market Scanner V1.2 - Production</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #0f172a;
-            color: #e2e8f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f6fa;
             padding: 20px;
         }
         
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
+        .container { max-width: 1400px; margin: 0 auto; }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         
-        header {
-            margin-bottom: 30px;
-            border-bottom: 2px solid #1e293b;
-            padding-bottom: 20px;
-        }
+        .header h1 { margin-bottom: 10px; }
+        .header p { opacity: 0.9; font-size: 14px; }
         
-        h1 {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #f8fafc;
-            margin-bottom: 10px;
-        }
-        
-        .subtitle {
-            color: #94a3b8;
-            font-size: 0.95rem;
-        }
-        
-        .stats {
+        .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
         
         .stat-card {
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 8px;
+            background: white;
             padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
         }
         
-        .stat-label {
-            color: #94a3b8;
-            font-size: 0.85rem;
+        .stat-card h3 {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
         }
         
-        .stat-value {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #f8fafc;
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #2c3e50;
         }
         
-        .stat-value.high {
-            color: #22c55e;
+        .actions {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
         
-        .stat-value.moderate {
-            color: #eab308;
+        .actions h2 {
+            margin-bottom: 20px;
+            color: #2c3e50;
         }
         
-        .results-section {
-            margin-top: 30px;
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
         }
         
-        .section-header {
-            font-size: 1.3rem;
+        .btn {
+            padding: 15px 25px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
             font-weight: 600;
-            margin-bottom: 15px;
-            color: #f8fafc;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        .signals {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .signals h2 {
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+        
+        .signal-list {
+            overflow-x: auto;
         }
         
         table {
             width: 100%;
-            background: #1e293b;
-            border-radius: 8px;
-            overflow: hidden;
             border-collapse: collapse;
         }
         
-        thead {
-            background: #0f172a;
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
         }
         
         th {
-            padding: 15px;
-            text-align: left;
+            background: #f9fafb;
             font-weight: 600;
-            color: #cbd5e1;
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        td {
-            padding: 15px;
-            border-top: 1px solid #334155;
+            color: #374151;
         }
         
         tr:hover {
-            background: #334155;
+            background: #f9fafb;
+        }
+        
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+        }
+        
+        .message.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+        }
+        
+        .message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #ef4444;
         }
         
         .badge {
             display: inline-block;
             padding: 4px 12px;
             border-radius: 12px;
-            font-size: 0.75rem;
+            font-size: 12px;
             font-weight: 600;
-            text-transform: uppercase;
         }
         
-        .badge-high {
-            background: #166534;
-            color: #86efac;
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
         }
         
-        .badge-moderate {
-            background: #713f12;
-            color: #fde047;
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
         }
         
-        .badge-breakout {
-            background: #1e3a8a;
-            color: #93c5fd;
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
         }
         
-        .symbol {
-            font-weight: 700;
-            color: #f8fafc;
-            font-size: 1.05rem;
-        }
-        
-        .metadata {
-            font-size: 0.85rem;
-            color: #94a3b8;
-            margin-top: 5px;
-        }
-        
-        .actions {
-            margin: 30px 0;
-            padding: 20px;
-            background: #1e293b;
-            border-radius: 8px;
-            border: 1px solid #334155;
-        }
-        
-        button {
-            background: #3b82f6;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 6px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-right: 10px;
-        }
-        
-        button:hover {
-            background: #2563eb;
-        }
-        
-        button:disabled {
-            background: #475569;
-            cursor: not-allowed;
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: #64748b;
-        }
-        
-        .empty-state-icon {
-            font-size: 3rem;
-            margin-bottom: 15px;
-        }
-        
-        .last-run {
-            margin-top: 20px;
-            padding: 15px;
-            background: #0f172a;
-            border-radius: 6px;
-            font-size: 0.9rem;
-            color: #94a3b8;
-        }
-        
-        .status-success {
-            color: #22c55e;
-        }
-        
-        .status-failed {
-            color: #ef4444;
-        }
-        
-        .chart-link {
-            color: #3b82f6;
-            text-decoration: none;
-            font-weight: 500;
-        }
-        
-        .chart-link:hover {
-            color: #2563eb;
-            text-decoration: underline;
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>📊 Market Intelligence Engine</h1>
-            <p class="subtitle">Professional Stock Scanner - Confirmed Breakout Detection</p>
-        </header>
+        <div class="header">
+            <h1>Market Scanner V1.2-PRODUCTION</h1>
+            <p>Production-Grade Market Data Infrastructure | Provider-Driven Truth | Zero Silent Failures</p>
+        </div>
         
-        <div class="stats">
+        <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-label">Total Signals Today</div>
-                <div class="stat-value" th:text="${totalSignals}">0</div>
+                <h3>Trading Date</h3>
+                <div class="value" th:text="${todayDate}">2026-02-12</div>
             </div>
             
             <div class="stat-card">
-                <div class="stat-label">High Confidence</div>
-                <div class="stat-value high" th:text="${highConfidence.get('BREAKOUT_CONFIRMED') ?: 0}">0</div>
+                <h3>Universe Size</h3>
+                <div class="value" th:text="${universeCount}">50</div>
             </div>
             
             <div class="stat-card">
-                <div class="stat-label">Moderate Confidence</div>
-                <div class="stat-value moderate" th:text="${moderateConfidence.get('BREAKOUT_CONFIRMED') ?: 0}">0</div>
+                <h3>Total Prices</h3>
+                <div class="value" th:text="${priceCount}">0</div>
             </div>
             
             <div class="stat-card">
-                <div class="stat-label">Scan Date</div>
-                <div class="stat-value" style="font-size: 1.5rem;" th:text="${scanDate}">2026-02-09</div>
+                <h3>Total Signals</h3>
+                <div class="value" th:text="${signalCount}">0</div>
             </div>
         </div>
         
         <div class="actions">
-            <button onclick="triggerScan()">🔄 Run Scanner Now</button>
-            <button onclick="if(confirm('This will download 5 years of data for all stocks. Continue?')) loadHistoricalData()">
-                📥 Load Historical Data (First Time Setup)
-            </button>
+            <h2>System Actions</h2>
             
-            <div class="last-run" th:if="${latestRun != null}">
-                Last Run: <strong th:text="${latestRun.runDate}">2026-02-09</strong> | 
-                Status: <span th:class="${latestRun.status == 'SUCCESS' ? 'status-success' : 'status-failed'}" 
-                              th:text="${latestRun.status}">SUCCESS</span> | 
-                Stocks Scanned: <strong th:text="${latestRun.stocksScanned}">0</strong> | 
-                Stocks Flagged: <strong th:text="${latestRun.stocksFlagged}">0</strong> |
-                Time: <strong th:text="${latestRun.executionTimeMs}">0</strong>ms
+            <div class="button-grid">
+                <button class="btn btn-warning" onclick="loadHistorical()">
+                    Load Historical Data (5 Years)
+                </button>
+                
+                <button class="btn btn-primary" 
+                        th:disabled="${!canIngest}" 
+                        onclick="ingestDaily()">
+                    Ingest Daily Data
+                </button>
+                
+                <button class="btn btn-success" 
+                        th:disabled="${!canScan}" 
+                        onclick="executeScan()">
+                    Execute Scanner
+                </button>
             </div>
+            
+            <div id="message" class="message"></div>
         </div>
         
-        <div class="results-section">
-            <h2 class="section-header">Today's Signals</h2>
+        <div class="signals">
+            <h2>Recent Signals</h2>
             
-            <div th:if="${results.isEmpty()}" class="empty-state">
-                <div class="empty-state-icon">🔍</div>
-                <h3>No Signals Detected</h3>
-                <p>Scanner found no confirmed breakout setups today.</p>
-                <p style="margin-top: 10px; font-size: 0.9rem;">
-                    This is normal. Quality > Quantity.
+            <div class="signal-list">
+                <table th:if="${!recentSignals.isEmpty()}">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Symbol</th>
+                            <th>Rule</th>
+                            <th>Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr th:each="signal : ${recentSignals}">
+                            <td th:text="${signal.scanDate}">2026-02-12</td>
+                            <td><strong th:text="${signal.symbol}">RELIANCE</strong></td>
+                            <td th:text="${signal.ruleName}">Breakout Confirmed</td>
+                            <td>
+                                <span class="badge badge-success" 
+                                      th:text="${#numbers.formatDecimal(signal.confidence, 1, 2)}">
+                                    0.75
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                
+                <p th:if="${recentSignals.isEmpty()}" style="color: #666; text-align: center; padding: 40px;">
+                    No signals yet. Run ingestion and scanner to generate signals.
                 </p>
             </div>
-            
-            <table th:if="${!results.isEmpty()}">
-                <thead>
-                    <tr>
-                        <th>Symbol</th>
-                        <th>Classification</th>
-                        <th>Confidence</th>
-                        <th>Details</th>
-                        <th>Chart</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr th:each="result : ${results}">
-                        <td>
-                            <div class="symbol" th:text="${result.symbol}">RELIANCE</div>
-                        </td>
-                        <td>
-                            <span class="badge badge-breakout" th:text="${result.classification}">
-                                BREAKOUT_CONFIRMED
-                            </span>
-                        </td>
-                        <td>
-                            <span class="badge"
-                                  th:classappend="${result.confidence == 'HIGH' ? 'badge-high' : 'badge-moderate'}"
-                                  th:text="${result.confidence}">
-                                HIGH
-                            </span>
-                        </td>
-                        <td>
-                            <div class="metadata" th:utext="${#strings.replace(result.metadata, ',', '<br>')}">
-                                Volume Ratio: 1.85<br>Compression: 18 days
-                            </div>
-                        </td>
-                        <td>
-                            <a class="chart-link" 
-                               th:href="'https://www.tradingview.com/chart/?symbol=NSE%3A' + ${result.symbol}"
-                               target="_blank">
-                                View Chart →
-                            </a>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
         </div>
     </div>
     
     <script>
-        function triggerScan() {
-            if (!confirm('Trigger manual scan? This will fetch latest data and run the scanner.')) {
+        function showMessage(text, isSuccess) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = 'message ' + (isSuccess ? 'success' : 'error');
+            msg.style.display = 'block';
+            
+            setTimeout(() => {
+                msg.style.display = 'none';
+            }, 5000);
+        }
+        
+        function loadHistorical() {
+            if (!confirm('Load 5 years of historical data? This may take 20-30 minutes.')) {
                 return;
             }
             
-            fetch('/scan/trigger', { method: 'POST' })
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Loading...';
+            
+            fetch('/ingest/historical?years=5', { method: 'POST' })
                 .then(r => r.json())
                 .then(data => {
-                    alert(data.message);
-                    if (data.status === 'success') {
-                        setTimeout(() => location.reload(), 3000);
+                    btn.disabled = false;
+                    btn.textContent = 'Load Historical Data (5 Years)';
+                    
+                    if (data.success) {
+                        showMessage(data.message, true);
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showMessage(data.message, false);
                     }
                 })
-                .catch(err => alert('Error: ' + err));
+                .catch(err => {
+                    btn.disabled = false;
+                    btn.textContent = 'Load Historical Data (5 Years)';
+                    showMessage('Error: ' + err.message, false);
+                });
         }
         
-        function loadHistoricalData() {
-            fetch('/data/historical?years=5', { method: 'POST' })
+        function ingestDaily() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Ingesting...';
+            
+            fetch('/ingest/daily', { method: 'POST' })
                 .then(r => r.json())
-                .then(data => alert(data.message))
-                .catch(err => alert('Error: ' + err));
+                .then(data => {
+                    btn.disabled = false;
+                    btn.textContent = 'Ingest Daily Data';
+                    
+                    if (data.success) {
+                        showMessage(data.message, true);
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showMessage(data.message, false);
+                    }
+                })
+                .catch(err => {
+                    btn.disabled = false;
+                    btn.textContent = 'Ingest Daily Data';
+                    showMessage('Error: ' + err.message, false);
+                });
+        }
+        
+        function executeScan() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Scanning...';
+            
+            fetch('/scan/execute', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    btn.disabled = false;
+                    btn.textContent = 'Execute Scanner';
+                    
+                    if (data.success) {
+                        showMessage(data.message, true);
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showMessage(data.message, false);
+                    }
+                })
+                .catch(err => {
+                    btn.disabled = false;
+                    btn.textContent = 'Execute Scanner';
+                    showMessage('Error: ' + err.message, false);
+                });
         }
     </script>
 </body>
