@@ -6,42 +6,26 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
-
+@Entity
+@Table(name = "stock_universe")
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Entity
-@Table(name = "stock_universe")
 public class StockUniverse {
     
     @Id
-    @Column(name = "symbol")
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Column(unique = true, nullable = false)
     private String symbol;
     
     @Column(name = "company_name", nullable = false)
     private String companyName;
     
-    @Column(name = "index_name", nullable = false)
-    private String indexName;
-    
-    @Column
     private String sector;
     
     @Column(name = "is_active")
     private Boolean isActive;
-    
-    @Column(name = "added_at")
-    private LocalDateTime addedAt;
-    
-    @PrePersist
-    protected void onCreate() {
-        if (addedAt == null) {
-            addedAt = LocalDateTime.now();
-        }
-        if (isActive == null) {
-            isActive = true;
-        }
-    }
 }

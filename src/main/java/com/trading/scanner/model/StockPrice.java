@@ -1,21 +1,20 @@
 package com.trading.scanner.model;
 
+import com.trading.scanner.config.LocalDateConverter;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 
+@Entity
+@Table(name = "stock_prices",
+       uniqueConstraints = @UniqueConstraint(columnNames = {"symbol", "date"}))
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Entity
-@Table(name = "stock_prices", 
-       uniqueConstraints = @UniqueConstraint(columnNames = {"symbol", "date"}))
 public class StockPrice {
     
     @Id
@@ -25,40 +24,24 @@ public class StockPrice {
     @Column(nullable = false)
     private String symbol;
     
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "TEXT")
+    @Convert(converter = LocalDateConverter.class)
     private LocalDate date;
     
-    @Column(nullable = false)
-    private Double open;
+    @Column(name = "open_price")
+    private Double openPrice;
     
-    @Column(nullable = false)
-    private Double high;
+    @Column(name = "high_price")
+    private Double highPrice;
     
-    @Column(nullable = false)
-    private Double low;
+    @Column(name = "low_price")
+    private Double lowPrice;
     
-    @Column(nullable = false)
-    private Double close;
+    @Column(name = "close_price")
+    private Double closePrice;
     
-    @Column(nullable = false)
-    private Long volume;
-    
-    @Column(name = "adj_close", nullable = false)
+    @Column(name = "adj_close")
     private Double adjClose;
     
-    @Column(name = "data_source")
-    private String dataSource;
-    
-    @Column(name = "ingested_at")
-    private LocalDateTime ingestedAt;
-    
-    @PrePersist
-    protected void onCreate() {
-        if (ingestedAt == null) {
-            ingestedAt = LocalDateTime.now();
-        }
-        if (dataSource == null) {
-            dataSource = "yahoo";
-        }
-    }
+    private Long volume;
 }

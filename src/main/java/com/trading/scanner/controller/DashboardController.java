@@ -1,23 +1,21 @@
 package com.trading.scanner.controller;
 
-import com.trading.scanner.model.ScanResult;
-import com.trading.scanner.model.ScannerRun;
+import com.trading.scanner.config.ExchangeConfiguration;
+import com.trading.scanner.model.ScanExecutionState.ExecutionMode;
 import com.trading.scanner.repository.ScanResultRepository;
-import com.trading.scanner.repository.ScannerRunRepository;
-import com.trading.scanner.scheduler.DailyScanScheduler;
+import com.trading.scanner.repository.StockPriceRepository;
+import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.service.data.DataIngestionService;
+import com.trading.scanner.service.scanner.ScannerEngine;
+import com.trading.scanner.service.state.ExecutionStateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -25,125 +23,124 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DashboardController {
     
-    private final ScanResultRepository scanResultRepository;
-    private final ScannerRunRepository scannerRunRepository;
-    private final DailyScanScheduler scheduler;
     private final DataIngestionService dataIngestionService;
+    private final ScannerEngine scannerEngine;
+    private final ExecutionStateService executionStateService;
+    private final StockUniverseRepository universeRepository;
+    private final StockPriceRepository priceRepository;
+    private final ScanResultRepository resultRepository;
+    private final ExchangeConfiguration config;
     
-    /**
-     * Main dashboard page
-     */
     @GetMapping("/")
     public String dashboard(Model model) {
-        LocalDate today = LocalDate.now();
+        LocalDate today = config.getTodayInExchangeZone();
         
-        // Get today's scan results
-        List<ScanResult> todaysResults = scanResultRepository
-            .findByScanDateOrderByConfidenceDesc(today);
+        long universeCount = universeRepository.findByIsActiveTrue().size();
+        long priceCount = priceRepository.countAll();
+        long signalCount = resultRepository.count();
         
-        // Get latest scanner run info
-        ScannerRun latestRun = scannerRunRepository
-            .findTopByOrderByRunDateDesc()
-            .orElse(null);
-        
-        // Group results by classification and confidence
-        Map<String, Long> highConfidence = new HashMap<>();
-        Map<String, Long> moderateConfidence = new HashMap<>();
-        
-        for (ScanResult result : todaysResults) {
-            String key = result.getClassification();
-            
-            if ("HIGH".equals(result.getConfidence())) {
-                highConfidence.put(key, highConfidence.getOrDefault(key, 0L) + 1);
-            } else {
-                moderateConfidence.put(key, moderateConfidence.getOrDefault(key, 0L) + 1);
-            }
-        }
-        
-        model.addAttribute("scanDate", today);
-        model.addAttribute("results", todaysResults);
-        model.addAttribute("totalSignals", todaysResults.size());
-        model.addAttribute("highConfidence", highConfidence);
-        model.addAttribute("moderateConfidence", moderateConfidence);
-        model.addAttribute("latestRun", latestRun);
+        model.addAttribute("todayDate", today);
+        model.addAttribute("exchangeTimezone", config.getExchangeZone().toString());
+        model.addAttribute("universeCount", universeCount);
+        model.addAttribute("priceCount", priceCount);
+        model.addAttribute("signalCount", signalCount);
+        model.addAttribute("canIngest", executionStateService.canIngestToday());
+        model.addAttribute("canScan", executionStateService.canScanToday());
+        model.addAttribute("recentSignals", resultRepository.findTop10ByOrderByScanDateDesc());
         
         return "dashboard";
     }
     
-    /**
-     * Trigger manual scan
-     */
-    @PostMapping("/scan/trigger")
+    @PostMapping("/ingest/historical")
     @ResponseBody
-    public Map<String, String> triggerScan() {
-        log.info("Manual scan triggered from dashboard");
+    public Map<String, Object> ingestHistorical(@RequestParam(defaultValue = "5") int years) {
+        Map<String, Object> response = new HashMap<>();
+        
+        if (!config.isHistoricalReloadAllowed()) {
+            response.put("success", false);
+            response.put("message", "Historical reload requires BOTH config flags: " +
+                "scanner.allowHistoricalReload=true AND scanner.historical.reload.confirm=true");
+            return response;
+        }
         
         try {
-            // Run in separate thread to avoid timeout
-            new Thread(() -> scheduler.triggerManualScan()).start();
+            log.info("Starting historical data ingestion ({} years) - MANUAL trigger", years);
+            dataIngestionService.ingestHistoricalDataForUniverse(years);
             
-            return Map.of(
-                "status", "success",
-                "message", "Scanner job started. Check logs for progress."
-            );
+            response.put("success", true);
+            response.put("message", "Historical data ingestion completed");
         } catch (Exception e) {
-            return Map.of(
-                "status", "error",
-                "message", "Failed to trigger scan: " + e.getMessage()
-            );
+            log.error("Historical ingestion failed: {}", e.getMessage(), e);
+            response.put("success", false);
+            response.put("message", "Error: " + e.getMessage());
         }
+        
+        return response;
     }
     
-    /**
-     * Load historical data (one-time setup)
-     */
-    @PostMapping("/data/historical")
+    @PostMapping("/ingest/daily")
     @ResponseBody
-    public Map<String, String> loadHistoricalData(
-            @RequestParam(defaultValue = "5") int years) {
-        
-        log.info("Historical data load triggered: {} years", years);
+    public Map<String, Object> ingestDaily() {
+        Map<String, Object> response = new HashMap<>();
         
         try {
-            // Run in separate thread
-            new Thread(() -> dataIngestionService.ingestHistoricalDataForUniverse(years)).start();
+            log.info("Starting daily data ingestion - MANUAL trigger");
+            dataIngestionService.ingestDailyData(ExecutionMode.MANUAL);
             
-            return Map.of(
-                "status", "success",
-                "message", "Historical data ingestion started for " + years + " years. " +
-                          "This will take 15-30 minutes. Check logs for progress."
-            );
+            response.put("success", true);
+            response.put("message", "Daily ingestion completed");
         } catch (Exception e) {
-            return Map.of(
-                "status", "error",
-                "message", "Failed to start historical data load: " + e.getMessage()
-            );
+            log.error("Daily ingestion failed: {}", e.getMessage(), e);
+            response.put("success", false);
+            response.put("message", "Error: " + e.getMessage());
         }
+        
+        return response;
     }
     
-    /**
-     * API endpoint to get today's results as JSON
-     */
-    @GetMapping("/api/results/today")
+    @PostMapping("/scan/execute")
     @ResponseBody
-    public List<ScanResult> getTodaysResults() {
-        return scanResultRepository.findByScanDateOrderByConfidenceDesc(LocalDate.now());
+    public Map<String, Object> executeScan() {
+        Map<String, Object> response = new HashMap<>();
+        
+        try {
+            log.info("Starting scanner execution - MANUAL trigger");
+            scannerEngine.executeDailyScan();
+            
+            response.put("success", true);
+            response.put("message", "Scan completed successfully");
+        } catch (Exception e) {
+            log.error("Scan execution failed: {}", e.getMessage(), e);
+            response.put("success", false);
+            response.put("message", "Error: " + e.getMessage());
+        }
+        
+        return response;
     }
     
-    /**
-     * Health check endpoint
-     */
+    @GetMapping("/status")
+    @ResponseBody
+    public Map<String, Object> getStatus() {
+        Map<String, Object> status = new HashMap<>();
+        LocalDate today = config.getTodayInExchangeZone();
+        
+        status.put("tradingDate", today.toString());
+        status.put("exchangeTimezone", config.getExchangeZone().toString());
+        status.put("canIngest", executionStateService.canIngestToday());
+        status.put("canScan", executionStateService.canScanToday());
+        status.put("universeSize", universeRepository.findByIsActiveTrue().size());
+        status.put("totalPrices", priceRepository.countAll());
+        status.put("totalSignals", resultRepository.count());
+        
+        return status;
+    }
+    
     @GetMapping("/health")
     @ResponseBody
-    public Map<String, Object> health() {
-        ScannerRun latestRun = scannerRunRepository
-            .findTopByOrderByRunDateDesc()
-            .orElse(null);
-        
-        return Map.of(
-            "status", "UP",
-            "lastScanDate", latestRun != null ? latestRun.getRunDate() : "Never",
-            "lastScanStatus", latestRun != null ? latestRun.getStatus() : "N/A"
-        );
+    public Map<String, String> health() {
+        Map<String, String> health = new HashMap<>();
+        health.put("status", "UP");
+        health.put("version", "1.2.0-PRODUCTION");
+        return health;
     }
 }
