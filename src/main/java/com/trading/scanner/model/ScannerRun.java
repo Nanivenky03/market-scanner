@@ -1,31 +1,28 @@
 package com.trading.scanner.model;
 
+import com.trading.scanner.config.LocalDateConverter;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 
+@Entity
+@Table(name = "scanner_runs")
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Entity
-@Table(name = "scanner_runs")
 public class ScannerRun {
     
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     
-    @Column(name = "run_date", nullable = false)
+    @Column(name = "run_date", nullable = false, columnDefinition = "TEXT")
+    @Convert(converter = LocalDateConverter.class)
     private LocalDate runDate;
-    
-    @Column(nullable = false)
-    private String status;  // SUCCESS, PARTIAL, FAILED
     
     @Column(name = "stocks_scanned")
     private Integer stocksScanned;
@@ -33,19 +30,8 @@ public class ScannerRun {
     @Column(name = "stocks_flagged")
     private Integer stocksFlagged;
     
-    @Column(columnDefinition = "TEXT")
-    private String errors;  // JSON string
+    private String status;
     
-    @Column(name = "execution_time_ms")
-    private Long executionTimeMs;
-    
-    @Column(name = "created_at")
-    private LocalDateTime createdAt;
-    
-    @PrePersist
-    protected void onCreate() {
-        if (createdAt == null) {
-            createdAt = LocalDateTime.now();
-        }
-    }
+    @Column(name = "error_message")
+    private String errorMessage;
 }
