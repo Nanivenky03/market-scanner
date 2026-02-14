@@ -37,7 +37,7 @@ public class ScannerEngine {
     private final ExecutionStateService executionStateService;
     private final ExchangeConfiguration config;
     
-    @Value("${scanner.version:1.2.0-PRODUCTION}")
+    @Value("${app.version}")
     private String scannerVersion;
     
     @Transactional

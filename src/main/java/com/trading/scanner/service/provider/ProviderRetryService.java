@@ -2,6 +2,7 @@ package com.trading.scanner.service.provider;
 
 import com.trading.scanner.config.ExchangeConfiguration;
 import com.trading.scanner.model.StockPrice;
+import com.trading.scanner.model.StockUniverse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,7 +21,7 @@ public class ProviderRetryService {
     private final Random random = new Random();
     
     public ProviderResult<List<StockPrice>> fetchHistoricalDataWithRetry(
-            String symbol, LocalDate startDate, LocalDate endDate) {
+            StockUniverse stock, LocalDate startDate, LocalDate endDate) {
         
         if (!circuitBreaker.isCallAllowed()) {
             return ProviderResult.circuitOpen();
@@ -34,12 +35,19 @@ public class ProviderRetryService {
         
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                List<StockPrice> prices = provider.fetchHistoricalData(symbol, startDate, endDate);
+                List<StockPrice> prices = provider.fetchHistoricalData(stock, startDate, endDate);
                 circuitBreaker.recordSuccess();
                 return ProviderResult.success(prices);
                 
             } catch (DataProviderException e) {
                 lastException = e;
+
+                if (e instanceof SymbolNotFoundException) {
+                    log.warn("Symbol not found for {}. No retries will be attempted.", stock.getSymbol());
+                    break; // DO NOT record failure
+                }
+
+                // Only systemic/transient failures reach here
                 circuitBreaker.recordFailure();
                 
                 if (attempt < maxAttempts) {

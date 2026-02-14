@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Market Scanner V1.2 - Production</title>
+    <title th:text="|${appName} ${appVersion}|">Market Scanner</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -208,7 +208,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>Market Scanner V1.2-PRODUCTION</h1>
+            <h1 th:text="|${appName} ${appVersion}|">Market Scanner</h1>
             <p>Production-Grade Market Data Infrastructure | Provider-Driven Truth | Zero Silent Failures</p>
         </div>
         
