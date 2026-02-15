@@ -2,6 +2,7 @@ package com.trading.scanner.service.provider;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trading.scanner.aop.SimulationExit;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.StockPrice;
@@ -28,6 +29,7 @@ import java.util.List;
  */
 @Slf4j
 @Service
+@SimulationExit
 public class YahooFinanceProvider implements MarketDataProvider {
 
     private static final String YAHOO_API_URL = "https://query1.finance.yahoo.com/v8/finance/chart/";

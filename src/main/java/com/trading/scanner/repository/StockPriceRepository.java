@@ -13,6 +13,8 @@ public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
     
     List<StockPrice> findBySymbolOrderByDateAsc(String symbol);
     
+    List<StockPrice> findByDate(LocalDate date);
+    
     List<StockPrice> findBySymbolAndDateBetweenOrderByDateAsc(
         String symbol, LocalDate startDate, LocalDate endDate);
     
