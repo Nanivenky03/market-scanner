@@ -9,6 +9,10 @@ public interface ScannerRule {
     
     String getRuleName();
     
+    String getRuleVersion();
+    
+    String getParameterSnapshot();
+    
     boolean matches(String symbol, List<StockPrice> prices, IndicatorBundle indicators);
     
     Double getConfidence(String symbol, List<StockPrice> prices, IndicatorBundle indicators);

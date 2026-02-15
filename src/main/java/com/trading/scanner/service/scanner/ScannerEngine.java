@@ -84,6 +84,8 @@ public class ScannerEngine {
                             .symbol(stock.getSymbol())
                             .scanDate(today)
                             .ruleName(rule.getRuleName())
+                            .ruleVersion(rule.getRuleVersion())
+                            .parameterSnapshot(rule.getParameterSnapshot())
                             .confidence(confidence)
                             .scannerVersion(scannerVersion)
                             .metadata(metadata)

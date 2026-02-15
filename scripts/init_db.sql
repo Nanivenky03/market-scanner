@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS scan_results (
     rule_name TEXT NOT NULL,
     confidence REAL,
     scanner_version TEXT,
+    rule_version TEXT,
+    parameter_snapshot TEXT,
     metadata TEXT,
     forward_return_7d REAL,
     forward_return_14d REAL,
@@ -63,6 +65,9 @@ CREATE TABLE IF NOT EXISTS scan_results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scan_date ON scan_results(scan_date);
+
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_identity ON scan_results(symbol, scan_date, rule_name);
 
 INSERT OR IGNORE INTO stock_universe (symbol, exchange, company_name, sector) VALUES
 ('RELIANCE', 'NSE', 'Reliance Industries', 'Energy'),
