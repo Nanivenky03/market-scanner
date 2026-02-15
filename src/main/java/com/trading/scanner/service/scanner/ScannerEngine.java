@@ -1,5 +1,6 @@
 package com.trading.scanner.service.scanner;
 
+import com.trading.scanner.config.BreakoutRuleProperties;
 import com.trading.scanner.config.ExchangeConfiguration;
 import com.trading.scanner.model.ScanResult;
 import com.trading.scanner.model.ScannerRun;
@@ -11,6 +12,7 @@ import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.service.indicators.IndicatorBundle;
 import com.trading.scanner.service.indicators.IndicatorService;
+import com.trading.scanner.service.indicators.parameters.IndicatorParameters;
 import com.trading.scanner.service.scanner.rules.ScannerRule;
 import com.trading.scanner.service.state.ExecutionStateService;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +38,9 @@ public class ScannerEngine {
     private final IndicatorService indicatorService;
     private final ExecutionStateService executionStateService;
     private final ExchangeConfiguration config;
+    // NOTE: This creates a temporary coupling. A future refactor might introduce a
+    // parameter resolution service if more rules with different properties are added.
+    private final BreakoutRuleProperties breakoutRuleProperties;
     
     @Value("${app.version}")
     private String scannerVersion;
@@ -61,6 +66,15 @@ public class ScannerEngine {
         int flaggedCount = 0;
         List<ScanResult> results = new ArrayList<>();
         
+        // Construct the indicator parameters from the single rule's properties.
+        // This is the explicit link between config and execution.
+        IndicatorParameters indicatorParameters = new IndicatorParameters(
+            breakoutRuleProperties.rsiPeriod(),
+            breakoutRuleProperties.smaShortPeriod(),
+            breakoutRuleProperties.smaMediumPeriod(),
+            breakoutRuleProperties.smaLongPeriod()
+        );
+        
         for (StockUniverse stock : activeStocks) {
             try {
                 List<StockPrice> prices = priceRepository.findBySymbolOrderByDateAsc(stock.getSymbol());
@@ -72,7 +86,8 @@ public class ScannerEngine {
                 
                 scannedCount++;
                 
-                IndicatorBundle indicators = indicatorService.calculateIndicators(prices);
+                // Engine now drives indicator calculation with explicit parameters.
+                IndicatorBundle indicators = indicatorService.calculateIndicators(prices, indicatorParameters);
                 
                 for (ScannerRule rule : rules) {
                     if (rule.matches(stock.getSymbol(), prices, indicators)) {

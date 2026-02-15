@@ -47,6 +47,7 @@ public class SimulationState {
     private Integer tradingOffset;
 
     @Column(name = "is_cycling", nullable = false)
+    @Builder.Default
     private boolean isCycling = false;
 
     @Column(name = "cycling_started_at", columnDefinition = "TEXT")

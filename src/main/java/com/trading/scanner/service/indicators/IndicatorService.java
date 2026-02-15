@@ -1,6 +1,7 @@
 package com.trading.scanner.service.indicators;
 
 import com.trading.scanner.model.StockPrice;
+import com.trading.scanner.service.indicators.parameters.IndicatorParameters;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -10,28 +11,28 @@ import java.util.List;
 @Service
 public class IndicatorService {
     
-    public IndicatorBundle calculateIndicators(List<StockPrice> prices) {
+    public IndicatorBundle calculateIndicators(List<StockPrice> prices, IndicatorParameters params) {
         if (prices == null || prices.isEmpty()) {
             return new IndicatorBundle();
         }
         
         IndicatorBundle bundle = new IndicatorBundle();
         
-        if (prices.size() >= 14) {
-            bundle.setRsi(calculateRSI(prices, 14));
+        if (prices.size() >= params.rsiPeriod()) {
+            bundle.setRsi(calculateRSI(prices, params.rsiPeriod()));
         }
         
-        if (prices.size() >= 20) {
-            bundle.setSma20(calculateSMA(prices, 20));
-            bundle.setAvgVolume20(calculateAvgVolume(prices, 20));
+        if (prices.size() >= params.smaShortPeriod()) {
+            bundle.setSma20(calculateSMA(prices, params.smaShortPeriod()));
+            bundle.setAvgVolume20(calculateAvgVolume(prices, params.smaShortPeriod()));
         }
         
-        if (prices.size() >= 50) {
-            bundle.setSma50(calculateSMA(prices, 50));
+        if (prices.size() >= params.smaMediumPeriod()) {
+            bundle.setSma50(calculateSMA(prices, params.smaMediumPeriod()));
         }
         
-        if (prices.size() >= 200) {
-            bundle.setSma200(calculateSMA(prices, 200));
+        if (prices.size() >= params.smaLongPeriod()) {
+            bundle.setSma200(calculateSMA(prices, params.smaLongPeriod()));
         }
         
         if (!prices.isEmpty()) {
