@@ -14,11 +14,8 @@ import org.springframework.context.annotation.Configuration;
 public class CalendarConfiguration {
 
     @Bean
-    public NseHolidayCalendar nseHolidayCalendar(
-        EmergencyClosureRepository emergencyClosureRepository,
-        TimeProvider timeProvider
-    ) {
-        return new NseHolidayCalendar(emergencyClosureRepository, timeProvider);
+    public NseHolidayCalendar nseHolidayCalendar(EmergencyClosureRepository emergencyClosureRepository) {
+        return new NseHolidayCalendar(emergencyClosureRepository);
     }
 
     @Bean

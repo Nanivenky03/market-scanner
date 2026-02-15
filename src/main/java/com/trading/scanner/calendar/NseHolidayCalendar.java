@@ -1,11 +1,11 @@
 package com.trading.scanner.calendar;
 
-import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.EmergencyClosure;
 import com.trading.scanner.repository.EmergencyClosureRepository;
 import lombok.RequiredArgsConstructor;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.Set;
@@ -101,7 +101,6 @@ public class NseHolidayCalendar {
     public static final Set<LocalDate> SPECIAL_SESSIONS = Collections.unmodifiableSet(Set.of());
 
     private final EmergencyClosureRepository emergencyClosureRepository;
-    private final TimeProvider timeProvider;
 
     /**
      * Checks if a given date is a scheduled public holiday.
@@ -126,16 +125,20 @@ public class NseHolidayCalendar {
 
     /**
      * Dynamically and persistently marks a date as an emergency market closure.
-     * The public API is preserved, so the reason is marked as "Unspecified".
+     * The timestamp for the creation record must be provided by the caller.
+     *
+     * @param date the date to mark as a closure.
+     * @param reason an optional reason for the closure.
+     * @param createdAt the exact time the closure was marked.
      */
-    public void markEmergencyClosure(LocalDate date) {
+    public void markEmergencyClosure(LocalDate date, String reason, LocalDateTime createdAt) {
         if (isEmergencyClosure(date)) {
             return; // Already marked
         }
         EmergencyClosure closure = EmergencyClosure.builder()
             .date(date)
-            .reason("Unspecified")
-            .createdAt(timeProvider.nowDateTime().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME))
+            .reason(reason)
+            .createdAt(createdAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME))
             .build();
         emergencyClosureRepository.save(closure);
     }
