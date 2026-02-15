@@ -28,25 +28,38 @@ public class SimulationState {
     
     @Id
     private Integer id; // Always 1 (single row table)
+
+    @Version
+    private Integer version;
     
     @Column(name = "base_date", nullable = false, columnDefinition = "TEXT")
     @Convert(converter = LocalDateConverter.class)
     private LocalDate baseDate;
     
+    /**
+     * @deprecated replaced by tradingOffset in v1.5 (trading-day aware simulation).
+     */
+    @Deprecated
     @Column(name = "offset_days", nullable = false)
     private Integer offsetDays;
+
+    @Column(name = "trading_offset", nullable = false)
+    private Integer tradingOffset;
     
     /**
-     * Get current simulated date
+     * This method is deprecated. The simulation date is now resolved dynamically.
+     * @throws UnsupportedOperationException always
+     * @deprecated Use {@link com.trading.scanner.config.ExchangeClock#today()} for simulation date resolution.
      */
+    @Deprecated
     public LocalDate getCurrentDate() {
-        return baseDate.plusDays(offsetDays);
+        throw new UnsupportedOperationException("Use ExchangeClock.today() for simulation date resolution.");
     }
     
     /**
-     * Advance simulation by one day (forward-only)
+     * Advances the simulation by one TRADING day (forward-only).
      */
     public void advanceDay() {
-        this.offsetDays += 1;
+        this.tradingOffset += 1;
     }
 }

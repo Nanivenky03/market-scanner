@@ -1,6 +1,7 @@
 package com.trading.scanner.service.state;
 
 import com.trading.scanner.config.ExchangeConfiguration;
+import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.ScanExecutionState;
 import com.trading.scanner.model.ScanExecutionState.ExecutionStatus;
 import com.trading.scanner.model.ScanExecutionState.DataSourceStatus;
@@ -19,6 +20,7 @@ public class ExecutionStateService {
     
     private final ScanExecutionStateRepository stateRepository;
     private final ExchangeConfiguration config;
+    private final TimeProvider timeProvider;
     
     @Transactional
     public ScanExecutionState getOrCreateState(LocalDate tradingDate) {
@@ -68,42 +70,42 @@ public class ExecutionStateService {
     @Transactional
     public void startIngestionToday(ExecutionMode mode) {
         ScanExecutionState state = getOrCreateTodayState();
-        state.startIngestion(mode);
+        state.startIngestion(mode, timeProvider.nowDateTime());
         stateRepository.save(state);
     }
     
     @Transactional
     public void completeIngestionToday(int stocksIngested, DataSourceStatus sourceStatus) {
         ScanExecutionState state = getOrCreateTodayState();
-        state.completeIngestion(stocksIngested, sourceStatus);
+        state.completeIngestion(stocksIngested, sourceStatus, timeProvider.nowDateTime());
         stateRepository.save(state);
     }
     
     @Transactional
     public void completeIngestionNoDataToday(DataSourceStatus sourceStatus) {
         ScanExecutionState state = getOrCreateTodayState();
-        state.completeIngestionNoData(sourceStatus);
+        state.completeIngestionNoData(sourceStatus, timeProvider.nowDateTime());
         stateRepository.save(state);
     }
     
     @Transactional
     public void failIngestionToday(String errorMessage, DataSourceStatus sourceStatus) {
         ScanExecutionState state = getOrCreateTodayState();
-        state.failIngestion(errorMessage, sourceStatus);
+        state.failIngestion(errorMessage, sourceStatus, timeProvider.nowDateTime());
         stateRepository.save(state);
     }
     
     @Transactional
     public void startScanToday() {
         ScanExecutionState state = getOrCreateTodayState();
-        state.startScan();
+        state.startScan(timeProvider.nowDateTime());
         stateRepository.save(state);
     }
     
     @Transactional
     public void completeScanToday(int signalsGenerated) {
         ScanExecutionState state = getOrCreateTodayState();
-        state.completeScan(signalsGenerated);
+        state.completeScan(signalsGenerated, timeProvider.nowDateTime());
         stateRepository.save(state);
     }
     

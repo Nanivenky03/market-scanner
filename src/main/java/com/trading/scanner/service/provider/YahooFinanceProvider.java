@@ -2,6 +2,7 @@ package com.trading.scanner.service.provider;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.model.StockUniverse;
@@ -32,12 +33,14 @@ public class YahooFinanceProvider implements MarketDataProvider {
     private static final String YAHOO_API_URL = "https://query1.finance.yahoo.com/v8/finance/chart/";
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
+    private final TimeProvider timeProvider;
 
-    public YahooFinanceProvider() {
+    public YahooFinanceProvider(ObjectMapper objectMapper, TimeProvider timeProvider) {
         this.httpClient = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
+        this.timeProvider = timeProvider;
     }
 
     @Override
@@ -145,7 +148,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     @Override
     public StockPrice fetchLatestData(StockUniverse stock) throws DataProviderException {
-        LocalDate today = LocalDate.now();
+        LocalDate today = timeProvider.today();
         LocalDate from = today.minusDays(7); // Fetch 1 week to be safe
 
         List<StockPrice> prices = fetchHistoricalData(stock, from, today);
@@ -161,7 +164,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
     @Override
     public boolean isHealthy(StockUniverse stock) {
         try {
-            LocalDate today = LocalDate.now();
+            LocalDate today = timeProvider.today();
             List<StockPrice> prices = fetchHistoricalData(stock, today.minusDays(7), today);
             return !prices.isEmpty();
         } catch (DataProviderException e) {

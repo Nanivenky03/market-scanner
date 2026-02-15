@@ -64,11 +64,11 @@ public class ExchangeConfiguration {
     }
     
     public LocalTime getCurrentTimeInExchangeZone() {
-        return LocalTime.now(exchangeClock.getClock().withZone(exchangeClock.getExchangeZone()));
+        return exchangeClock.nowDateTime().toLocalTime();
     }
     
     public LocalDateTime getCurrentDateTimeInExchangeZone() {
-        return LocalDateTime.now(exchangeClock.getClock().withZone(exchangeClock.getExchangeZone()));
+        return exchangeClock.nowDateTime();
     }
     
     public boolean hasPublishBufferElapsed() {

@@ -89,53 +89,53 @@ public class ScanExecutionState {
                stocksIngested > 0;
     }
     
-    public void startIngestion(ExecutionMode mode) {
+    public void startIngestion(ExecutionMode mode, LocalDateTime timestamp) {
         this.ingestionStatus = ExecutionStatus.IN_PROGRESS;
         this.executionMode = mode;
-        this.lastIngestionTime = LocalDateTime.now();
+        this.lastIngestionTime = timestamp;
     }
     
-    public void completeIngestion(int stocksIngested, DataSourceStatus sourceStatus) {
+    public void completeIngestion(int stocksIngested, DataSourceStatus sourceStatus, LocalDateTime timestamp) {
         this.ingestionStatus = ExecutionStatus.SUCCESS;
         this.stocksIngested = stocksIngested;
         this.dataSourceStatus = sourceStatus;
-        this.lastIngestionTime = LocalDateTime.now();
+        this.lastIngestionTime = timestamp;
     }
     
-    public void completeIngestionNoData(DataSourceStatus sourceStatus) {
+    public void completeIngestionNoData(DataSourceStatus sourceStatus, LocalDateTime timestamp) {
         this.ingestionStatus = ExecutionStatus.SUCCESS_NO_DATA;
         this.stocksIngested = 0;
         this.dataSourceStatus = sourceStatus;
-        this.lastIngestionTime = LocalDateTime.now();
+        this.lastIngestionTime = timestamp;
     }
     
-    public void failIngestion(String errorMessage, DataSourceStatus sourceStatus) {
+    public void failIngestion(String errorMessage, DataSourceStatus sourceStatus, LocalDateTime timestamp) {
         this.ingestionStatus = ExecutionStatus.FAILED;
         this.errorMessage = errorMessage;
         this.dataSourceStatus = sourceStatus;
-        this.lastIngestionTime = LocalDateTime.now();
+        this.lastIngestionTime = timestamp;
     }
     
-    public void startScan() {
+    public void startScan(LocalDateTime timestamp) {
         this.scanStatus = ExecutionStatus.IN_PROGRESS;
-        this.lastScanTime = LocalDateTime.now();
+        this.lastScanTime = timestamp;
     }
     
-    public void completeScan(int signalsGenerated) {
+    public void completeScan(int signalsGenerated, LocalDateTime timestamp) {
         this.scanStatus = ExecutionStatus.SUCCESS;
         this.signalsGenerated = signalsGenerated;
-        this.lastScanTime = LocalDateTime.now();
+        this.lastScanTime = timestamp;
     }
     
-    public void skipScan(String reason) {
+    public void skipScan(String reason, LocalDateTime timestamp) {
         this.scanStatus = ExecutionStatus.SKIPPED;
         this.errorMessage = reason;
-        this.lastScanTime = LocalDateTime.now();
+        this.lastScanTime = timestamp;
     }
     
-    public void failScan(String errorMessage) {
+    public void failScan(String errorMessage, LocalDateTime timestamp) {
         this.scanStatus = ExecutionStatus.FAILED;
         this.errorMessage = errorMessage;
-        this.lastScanTime = LocalDateTime.now();
+        this.lastScanTime = timestamp;
     }
 }
