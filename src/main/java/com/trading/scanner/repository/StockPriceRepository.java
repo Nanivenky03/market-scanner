@@ -19,6 +19,12 @@ public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
         String symbol, LocalDate startDate, LocalDate endDate);
     
     boolean existsBySymbolAndDate(String symbol, LocalDate date);
+
+    @Query("select p.date from StockPrice p where p.symbol = :symbol and p.date between :start and :end")
+    List<LocalDate> findDatesBySymbolBetween(
+        @Param("symbol") String symbol,
+        @Param("start") LocalDate start,
+        @Param("end") LocalDate end);
     
     @Query("SELECT COUNT(sp) FROM StockPrice sp")
     long countAll();
