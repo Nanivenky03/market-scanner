@@ -61,6 +61,14 @@ public class SimulationClockConfig {
             ));
         }
 
+        // Recover from an interrupted simulation batch run
+        if (state.isCycling()) {
+            log.warn("Recovering from an interrupted simulation batch. Clearing 'isCycling' flag.");
+            state.setCycling(false);
+            state.setCyclingStartedAt(null);
+            simulationStateRepository.save(state);
+        }
+
         // One-time migration from calendar day offset to trading day offset
         if (state.getTradingOffset() == 0 && state.getOffsetDays() != 0) {
             LocalDate currentCalendarDate = state.getBaseDate().plusDays(state.getOffsetDays());

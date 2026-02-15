@@ -1,5 +1,6 @@
 package com.trading.scanner.service.provider;
 
+import com.trading.scanner.aop.SimulationExit;
 import com.trading.scanner.config.ExchangeConfiguration;
 import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.model.StockUniverse;
