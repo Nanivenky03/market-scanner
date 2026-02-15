@@ -1,5 +1,7 @@
 package com.trading.scanner.service.provider;
 
+import com.trading.scanner.config.TimeProvider;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -9,8 +11,11 @@ import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class ProviderCircuitBreaker {
-    
+
+    private final TimeProvider timeProvider;
+
     @Value("${provider.circuitBreaker.failureThreshold:5}")
     private int failureThreshold;
     
@@ -34,8 +39,8 @@ public class ProviderCircuitBreaker {
         
         if (currentState == CircuitState.OPEN) {
             LocalDateTime openedAt = circuitOpenedAt.get();
-            if (openedAt != null && 
-                LocalDateTime.now().isAfter(openedAt.plusMinutes(cooldownMinutes))) {
+            if (openedAt != null &&
+                timeProvider.nowDateTime().isAfter(openedAt.plusMinutes(cooldownMinutes))) {
                 if (state.compareAndSet(CircuitState.OPEN, CircuitState.HALF_OPEN)) {
                     log.info("Circuit breaker entering HALF_OPEN state");
                     return true;
@@ -65,7 +70,7 @@ public class ProviderCircuitBreaker {
             if (state.compareAndSet(CircuitState.CLOSED, CircuitState.OPEN) ||
                 state.compareAndSet(CircuitState.HALF_OPEN, CircuitState.OPEN)) {
                 
-                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime now = timeProvider.nowDateTime();
                 circuitOpenedAt.set(now);
                 
                 log.error("CRITICAL: Provider circuit breaker OPENED after {} failures", failures);
