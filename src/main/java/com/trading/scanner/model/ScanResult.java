@@ -34,6 +34,12 @@ public class ScanResult {
     
     @Column(name = "scanner_version")
     private String scannerVersion;
+
+    @Column(name = "rule_version")
+    private String ruleVersion;
+
+    @Column(name = "parameter_snapshot", columnDefinition = "TEXT")
+    private String parameterSnapshot;
     
     @Column(columnDefinition = "TEXT")
     private String metadata;

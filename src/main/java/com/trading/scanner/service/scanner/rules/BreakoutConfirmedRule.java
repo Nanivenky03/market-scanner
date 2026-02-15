@@ -1,5 +1,7 @@
 package com.trading.scanner.service.scanner.rules;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.service.indicators.IndicatorBundle;
 import lombok.extern.slf4j.Slf4j;
@@ -9,17 +11,42 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 @Slf4j
 @Component
 public class BreakoutConfirmedRule implements ScannerRule {
-    
+
+    private static final String RULE_VERSION = "1.0";
+    private final ObjectMapper objectMapper;
+
     @Value("${rules.breakout.maxGap:0.05}")
     private double maxGap;
+
+    public BreakoutConfirmedRule(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
     
     @Override
     public String getRuleName() {
         return "Breakout Confirmed";
+    }
+
+    @Override
+    public String getRuleVersion() {
+        return RULE_VERSION;
+    }
+
+    @Override
+    public String getParameterSnapshot() {
+        Map<String, Object> params = new TreeMap<>();
+        params.put("maxGap", maxGap);
+        try {
+            return objectMapper.writeValueAsString(params);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize rule parameters", e);
+            return "{\"error\":\"serialization failed\"}";
+        }
     }
     
     @Override
