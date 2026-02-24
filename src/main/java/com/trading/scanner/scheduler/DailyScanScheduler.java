@@ -18,7 +18,7 @@ import java.time.LocalDate;
  * Daily Scanner Scheduler
  * 
  * ONLY runs in production profile
- * Disabled in simulation mode (manual control via /simulation/advance-day)
+ * Disabled in simulation mode (manual control via /simulation/advance)
  */
 @Slf4j
 @Component

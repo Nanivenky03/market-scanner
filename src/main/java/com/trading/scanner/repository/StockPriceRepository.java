@@ -12,6 +12,8 @@ import java.util.List;
 public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
     
     List<StockPrice> findBySymbolOrderByDateAsc(String symbol);
+
+    List<StockPrice> findBySymbolAndDateLessThanEqualOrderByDateAsc(String symbol, LocalDate date);
     
     List<StockPrice> findByDate(LocalDate date);
     

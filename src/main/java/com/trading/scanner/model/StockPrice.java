@@ -19,7 +19,7 @@ public class StockPrice {
     
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    private Integer id;
     
     @Column(nullable = false)
     private String symbol;
@@ -43,5 +43,5 @@ public class StockPrice {
     @Column(name = "adj_close")
     private Double adjClose;
     
-    private Long volume;
+    private Integer volume;
 }

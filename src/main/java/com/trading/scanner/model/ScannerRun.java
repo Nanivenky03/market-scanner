@@ -18,7 +18,7 @@ public class ScannerRun {
     
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    private Integer id;
     
     @Column(name = "run_date", nullable = false, columnDefinition = "TEXT")
     @Convert(converter = LocalDateConverter.class)

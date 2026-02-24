@@ -2,10 +2,10 @@ package com.trading.scanner.service.scanner.rules;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trading.scanner.config.BreakoutRuleProperties;
 import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.service.indicators.IndicatorBundle;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
@@ -17,16 +17,27 @@ import java.util.TreeMap;
 @Component
 public class BreakoutConfirmedRule implements ScannerRule {
 
-    private static final String RULE_VERSION = "1.0";
+    private static final String RULE_VERSION = "1.1";
     private final ObjectMapper objectMapper;
+    private final BreakoutRuleProperties properties;
 
-    @Value("${rules.breakout.maxGap:0.05}")
-    private double maxGap;
-
-    public BreakoutConfirmedRule(ObjectMapper objectMapper) {
+    public BreakoutConfirmedRule(ObjectMapper objectMapper, BreakoutRuleProperties properties) {
         this.objectMapper = objectMapper;
+        this.properties = properties;
+        
+        // DEBUG: Log property binding at startup
+        log.info("DEBUG_RULE_PROPS lookback={} rsiThreshold={} volumeMult={} rsiConfThreshold={} volMultConfidence={} maxGap={} baseConf={} increment={} maxCap={}",
+            properties.lookbackWindow(),
+            properties.rsiThresholdMatch(),
+            properties.volumeMultiplierMatch(),
+            properties.rsiThresholdConfidence(),
+            properties.volumeMultiplierConfidence(),
+            properties.maxGap(),
+            properties.baseConfidence(),
+            properties.confidenceIncrement(),
+            properties.maxConfidenceCap());
     }
-    
+
     @Override
     public String getRuleName() {
         return "Breakout Confirmed";
@@ -39,34 +50,57 @@ public class BreakoutConfirmedRule implements ScannerRule {
 
     @Override
     public String getParameterSnapshot() {
+        // FIX 1: Convert properties to a TreeMap to guarantee alphabetical key order
         Map<String, Object> params = new TreeMap<>();
-        params.put("maxGap", maxGap);
+        params.put("lookbackWindow", properties.lookbackWindow());
+        params.put("rsiPeriod", properties.rsiPeriod());
+        params.put("smaShortPeriod", properties.smaShortPeriod());
+        params.put("smaMediumPeriod", properties.smaMediumPeriod());
+        params.put("smaLongPeriod", properties.smaLongPeriod());
+        params.put("rsiThresholdMatch", properties.rsiThresholdMatch());
+        params.put("volumeMultiplierMatch", properties.volumeMultiplierMatch());
+        params.put("rsiThresholdConfidence", properties.rsiThresholdConfidence());
+        params.put("volumeMultiplierConfidence", properties.volumeMultiplierConfidence());
+        params.put("baseConfidence", properties.baseConfidence());
+        params.put("confidenceIncrement", properties.confidenceIncrement());
+        params.put("maxConfidenceCap", properties.maxConfidenceCap());
+        params.put("maxGap", properties.maxGap());
+
         try {
             return objectMapper.writeValueAsString(params);
         } catch (JsonProcessingException e) {
-            log.error("Failed to serialize rule parameters", e);
+            log.error("Failed to serialize rule parameters for {}", getRuleName(), e);
             return "{\"error\":\"serialization failed\"}";
         }
     }
-    
+
     @Override
     public boolean matches(String symbol, List<StockPrice> prices, IndicatorBundle indicators) {
-        if (prices.size() < 21) {
+        // FIX 2: Restore layering - use pre-calculated indicators from the bundle
+        if (prices.size() < properties.lookbackWindow()) {
+            log.info("DEBUG_GUARD1_FAIL symbol={} reason=insufficient_history size={} required={}",
+                symbol, prices.size(), properties.lookbackWindow());
             return false;
         }
         
         StockPrice today = prices.get(prices.size() - 1);
-        
         if (today.getAdjClose() == null || today.getVolume() == null) {
+            log.info("DEBUG_GUARD2_FAIL symbol={} reason=null_daily_data close={} volume={}",
+                symbol, today.getAdjClose(), today.getVolume());
             return false;
         }
-        
+
+        // The indicators are pre-calculated by the engine. Check if they exist.
+        // This implicitly checks if there was enough data (e.g., 14 days for RSI, 20 for SMA20).
         if (!indicators.hasRsi() || !indicators.hasSma20() || !indicators.hasAvgVolume()) {
+            log.info("DEBUG_GUARD3_FAIL symbol={} reason=missing_indicators hasRsi={} hasSma20={} hasAvgVol={}",
+                symbol, indicators.hasRsi(), indicators.hasSma20(), indicators.hasAvgVolume());
             return false;
         }
-        
+
         double recentHigh = Double.MIN_VALUE;
-        for (int i = prices.size() - 21; i < prices.size() - 1; i++) {
+        // The lookback window for finding the recent high is a rule parameter.
+        for (int i = prices.size() - properties.lookbackWindow(); i < prices.size() - 1; i++) {
             Double high = prices.get(i).getHighPrice();
             if (high != null && high > recentHigh) {
                 recentHigh = high;
@@ -76,49 +110,61 @@ public class BreakoutConfirmedRule implements ScannerRule {
         if (recentHigh == Double.MIN_VALUE) {
             return false;
         }
-        
+
+        // BREAKOUT_DEBUG: Verify breakout math before final evaluation
+        log.info("BREAKOUT_DEBUG symbol={} todayClose={} recentHigh={}",
+            symbol, today.getAdjClose(), recentHigh);
+
+        // All "magic numbers" are now from the properties object.
         boolean priceBreakout = today.getAdjClose() > recentHigh;
-        
         double gapPercent = (today.getAdjClose() - recentHigh) / recentHigh;
-        boolean reasonableGap = gapPercent < maxGap;
-        
-        boolean volumeConfirmation = today.getVolume() > indicators.getAvgVolume20() * 1.5;
-        
-        boolean rsiSupport = indicators.getRsi() > 50;
-        
+        boolean reasonableGap = gapPercent < properties.maxGap();
+        boolean volumeConfirmation = today.getVolume() > (indicators.getAvgVolume20() * properties.volumeMultiplierMatch());
+        boolean rsiSupport = indicators.getRsi() > properties.rsiThresholdMatch();
         boolean aboveSma20 = indicators.getAboveSma20() != null && indicators.getAboveSma20();
+        
+        // DEBUG: Log all condition evaluations
+        log.info("DEBUG_MATCH_CHECK symbol={} breakout={} gapPercent={} volumeConfirm={} rsi={} sma20={} RESULT={}",
+            symbol,
+            priceBreakout,
+            String.format("%.2f%%", gapPercent * 100),
+            volumeConfirmation,
+            rsiSupport,
+            aboveSma20,
+            (priceBreakout && reasonableGap && volumeConfirmation && rsiSupport && aboveSma20));
         
         return priceBreakout && reasonableGap && volumeConfirmation && rsiSupport && aboveSma20;
     }
-    
+
     @Override
     public Double getConfidence(String symbol, List<StockPrice> prices, IndicatorBundle indicators) {
+        // FIX 2: Logic restored to use the pre-calculated bundle
         if (!matches(symbol, prices, indicators)) {
             return 0.0;
         }
         
-        double confidence = 0.5;
-        
-        if (indicators.getRsi() > 60) {
-            confidence += 0.1;
+        double confidence = properties.baseConfidence();
+        StockPrice today = prices.get(prices.size() - 1);
+
+        if (indicators.hasRsi() && indicators.getRsi() > properties.rsiThresholdConfidence()) {
+            confidence += properties.confidenceIncrement();
         }
         
         if (indicators.getAboveSma50() != null && indicators.getAboveSma50()) {
-            confidence += 0.1;
+            confidence += properties.confidenceIncrement();
         }
         
-        StockPrice today = prices.get(prices.size() - 1);
-        if (today.getVolume() > indicators.getAvgVolume20() * 2.0) {
-            confidence += 0.1;
+        if (indicators.hasAvgVolume() && today.getVolume() > (indicators.getAvgVolume20() * properties.volumeMultiplierConfidence())) {
+            confidence += properties.confidenceIncrement();
         }
         
         if (indicators.getAboveSma200() != null && indicators.getAboveSma200()) {
-            confidence += 0.1;
+            confidence += properties.confidenceIncrement();
         }
         
-        return Math.min(confidence, 1.0);
+        return Math.min(confidence, properties.maxConfidenceCap());
     }
-    
+
     @Override
     public String getMetadata(String symbol, List<StockPrice> prices, IndicatorBundle indicators) {
         if (prices.isEmpty()) {
