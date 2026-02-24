@@ -1,7 +1,6 @@
 package com.trading.scanner.model;
 
 import com.trading.scanner.config.LocalDateConverter;
-import com.trading.scanner.config.LocalDateTimeConverter;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -9,7 +8,6 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 
 /**
  * Simulation State Entity
@@ -36,23 +34,10 @@ public class SimulationState {
     @Convert(converter = LocalDateConverter.class)
     private LocalDate baseDate;
     
-    /**
-     * @deprecated replaced by tradingOffset in v1.5 (trading-day aware simulation).
-     */
-    @Deprecated
-    @Column(name = "offset_days", nullable = false)
-    private Integer offsetDays;
-
     @Column(name = "trading_offset", nullable = false)
-    private Integer tradingOffset;
-
-    @Column(name = "is_cycling", nullable = false)
     @Builder.Default
-    private boolean isCycling = false;
+    private Integer tradingOffset = 0;
 
-    @Column(name = "cycling_started_at", columnDefinition = "TEXT")
-    @Convert(converter = LocalDateTimeConverter.class)
-    private LocalDateTime cyclingStartedAt;
     
     /**
      * This method is deprecated. The simulation date is now resolved dynamically.

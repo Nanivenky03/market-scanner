@@ -24,6 +24,18 @@ public class BreakoutConfirmedRule implements ScannerRule {
     public BreakoutConfirmedRule(ObjectMapper objectMapper, BreakoutRuleProperties properties) {
         this.objectMapper = objectMapper;
         this.properties = properties;
+        
+        // DEBUG: Log property binding at startup
+        log.info("DEBUG_RULE_PROPS lookback={} rsiThreshold={} volumeMult={} rsiConfThreshold={} volMultConfidence={} maxGap={} baseConf={} increment={} maxCap={}",
+            properties.lookbackWindow(),
+            properties.rsiThresholdMatch(),
+            properties.volumeMultiplierMatch(),
+            properties.rsiThresholdConfidence(),
+            properties.volumeMultiplierConfidence(),
+            properties.maxGap(),
+            properties.baseConfidence(),
+            properties.confidenceIncrement(),
+            properties.maxConfidenceCap());
     }
 
     @Override
@@ -66,17 +78,23 @@ public class BreakoutConfirmedRule implements ScannerRule {
     public boolean matches(String symbol, List<StockPrice> prices, IndicatorBundle indicators) {
         // FIX 2: Restore layering - use pre-calculated indicators from the bundle
         if (prices.size() < properties.lookbackWindow()) {
+            log.info("DEBUG_GUARD1_FAIL symbol={} reason=insufficient_history size={} required={}",
+                symbol, prices.size(), properties.lookbackWindow());
             return false;
         }
         
         StockPrice today = prices.get(prices.size() - 1);
         if (today.getAdjClose() == null || today.getVolume() == null) {
+            log.info("DEBUG_GUARD2_FAIL symbol={} reason=null_daily_data close={} volume={}",
+                symbol, today.getAdjClose(), today.getVolume());
             return false;
         }
 
         // The indicators are pre-calculated by the engine. Check if they exist.
         // This implicitly checks if there was enough data (e.g., 14 days for RSI, 20 for SMA20).
         if (!indicators.hasRsi() || !indicators.hasSma20() || !indicators.hasAvgVolume()) {
+            log.info("DEBUG_GUARD3_FAIL symbol={} reason=missing_indicators hasRsi={} hasSma20={} hasAvgVol={}",
+                symbol, indicators.hasRsi(), indicators.hasSma20(), indicators.hasAvgVolume());
             return false;
         }
 
@@ -93,6 +111,10 @@ public class BreakoutConfirmedRule implements ScannerRule {
             return false;
         }
 
+        // BREAKOUT_DEBUG: Verify breakout math before final evaluation
+        log.info("BREAKOUT_DEBUG symbol={} todayClose={} recentHigh={}",
+            symbol, today.getAdjClose(), recentHigh);
+
         // All "magic numbers" are now from the properties object.
         boolean priceBreakout = today.getAdjClose() > recentHigh;
         double gapPercent = (today.getAdjClose() - recentHigh) / recentHigh;
@@ -100,6 +122,16 @@ public class BreakoutConfirmedRule implements ScannerRule {
         boolean volumeConfirmation = today.getVolume() > (indicators.getAvgVolume20() * properties.volumeMultiplierMatch());
         boolean rsiSupport = indicators.getRsi() > properties.rsiThresholdMatch();
         boolean aboveSma20 = indicators.getAboveSma20() != null && indicators.getAboveSma20();
+        
+        // DEBUG: Log all condition evaluations
+        log.info("DEBUG_MATCH_CHECK symbol={} breakout={} gapPercent={} volumeConfirm={} rsi={} sma20={} RESULT={}",
+            symbol,
+            priceBreakout,
+            String.format("%.2f%%", gapPercent * 100),
+            volumeConfirmation,
+            rsiSupport,
+            aboveSma20,
+            (priceBreakout && reasonableGap && volumeConfirmation && rsiSupport && aboveSma20));
         
         return priceBreakout && reasonableGap && volumeConfirmation && rsiSupport && aboveSma20;
     }

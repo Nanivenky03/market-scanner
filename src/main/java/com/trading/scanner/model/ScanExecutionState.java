@@ -21,7 +21,7 @@ public class ScanExecutionState {
     
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    private Integer id;
     
     @Column(name = "trading_date", nullable = false, unique = true, columnDefinition = "TEXT")
     @Convert(converter = LocalDateConverter.class)

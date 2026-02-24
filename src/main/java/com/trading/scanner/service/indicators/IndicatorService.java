@@ -18,13 +18,23 @@ public class IndicatorService {
         
         IndicatorBundle bundle = new IndicatorBundle();
         
+        // DEBUG: Log entry with size checks
+        log.info("DEBUG_INDICATOR_CALC priceSize={} rsiRequires={} sma20Requires={}",
+            prices.size(), params.rsiPeriod(), params.smaShortPeriod());
+        
         if (prices.size() >= params.rsiPeriod()) {
             bundle.setRsi(calculateRSI(prices, params.rsiPeriod()));
+            log.debug("DEBUG_RSI_CALC rsiValue={}", bundle.getRsi());
+        } else {
+            log.info("DEBUG_RSI_SKIPPED priceSize={} required={}", prices.size(), params.rsiPeriod());
         }
         
         if (prices.size() >= params.smaShortPeriod()) {
             bundle.setSma20(calculateSMA(prices, params.smaShortPeriod()));
             bundle.setAvgVolume20(calculateAvgVolume(prices, params.smaShortPeriod()));
+            log.debug("DEBUG_SMA20_CALC sma20Value={} avgVol={}", bundle.getSma20(), bundle.getAvgVolume20());
+        } else {
+            log.info("DEBUG_SMA20_SKIPPED priceSize={} required={}", prices.size(), params.smaShortPeriod());
         }
         
         if (prices.size() >= params.smaMediumPeriod()) {
@@ -124,7 +134,7 @@ public class IndicatorService {
         int count = 0;
         
         for (int i = prices.size() - period; i < prices.size(); i++) {
-            Long volume = prices.get(i).getVolume();
+            Integer volume = prices.get(i).getVolume();
             if (volume != null && volume > 0) {
                 sum += volume;
                 count++;

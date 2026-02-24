@@ -119,7 +119,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
                 Double high = getDoubleValue(quote.path("high"), i);
                 Double low = getDoubleValue(quote.path("low"), i);
                 Double close = getDoubleValue(quote.path("close"), i);
-                Long volume = getLongValue(quote.path("volume"), i);
+                Integer volume = getLongValue(quote.path("volume"), i);
                 Double adjClose = getDoubleValue(adjclose, i);
 
                 // Skip if no close price (likely invalid data)
@@ -193,13 +193,19 @@ public class YahooFinanceProvider implements MarketDataProvider {
     }
 
     /**
-     * Safely extract long value from JSON array at index
+     * Safely extract integer value from JSON array at index
      */
-    private Long getLongValue(JsonNode array, int index) {
+    private Integer getLongValue(JsonNode array, int index) {
         if (array == null || array.isNull() || index >= array.size()) {
             return null;
         }
         JsonNode node = array.get(index);
-        return (node == null || node.isNull()) ? null : node.asLong();
+        long value = (node == null || node.isNull()) ? 0L : node.asLong();
+        if (value > Integer.MAX_VALUE) {
+            log.warn("Volume value {} exceeds Integer.MAX_VALUE. It will be clamped.", value);
+            return Integer.MAX_VALUE;
+        }
+        if (value < 0) return 0;
+        return (int) value;
     }
 }

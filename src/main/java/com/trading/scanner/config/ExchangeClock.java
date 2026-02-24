@@ -108,7 +108,7 @@ public class ExchangeClock implements TimeProvider {
 
     /**
      * Invalidates the simulation date cache. This must be called after any
-     * state change in simulation mode (e.g., advance-day, reset).
+     * state change in simulation mode (e.g., advance, reset).
      */
     public void invalidateSimulationCache() {
         this.cachedTradingOffset = null;
