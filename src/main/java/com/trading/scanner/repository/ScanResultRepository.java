@@ -7,7 +7,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 @Repository
-public interface ScanResultRepository extends JpaRepository<ScanResult, Long> {
+public interface ScanResultRepository extends JpaRepository<ScanResult, Integer> {
     
     List<ScanResult> findTop10ByOrderByScanDateDesc();
     

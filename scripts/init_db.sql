@@ -144,3 +144,21 @@ CREATE TABLE IF NOT EXISTS simulation_state (
 -- Initialize simulation state
 INSERT OR IGNORE INTO simulation_state (id, version, base_date, trading_offset, is_cycling)
 VALUES (1, 0, date('now'), 0, 0);
+
+-- Signal Outcomes Table (v1.9 Forward Return Engine)
+CREATE TABLE IF NOT EXISTS signal_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id INTEGER NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    entry_price REAL NOT NULL,
+    exit_price REAL NOT NULL,
+    forward_return REAL NOT NULL,
+    mfe REAL,
+    mae REAL,
+    computed_at TEXT NOT NULL,
+    FOREIGN KEY (signal_id) REFERENCES scan_results(id),
+    UNIQUE(signal_id, horizon_days)
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_outcomes_signal_id ON signal_outcomes(signal_id);
+CREATE INDEX IF NOT EXISTS idx_signal_outcomes_horizon ON signal_outcomes(horizon_days);

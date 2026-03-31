@@ -5,6 +5,7 @@ import com.trading.scanner.model.ScanExecutionState;
 import com.trading.scanner.model.ScanExecutionState.ExecutionMode;
 import com.trading.scanner.model.SimulationState;
 import com.trading.scanner.repository.SimulationStateRepository;
+import com.trading.scanner.service.ForwardReturnEngine;
 import com.trading.scanner.service.data.DataIngestionService;
 import com.trading.scanner.service.scanner.ScannerEngine;
 import com.trading.scanner.service.state.ExecutionStateService;
@@ -30,10 +31,11 @@ public class SimulationCycleService {
     private final Object advanceLock = new Object();
 
     private final SimulationStateRepository simulationStateRepository;
+    private final TradingCalendar tradingCalendar;
     private final DataIngestionService dataIngestionService;
     private final ScannerEngine scannerEngine;
     private final ExecutionStateService executionStateService;
-    private final TradingCalendar tradingCalendar;
+    private final ForwardReturnEngine forwardReturnEngine;
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
     public SimulationBatchResult advanceSimulation(int days) {
@@ -97,6 +99,9 @@ public class SimulationCycleService {
         cycleState = executionStateService.getOrCreateState(cycleDate); // Re-fetch state after scan
         int signalsCount = cycleState.getSignalsGenerated() != null ? cycleState.getSignalsGenerated() : 0;
         log.info("CYCLE_SCAN_COMPLETE cycleId={} offset={} signals={}", cycleId, targetOffset, signalsCount);
+
+        // Compute forward returns for eligible signals (v1.9)
+        forwardReturnEngine.computeEligibleOutcomes(cycleDate);
 
         long durationMs = System.currentTimeMillis() - startTime;
         log.info("CYCLE_END cycleId={} offset={} durationMs={}", cycleId, durationMs);
