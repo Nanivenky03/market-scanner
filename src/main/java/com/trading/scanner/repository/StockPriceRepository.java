@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
@@ -21,6 +22,8 @@ public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
         String symbol, LocalDate startDate, LocalDate endDate);
     
     boolean existsBySymbolAndDate(String symbol, LocalDate date);
+    
+    Optional<StockPrice> findBySymbolAndDate(String symbol, LocalDate date);
 
     @Query("select p.date from StockPrice p where p.symbol = :symbol and p.date between :start and :end")
     List<LocalDate> findDatesBySymbolBetween(
