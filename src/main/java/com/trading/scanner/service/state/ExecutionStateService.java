@@ -121,6 +121,12 @@ public class ExecutionStateService {
         stateRepository.save(state);
     }
 
+    public void failIngestionForDate(LocalDate tradingDate, String errorMessage, DataSourceStatus sourceStatus) {
+        ScanExecutionState state = getOrCreateState(tradingDate);
+        state.failIngestion(errorMessage, sourceStatus, timeProvider.nowDateTime());
+        stateRepository.save(state);
+    }
+
     @Transactional
     public void startScanToday() {
         startScanForDate(config.getTodayInExchangeZone());

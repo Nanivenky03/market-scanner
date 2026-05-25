@@ -104,7 +104,7 @@ public class SimulationCycleService {
         forwardReturnEngine.computeEligibleOutcomes(cycleDate);
 
         long durationMs = System.currentTimeMillis() - startTime;
-        log.info("CYCLE_END cycleId={} offset={} durationMs={}", cycleId, durationMs);
+        log.info("CYCLE_END cycleId={} offset={} durationMs={}", cycleId, targetOffset, durationMs);
 
         return new SimulationCycleResult(targetOffset, cycleDate, ingestedCount, signalsCount, durationMs, true, null);
     }
