@@ -2,12 +2,9 @@ package com.trading.scanner.controller;
 
 import com.trading.scanner.config.AppInfo;
 import com.trading.scanner.config.ExchangeConfiguration;
-import com.trading.scanner.model.ScanExecutionState.ExecutionMode;
 import com.trading.scanner.repository.ScanResultRepository;
 import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
-import com.trading.scanner.service.data.DataIngestionService;
-import com.trading.scanner.service.scanner.ScannerEngine;
 import com.trading.scanner.service.state.ExecutionStateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,8 +21,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DashboardController {
 
-    private final DataIngestionService dataIngestionService;
-    private final ScannerEngine scannerEngine;
     private final ExecutionStateService executionStateService;
     private final StockUniverseRepository universeRepository;
     private final StockPriceRepository priceRepository;
@@ -53,73 +48,6 @@ public class DashboardController {
         model.addAttribute("recentSignals", resultRepository.findTop10ByOrderByScanDateDesc());
 
         return "dashboard";
-    }
-
-    @PostMapping("/ingest/historical")
-    @ResponseBody
-    public Map<String, Object> ingestHistorical(@RequestParam(defaultValue = "5") int years) {
-        Map<String, Object> response = new HashMap<>();
-
-        if (!config.isHistoricalReloadAllowed()) {
-            response.put("success", false);
-            response.put("message", "Historical reload requires BOTH config flags: " +
-                "scanner.allowHistoricalReload=true AND scanner.historical.reload.confirm=true");
-            return response;
-        }
-
-        try {
-            log.info("Starting historical data ingestion ({} years) - MANUAL trigger", years);
-            dataIngestionService.ingestHistoricalDataForUniverse(years);
-
-            response.put("success", true);
-            response.put("message", "Historical data ingestion completed");
-        } catch (Exception e) {
-            log.error("Historical ingestion failed: {}", e.getMessage(), e);
-            response.put("success", false);
-            response.put("message", "Error: " + e.getMessage());
-        }
-
-        return response;
-    }
-
-    @PostMapping("/ingest/daily")
-    @ResponseBody
-    public Map<String, Object> ingestDaily() {
-        Map<String, Object> response = new HashMap<>();
-
-        try {
-            log.info("Starting daily data ingestion - MANUAL trigger");
-            dataIngestionService.ingestDailyData(ExecutionMode.MANUAL);
-
-            response.put("success", true);
-            response.put("message", "Daily ingestion completed");
-        } catch (Exception e) {
-            log.error("Daily ingestion failed: {}", e.getMessage(), e);
-            response.put("success", false);
-            response.put("message", "Error: " + e.getMessage());
-        }
-
-        return response;
-    }
-
-    @PostMapping("/scan/execute")
-    @ResponseBody
-    public Map<String, Object> executeScan() {
-        Map<String, Object> response = new HashMap<>();
-
-        try {
-            log.info("Starting scanner execution - MANUAL trigger");
-            scannerEngine.executeDailyScan();
-
-            response.put("success", true);
-            response.put("message", "Scan completed successfully");
-        } catch (Exception e) {
-            log.error("Scan execution failed: {}", e.getMessage(), e);
-            response.put("success", false);
-            response.put("message", "Error: " + e.getMessage());
-        }
-
-        return response;
     }
 
     @GetMapping("/status")

@@ -74,8 +74,6 @@ public class ScannerEngine {
 
         List<StockUniverse> activeStocks = universeRepository.findByIsActiveTrue();
 
-        log.info("DEBUG_SCAN_SETUP rulesCount={} activeStocks={}", rules.size(), activeStocks.size());
-
         int scannedCount = 0;
         int flaggedCount = 0;
         List<ScanResult> results = new ArrayList<>();
@@ -99,25 +97,11 @@ public class ScannerEngine {
 
                 scannedCount++;
 
-                log.info("DEBUG_EVAL symbol={} priceCount={}", stock.getSymbol(), prices.size());
-
-                String firstDate = prices.get(0).getDate() != null ?
-                    prices.get(0).getDate().toString() : "null";
-                String lastDate = prices.get(prices.size() - 1).getDate() != null ?
-                    prices.get(prices.size() - 1).getDate().toString() : "null";
-                log.info("DATE_DEBUG symbol={} firstDate={} lastDate={} size={}",
-                    stock.getSymbol(), firstDate, lastDate, prices.size());
-
                 IndicatorBundle indicators = indicatorService.calculateIndicators(prices, indicatorParameters);
-
-                log.info("DEBUG_INDICATORS symbol={} size={} hasRsi={} hasSma20={} hasAvgVol={}",
-                    stock.getSymbol(), prices.size(), indicators.hasRsi(), indicators.hasSma20(), indicators.hasAvgVolume());
 
                 for (ScannerRule rule : rules) {
                     boolean ruleMatches = rule.matches(stock.getSymbol(), prices, indicators);
                     if (ruleMatches) {
-                        log.info("DEBUG_RULE_MATCHED symbol={} rule={}", stock.getSymbol(), rule.getRuleName());
-
                         Double confidence = rule.getConfidence(stock.getSymbol(), prices, indicators);
                         String metadata = rule.getMetadata(stock.getSymbol(), prices, indicators);
 
@@ -137,8 +121,6 @@ public class ScannerEngine {
 
                         log.info("SIGNAL: {} matched rule '{}' with confidence {:.2f}",
                             stock.getSymbol(), rule.getRuleName(), confidence);
-                    } else {
-                        log.debug("DEBUG_NO_MATCH symbol={} rule={}", stock.getSymbol(), rule.getRuleName());
                     }
                 }
 

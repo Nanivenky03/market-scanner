@@ -55,6 +55,7 @@ public class SimulationController {
     @PostMapping("/advance")
     public ResponseEntity<SimulationBatchResult> advanceCycles(@RequestParam(defaultValue = "1") int days) {
         SimulationBatchResult result = simulationCycleService.advanceSimulation(days);
+        exchangeClock.invalidateSimulationCache();
         return ResponseEntity.ok(result);
     }
     
