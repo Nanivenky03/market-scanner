@@ -32,6 +32,8 @@ public class ExecutionStateService {
                     .ingestionStatus(ExecutionStatus.PENDING)
                     .scanStatus(ExecutionStatus.PENDING)
                     .dataSourceStatus(DataSourceStatus.UNKNOWN)
+                    .stocksIngested(0)
+                    .signalsGenerated(0)
                     .build();
                 return stateRepository.save(state);
             });

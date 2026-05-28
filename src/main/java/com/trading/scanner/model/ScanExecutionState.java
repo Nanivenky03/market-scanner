@@ -51,11 +51,13 @@ public class ScanExecutionState {
     @Convert(converter = LocalDateTimeConverter.class)
     private LocalDateTime lastScanTime;
     
-    @Column(name = "stocks_ingested")
-    private Integer stocksIngested;
+    @Column(name = "stocks_ingested", nullable = false)
+    @Builder.Default
+    private Integer stocksIngested = 0;
     
-    @Column(name = "signals_generated")
-    private Integer signalsGenerated;
+    @Column(name = "signals_generated", nullable = false)
+    @Builder.Default
+    private Integer signalsGenerated = 0;
     
     @Column(name = "error_message", length = 1000)
     private String errorMessage;
