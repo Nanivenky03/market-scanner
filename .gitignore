@@ -53,4 +53,8 @@ data/market_scanner.db*
 data/
 
 # Sensitive information
+.env
+*.env
+.env.local
 application-local.properties
+application-secrets.properties
