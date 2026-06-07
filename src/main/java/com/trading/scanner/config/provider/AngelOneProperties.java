@@ -9,6 +9,9 @@ public record AngelOneProperties(
         String clientId,
         String password,
         String totpSecret,
-        String baseUrl
+        String baseUrl,
+        String clientLocalIp,
+        String clientPublicIp,
+        String macAddress
 ) {
 }
