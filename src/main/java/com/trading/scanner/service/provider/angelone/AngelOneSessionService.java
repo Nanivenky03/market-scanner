@@ -6,6 +6,7 @@ import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneLoginRequest;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneLoginResponse;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneSessionInfo;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneSessionTokens;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,23 +31,33 @@ public class AngelOneSessionService {
             .build();
 
     public AngelOneSessionInfo createSession() {
-        validateBaseConfig();
-
-        String generatedTotp = totpService.generateCurrentTotp(properties.totpSecret());
-        return createSessionWithTotp(generatedTotp);
+        AngelOneSessionTokens tokens = createSessionTokens();
+        return toSessionInfo(tokens, "SUCCESS");
     }
 
     public AngelOneSessionInfo createSession(String manualTotp) {
+        AngelOneSessionTokens tokens = createSessionTokens(manualTotp);
+        return toSessionInfo(tokens, "SUCCESS");
+    }
+
+    public AngelOneSessionTokens createSessionTokens() {
+        validateBaseConfig();
+
+        String generatedTotp = totpService.generateCurrentTotp(properties.totpSecret());
+        return createSessionTokensInternal(generatedTotp);
+    }
+
+    public AngelOneSessionTokens createSessionTokens(String manualTotp) {
         validateBaseConfig();
 
         String totpToUse = (manualTotp != null && !manualTotp.isBlank())
                 ? manualTotp.trim()
                 : totpService.generateCurrentTotp(properties.totpSecret());
 
-        return createSessionWithTotp(totpToUse);
+        return createSessionTokensInternal(totpToUse);
     }
 
-    private AngelOneSessionInfo createSessionWithTotp(String totp) {
+    private AngelOneSessionTokens createSessionTokensInternal(String totp) {
         if (totp == null || totp.isBlank()) {
             throw new ProviderException("TOTP is required");
         }
@@ -85,34 +96,38 @@ public class AngelOneSessionService {
                 String errorMessage = "Angel One login failed. message=" + loginResponse.message()
                         + ", errorcode=" + loginResponse.errorcode();
                 log.warn(errorMessage);
-                return new AngelOneSessionInfo(
-                        false,
-                        errorMessage,
-                        false,
-                        false,
-                        false,
-                        null,
-                        null,
-                        null
-                );
+                throw new ProviderException(errorMessage);
             }
 
             AngelOneLoginResponse.AngelOneLoginData data = loginResponse.data();
+            if (data == null || isBlank(data.jwtToken()) || isBlank(data.refreshToken()) || isBlank(data.feedToken())) {
+                throw new ProviderException("Angel One login succeeded but tokens were missing in the response");
+            }
 
-            return new AngelOneSessionInfo(
-                    true,
-                    loginResponse.message(),
-                    data != null && data.jwtToken() != null && !data.jwtToken().isBlank(),
-                    data != null && data.refreshToken() != null && !data.refreshToken().isBlank(),
-                    data != null && data.feedToken() != null && !data.feedToken().isBlank(),
-                    preview(data != null ? data.jwtToken() : null),
-                    preview(data != null ? data.refreshToken() : null),
-                    preview(data != null ? data.feedToken() : null)
+            return new AngelOneSessionTokens(
+                    data.jwtToken(),
+                    data.refreshToken(),
+                    data.feedToken()
             );
 
+        } catch (ProviderException ex) {
+            throw ex;
         } catch (Exception ex) {
             throw new ProviderException("Failed to create Angel One session", ex);
         }
+    }
+
+    private AngelOneSessionInfo toSessionInfo(AngelOneSessionTokens tokens, String message) {
+        return new AngelOneSessionInfo(
+                true,
+                message,
+                !isBlank(tokens.jwtToken()),
+                !isBlank(tokens.refreshToken()),
+                !isBlank(tokens.feedToken()),
+                preview(tokens.jwtToken()),
+                preview(tokens.refreshToken()),
+                preview(tokens.feedToken())
+        );
     }
 
     private void validateBaseConfig() {

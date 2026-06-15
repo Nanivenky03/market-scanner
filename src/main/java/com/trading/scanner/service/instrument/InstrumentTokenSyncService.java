@@ -1,0 +1,278 @@
+package com.trading.scanner.service.instrument;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trading.scanner.config.provider.AngelOneProperties;
+import com.trading.scanner.model.InstrumentMaster;
+import com.trading.scanner.repository.InstrumentMasterRepository;
+import com.trading.scanner.service.provider.ProviderException;
+import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneSearchScripRequest;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneSearchScripResponse;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneSessionTokens;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class InstrumentTokenSyncService {
+
+    private final InstrumentMasterRepository instrumentMasterRepository;
+    private final AngelOneProperties angelOneProperties;
+    private final AngelOneSessionService angelOneSessionService;
+    private final ObjectMapper objectMapper;
+
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(20))
+            .build();
+
+    @Transactional
+    public TokenSyncResult syncAngelOneTokens(boolean onlyMissing) {
+        if (!angelOneProperties.enabled()) {
+            throw new ProviderException("Angel One provider is disabled. Set ANGELONE_ENABLED=true");
+        }
+
+        List<InstrumentMaster> allActive = instrumentMasterRepository.findByIsActiveTrueOrderBySymbolAsc();
+        if (allActive.isEmpty()) {
+            return new TokenSyncResult(0, 0, 0, 0, List.of(), "No active instruments found");
+        }
+
+        List<InstrumentMaster> targetList = allActive.stream()
+                .filter(im -> !onlyMissing || isBlank(im.getBrokerToken()))
+                .toList();
+
+        if (targetList.isEmpty()) {
+            return new TokenSyncResult(allActive.size(), 0, 0, 0, List.of(), "No instruments need token sync");
+        }
+
+        AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
+
+        int mapped = 0;
+        int failed = 0;
+        int unchanged = 0;
+        List<String> unmappedSymbols = new ArrayList<>();
+
+        for (InstrumentMaster instrument : targetList) {
+            try {
+                SearchResult resolved = null;
+                Exception lastException = null;
+
+                for (int attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        resolved = searchAndResolve(sessionTokens.jwtToken(), instrument);
+                        if (resolved != null) {
+                            break;
+                        }
+
+                        sleepQuietly(250L * attempt);
+                    } catch (Exception ex) {
+                        lastException = ex;
+                        log.debug("searchScrip attempt {} failed for {}: {}", attempt, instrument.getSymbol(), ex.getMessage());
+                        sleepQuietly(400L * attempt);
+                    }
+                }
+
+                if (resolved == null) {
+                    failed++;
+                    unmappedSymbols.add(instrument.getSymbol());
+
+                    if (lastException != null) {
+                        log.warn("Instrument token sync failed for symbol={} exchange={} after retries: {}",
+                                instrument.getSymbol(), instrument.getExchange(), lastException.getMessage());
+                    } else {
+                        log.warn("Instrument token sync did not find exact match for symbol={} exchange={}",
+                                instrument.getSymbol(), instrument.getExchange());
+                    }
+
+                    continue;
+                }
+
+                boolean changed = false;
+
+                if (!safeEquals(instrument.getBrokerSymbol(), resolved.tradingSymbol())) {
+                    instrument.setBrokerSymbol(resolved.tradingSymbol());
+                    changed = true;
+                }
+
+                if (!safeEquals(instrument.getBrokerToken(), resolved.symbolToken())) {
+                    instrument.setBrokerToken(resolved.symbolToken());
+                    changed = true;
+                }
+
+                if (changed) {
+                    instrumentMasterRepository.save(instrument);
+                    mapped++;
+                } else {
+                    unchanged++;
+                }
+
+                sleepQuietly(200L);
+
+            } catch (Exception ex) {
+                log.warn("Instrument token sync failed for symbol={} exchange={}: {}",
+                        instrument.getSymbol(), instrument.getExchange(), ex.getMessage());
+                failed++;
+                unmappedSymbols.add(instrument.getSymbol());
+            }
+        }
+
+        log.info("Angel One token sync completed. totalActive={}, attempted={}, mapped={}, unchanged={}, failed={}",
+                allActive.size(), targetList.size(), mapped, unchanged, failed);
+
+        return new TokenSyncResult(
+                allActive.size(),
+                targetList.size(),
+                mapped,
+                failed,
+                unmappedSymbols,
+                "Token sync completed"
+        );
+    }
+
+    private SearchResult searchAndResolve(String jwtToken, InstrumentMaster instrument) throws Exception {
+        AngelOneSearchScripResponse searchResponse =
+                callSearchScrip(jwtToken, instrument.getExchange(), instrument.getSymbol());
+
+        if (searchResponse.status() == null
+                || !searchResponse.status()
+                || searchResponse.data() == null
+                || searchResponse.data().isEmpty()) {
+            return null;
+        }
+
+        String expectedSymbol = instrument.getSymbol().trim().toUpperCase(Locale.ROOT);
+        String expectedEqSymbol = expectedSymbol + "-EQ";
+
+        AngelOneSearchScripResponse.AngelOneSearchScripItem exactEqMatch = searchResponse.data().stream()
+                .filter(item -> instrument.getExchange().equalsIgnoreCase(item.exchange()))
+                .filter(item -> expectedEqSymbol.equalsIgnoreCase(item.tradingsymbol()))
+                .findFirst()
+                .orElse(null);
+
+        if (exactEqMatch != null) {
+            return new SearchResult(exactEqMatch.tradingsymbol(), exactEqMatch.symboltoken());
+        }
+
+        AngelOneSearchScripResponse.AngelOneSearchScripItem exactSymbolMatch = searchResponse.data().stream()
+                .filter(item -> instrument.getExchange().equalsIgnoreCase(item.exchange()))
+                .filter(item -> expectedSymbol.equalsIgnoreCase(item.tradingsymbol()))
+                .findFirst()
+                .orElse(null);
+
+        if (exactSymbolMatch != null) {
+            return new SearchResult(exactSymbolMatch.tradingsymbol(), exactSymbolMatch.symboltoken());
+        }
+
+        return null;
+    }
+
+    private AngelOneSearchScripResponse callSearchScrip(String jwtToken, String exchange, String symbol) throws Exception {
+        String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
+
+        AngelOneSearchScripRequest requestBody = new AngelOneSearchScripRequest(exchange, symbol);
+        String jsonBody = objectMapper.writeValueAsString(requestBody);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(30))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("Authorization", "Bearer " + jwtToken)
+                .header("X-UserType", "USER")
+                .header("X-SourceID", "WEB")
+                .header("X-ClientLocalIP", angelOneProperties.clientLocalIp())
+                .header("X-ClientPublicIP", angelOneProperties.clientPublicIp())
+                .header("X-MACAddress", angelOneProperties.macAddress())
+                .header("X-PrivateKey", angelOneProperties.apiKey())
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        return objectMapper.readValue(response.body(), AngelOneSearchScripResponse.class);
+    }
+
+    @Transactional(readOnly = true)
+    public String debugSearchScrip(String exchange, String symbol) {
+        if (!angelOneProperties.enabled()) {
+            throw new ProviderException("Angel One provider is disabled. Set ANGELONE_ENABLED=true");
+        }
+
+        try {
+            AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
+
+            String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
+
+            AngelOneSearchScripRequest requestBody = new AngelOneSearchScripRequest(exchange, symbol);
+            String jsonBody = objectMapper.writeValueAsString(requestBody);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(30))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .header("Authorization", "Bearer " + sessionTokens.jwtToken())
+                    .header("X-UserType", "USER")
+                    .header("X-SourceID", "WEB")
+                    .header("X-ClientLocalIP", angelOneProperties.clientLocalIp())
+                    .header("X-ClientPublicIP", angelOneProperties.clientPublicIp())
+                    .header("X-MACAddress", angelOneProperties.macAddress())
+                    .header("X-PrivateKey", angelOneProperties.apiKey())
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.body();
+
+        } catch (Exception ex) {
+            throw new ProviderException("Failed to debug Angel One searchScrip", ex);
+        }
+    }
+
+    private void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new ProviderException("Thread interrupted during Angel One token sync delay", ex);
+        }
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private boolean safeEquals(String left, String right) {
+        if (left == null && right == null) {
+            return true;
+        }
+        if (left == null || right == null) {
+            return false;
+        }
+        return left.equals(right);
+    }
+
+    private record SearchResult(String tradingSymbol, String symbolToken) {
+    }
+
+    public record TokenSyncResult(
+            int totalActiveInstruments,
+            int attempted,
+            int mapped,
+            int failed,
+            List<String> unmappedSymbols,
+            String message
+    ) {
+    }
+}

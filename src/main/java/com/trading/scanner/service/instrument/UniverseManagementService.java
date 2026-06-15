@@ -1,10 +1,13 @@
 package com.trading.scanner.service.instrument;
 
+import com.trading.scanner.config.HistoricalBackfillProperties;
 import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.repository.InstrumentMasterRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
+import com.trading.scanner.service.data.HistoricalBackfillResult;
+import com.trading.scanner.service.data.HistoricalBackfillService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,6 +20,8 @@ public class UniverseManagementService {
 
     private final InstrumentMasterRepository instrumentMasterRepository;
     private final StockUniverseRepository stockUniverseRepository;
+    private final HistoricalBackfillService historicalBackfillService;
+    private final HistoricalBackfillProperties historicalBackfillProperties;
 
     @Transactional(readOnly = true)
     public List<InstrumentSearchResult> searchActiveInstruments(String query, String exchange) {
@@ -53,6 +58,11 @@ public class UniverseManagementService {
                 stockUniverseRepository.save(existing);
             }
 
+            HistoricalBackfillResult backfillResult = null;
+            if (reactivated && historicalBackfillProperties.enabledOnUniverseAdd()) {
+                backfillResult = historicalBackfillService.backfillSymbolUsingDefaultWindow(instrument.getSymbol());
+            }
+
             return new AddToUniverseResult(
                     instrument.getId(),
                     instrument.getSymbol(),
@@ -60,7 +70,8 @@ public class UniverseManagementService {
                     reactivated,
                     reactivated
                             ? "Instrument reactivated in stock_universe"
-                            : "Instrument already exists in stock_universe"
+                            : "Instrument already exists in stock_universe",
+                    backfillResult
             );
         }
 
@@ -74,13 +85,38 @@ public class UniverseManagementService {
 
         stockUniverseRepository.save(newUniverseRow);
 
+        HistoricalBackfillResult backfillResult = null;
+        if (historicalBackfillProperties.enabledOnUniverseAdd()) {
+            backfillResult = historicalBackfillService.backfillSymbolUsingDefaultWindow(instrument.getSymbol());
+        }
+
         return new AddToUniverseResult(
                 instrument.getId(),
                 instrument.getSymbol(),
                 true,
                 false,
-                "Instrument added to stock_universe"
+                "Instrument added to stock_universe",
+                backfillResult
         );
+    }
+
+    @Transactional
+    public RemoveFromUniverseResult deactivateInstrumentFromUniverse(String symbol, String exchange) {
+        String normalizedSymbol = symbol.trim().toUpperCase();
+        Exchange normalizedExchange = Exchange.valueOf(normalizeExchange(exchange));
+
+        StockUniverse existing = stockUniverseRepository.findBySymbolAndExchange(normalizedSymbol, normalizedExchange)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Instrument not found in stock_universe for symbol=" + normalizedSymbol + ", exchange=" + normalizedExchange));
+
+        if (Boolean.FALSE.equals(existing.getIsActive())) {
+            return new RemoveFromUniverseResult(existing.getSymbol(), false, "Instrument already inactive");
+        }
+
+        existing.setIsActive(false);
+        stockUniverseRepository.save(existing);
+
+        return new RemoveFromUniverseResult(existing.getSymbol(), true, "Instrument deactivated in stock_universe");
     }
 
     private InstrumentSearchResult toSearchResult(InstrumentMaster instrument) {
@@ -131,6 +167,14 @@ public class UniverseManagementService {
             String symbol,
             boolean created,
             boolean reactivated,
+            String message,
+            HistoricalBackfillResult backfill
+    ) {
+    }
+
+    public record RemoveFromUniverseResult(
+            String symbol,
+            boolean changed,
             String message
     ) {
     }
