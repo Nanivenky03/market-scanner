@@ -37,4 +37,14 @@ public class UniverseManagementDevController {
                 universeManagementService.addInstrumentToUniverse(request.instrumentId())
         );
     }
+
+    @PostMapping("/deactivate")
+    public ResponseEntity<UniverseManagementService.RemoveFromUniverseResult> deactivate(
+            @RequestParam String symbol,
+            @RequestParam(defaultValue = "NSE") String exchange
+    ) {
+        return ResponseEntity.ok(
+                universeManagementService.deactivateInstrumentFromUniverse(symbol, exchange)
+        );
+    }
 }
