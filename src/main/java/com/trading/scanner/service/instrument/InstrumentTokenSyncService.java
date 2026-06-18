@@ -6,9 +6,8 @@ import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.repository.InstrumentMasterRepository;
 import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
-import com.trading.scanner.service.provider.angelone.dto.AngelOneSearchScripRequest;
-import com.trading.scanner.service.provider.angelone.dto.AngelOneSearchScripResponse;
-import com.trading.scanner.service.provider.angelone.dto.AngelOneSessionTokens;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneMarketDtos;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -56,7 +55,7 @@ public class InstrumentTokenSyncService {
             return new TokenSyncResult(allActive.size(), 0, 0, 0, List.of(), "No instruments need token sync");
         }
 
-        AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
+        AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
 
         int mapped = 0;
         int failed = 0;
@@ -78,7 +77,8 @@ public class InstrumentTokenSyncService {
                         sleepQuietly(250L * attempt);
                     } catch (Exception ex) {
                         lastException = ex;
-                        log.debug("searchScrip attempt {} failed for {}: {}", attempt, instrument.getSymbol(), ex.getMessage());
+                        log.debug("searchScrip attempt {} failed for {}: {}", attempt, instrument.getSymbol(),
+                                ex.getMessage());
                         sleepQuietly(400L * attempt);
                     }
                 }
@@ -136,13 +136,12 @@ public class InstrumentTokenSyncService {
                 mapped,
                 failed,
                 unmappedSymbols,
-                "Token sync completed"
-        );
+                "Token sync completed");
     }
 
     private SearchResult searchAndResolve(String jwtToken, InstrumentMaster instrument) throws Exception {
-        AngelOneSearchScripResponse searchResponse =
-                callSearchScrip(jwtToken, instrument.getExchange(), instrument.getSymbol());
+        AngelOneMarketDtos.AngelOneSearchScripResponse searchResponse = callSearchScrip(jwtToken,
+                instrument.getExchange(), instrument.getSymbol());
 
         if (searchResponse.status() == null
                 || !searchResponse.status()
@@ -154,7 +153,8 @@ public class InstrumentTokenSyncService {
         String expectedSymbol = instrument.getSymbol().trim().toUpperCase(Locale.ROOT);
         String expectedEqSymbol = expectedSymbol + "-EQ";
 
-        AngelOneSearchScripResponse.AngelOneSearchScripItem exactEqMatch = searchResponse.data().stream()
+        AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem exactEqMatch = searchResponse.data()
+                .stream()
                 .filter(item -> instrument.getExchange().equalsIgnoreCase(item.exchange()))
                 .filter(item -> expectedEqSymbol.equalsIgnoreCase(item.tradingsymbol()))
                 .findFirst()
@@ -164,7 +164,8 @@ public class InstrumentTokenSyncService {
             return new SearchResult(exactEqMatch.tradingsymbol(), exactEqMatch.symboltoken());
         }
 
-        AngelOneSearchScripResponse.AngelOneSearchScripItem exactSymbolMatch = searchResponse.data().stream()
+        AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem exactSymbolMatch = searchResponse.data()
+                .stream()
                 .filter(item -> instrument.getExchange().equalsIgnoreCase(item.exchange()))
                 .filter(item -> expectedSymbol.equalsIgnoreCase(item.tradingsymbol()))
                 .findFirst()
@@ -177,10 +178,12 @@ public class InstrumentTokenSyncService {
         return null;
     }
 
-    private AngelOneSearchScripResponse callSearchScrip(String jwtToken, String exchange, String symbol) throws Exception {
+    private AngelOneMarketDtos.AngelOneSearchScripResponse callSearchScrip(String jwtToken, String exchange,
+            String symbol) throws Exception {
         String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
 
-        AngelOneSearchScripRequest requestBody = new AngelOneSearchScripRequest(exchange, symbol);
+        AngelOneMarketDtos.AngelOneSearchScripRequest requestBody = new AngelOneMarketDtos.AngelOneSearchScripRequest(
+                exchange, symbol);
         String jsonBody = objectMapper.writeValueAsString(requestBody);
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -200,7 +203,7 @@ public class InstrumentTokenSyncService {
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-        return objectMapper.readValue(response.body(), AngelOneSearchScripResponse.class);
+        return objectMapper.readValue(response.body(), AngelOneMarketDtos.AngelOneSearchScripResponse.class);
     }
 
     @Transactional(readOnly = true)
@@ -210,11 +213,12 @@ public class InstrumentTokenSyncService {
         }
 
         try {
-            AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
+            AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
 
             String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
 
-            AngelOneSearchScripRequest requestBody = new AngelOneSearchScripRequest(exchange, symbol);
+            AngelOneMarketDtos.AngelOneSearchScripRequest requestBody = new AngelOneMarketDtos.AngelOneSearchScripRequest(
+                    exchange, symbol);
             String jsonBody = objectMapper.writeValueAsString(requestBody);
 
             HttpRequest request = HttpRequest.newBuilder()
@@ -272,7 +276,6 @@ public class InstrumentTokenSyncService {
             int mapped,
             int failed,
             List<String> unmappedSymbols,
-            String message
-    ) {
+            String message) {
     }
 }

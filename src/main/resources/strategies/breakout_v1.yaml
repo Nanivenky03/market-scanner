@@ -1,0 +1,96 @@
+strategyId: breakout_v1
+version: 1.0.0
+displayName: Breakout V1 15M
+timeframe: FIFTEEN_MINUTE
+simulationEnabled: true
+liveEnabled: false
+status: DRAFT
+
+breakout:
+  lookbackWindow: 21
+  rsiPeriod: 14
+  smaShortPeriod: 20
+  smaMediumPeriod: 50
+  smaLongPeriod: 200
+  rsiThresholdMatch: 55.0
+  volumeMultiplierMatch: 1.5
+  rsiThresholdConfidence: 60.0
+  volumeMultiplierConfidence: 2.0
+  baseConfidence: 0.5
+  confidenceIncrement: 0.1
+  maxConfidenceCap: 1.0
+  maxGap: 0.015
+
+scoring:
+  factors:
+    breakoutPercent:
+      weight: 1.0
+      bands:
+        - label: GOOD
+          min: 0.0
+          max: 0.4
+          score: 1.0
+        - label: ACCEPTABLE
+          min: 0.4
+          max: 0.8
+          score: 0.75
+        - label: CAUTION
+          min: 0.8
+          max: 1.0
+          score: 0.40
+        - label: LATE
+          min: 1.0
+          max: 999.0
+          score: 0.0
+
+    volumeRatio:
+      weight: 1.0
+      bands:
+        - label: IGNORE
+          min: 0.0
+          max: 1.5
+          score: 0.0
+        - label: ACCEPTABLE
+          min: 1.5
+          max: 1.8
+          score: 0.60
+        - label: GOOD
+          min: 1.8
+          max: 2.5
+          score: 1.0
+        - label: VERY_GOOD
+          min: 2.5
+          max: 3.5
+          score: 1.10
+        - label: EXHAUSTION_RISK
+          min: 3.5
+          max: 999.0
+          score: 0.80
+
+    rsi:
+      weight: 1.0
+      bands:
+        - label: WEAK
+          min: 0.0
+          max: 55.0
+          score: 0.0
+        - label: GOOD
+          min: 55.0
+          max: 65.0
+          score: 1.0
+        - label: ACCEPTABLE
+          min: 65.0
+          max: 70.0
+          score: 0.70
+        - label: CAUTION
+          min: 70.0
+          max: 75.0
+          score: 0.30
+        - label: CHASE
+          min: 75.0
+          max: 999.0
+          score: 0.0
+
+  decisionThresholds:
+    ignoreBelow: 0.45
+    investAbove: 0.65

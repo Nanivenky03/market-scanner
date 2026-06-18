@@ -2,15 +2,17 @@ package com.trading.scanner.service.provider.angelone;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.config.provider.AngelOneProperties;
+import com.trading.scanner.model.CandleQualityStatus;
+import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.InstrumentMaster;
+import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.repository.InstrumentMasterRepository;
 import com.trading.scanner.service.provider.DailyBarDto;
 import com.trading.scanner.service.provider.MarketDataProvider;
 import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.ProviderType;
-import com.trading.scanner.service.provider.angelone.dto.AngelOneCandleRequest;
-import com.trading.scanner.service.provider.angelone.dto.AngelOneCandleResponse;
-import com.trading.scanner.service.provider.angelone.dto.AngelOneSessionTokens;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneMarketDtos;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -20,6 +22,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -31,8 +35,12 @@ import java.util.Locale;
 public class AngelOneMarketDataProvider implements MarketDataProvider {
 
     private static final String INTERVAL_ONE_DAY = "ONE_DAY";
-    private static final DateTimeFormatter REQUEST_DATE_TIME_FORMAT =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final String INTERVAL_ONE_MINUTE = "ONE_MINUTE";
+
+    private static final DateTimeFormatter REQUEST_DATE_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
+    private static final DateTimeFormatter RESPONSE_MINUTE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final DateTimeFormatter RESPONSE_SECOND_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final AngelOneProperties properties;
     private final InstrumentMasterRepository instrumentMasterRepository;
@@ -102,26 +110,18 @@ public class AngelOneMarketDataProvider implements MarketDataProvider {
         }
 
         String normalizedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
-
-        InstrumentMaster instrument = instrumentMasterRepository
-                .findBySymbolAndExchange(normalizedSymbol, "NSE")
-                .orElseThrow(() -> new ProviderException(
-                        "Instrument not found in instrument_master for symbol=" + normalizedSymbol + ", exchange=NSE"));
-
-        if (instrument.getBrokerToken() == null || instrument.getBrokerToken().isBlank()) {
-            throw new ProviderException("broker_token is missing for symbol=" + normalizedSymbol);
-        }
+        InstrumentMaster instrument = getRequiredInstrument(normalizedSymbol);
 
         try {
-            AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
+            AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
 
-            AngelOneCandleResponse response = callHistoricalCandleApi(
+            AngelOneMarketDtos.AngelOneCandleResponse response = callHistoricalCandleApi(
                     sessionTokens.jwtToken(),
                     instrument.getExchange(),
                     instrument.getBrokerToken(),
+                    INTERVAL_ONE_DAY,
                     from,
-                    to
-            );
+                    to);
 
             if (response.status() == null || !response.status()) {
                 throw new ProviderException("Angel One historical fetch failed. message="
@@ -161,8 +161,7 @@ public class AngelOneMarketDataProvider implements MarketDataProvider {
                         close,
                         close,
                         volume,
-                        "ANGEL_ONE"
-                ));
+                        "ANGEL_ONE"));
             }
 
             return bars.stream()
@@ -172,27 +171,126 @@ public class AngelOneMarketDataProvider implements MarketDataProvider {
         } catch (ProviderException ex) {
             throw ex;
         } catch (Exception ex) {
-            throw new ProviderException("Failed to fetch Angel One historical bars for symbol=" + normalizedSymbol, ex);
+            throw new ProviderException(
+                    "Failed to fetch Angel One historical daily bars for symbol=" + normalizedSymbol, ex);
         }
     }
 
-    private AngelOneCandleResponse callHistoricalCandleApi(
+    public List<MarketCandle> fetchHistoricalOneMinuteCandles(String symbol, LocalDate from, LocalDate to) {
+        if (!properties.enabled()) {
+            throw new ProviderException("Angel One provider is disabled. Set ANGELONE_ENABLED=true");
+        }
+
+        if (symbol == null || symbol.isBlank()) {
+            throw new ProviderException("symbol is required");
+        }
+        if (from == null || to == null) {
+            throw new ProviderException("from and to dates are required");
+        }
+        if (from.isAfter(to)) {
+            throw new ProviderException("from date cannot be after to date");
+        }
+
+        String normalizedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
+        InstrumentMaster instrument = getRequiredInstrument(normalizedSymbol);
+
+        try {
+            AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
+
+            AngelOneMarketDtos.AngelOneCandleResponse response = callHistoricalCandleApi(
+                    sessionTokens.jwtToken(),
+                    instrument.getExchange(),
+                    instrument.getBrokerToken(),
+                    INTERVAL_ONE_MINUTE,
+                    from,
+                    to);
+
+            if (response.status() == null || !response.status()) {
+                throw new ProviderException("Angel One 1-minute historical fetch failed. message="
+                        + response.message() + ", errorcode=" + response.errorcode());
+            }
+
+            if (response.data() == null || response.data().isEmpty()) {
+                return List.of();
+            }
+
+            List<MarketCandle> candles = new ArrayList<>();
+
+            for (List<Object> row : response.data()) {
+                if (row == null || row.size() < 6) {
+                    continue;
+                }
+
+                LocalDateTime candleTime = parseCandleTime(stringValue(row.get(0)));
+                Double open = doubleValue(row.get(1));
+                Double high = doubleValue(row.get(2));
+                Double low = doubleValue(row.get(3));
+                Double close = doubleValue(row.get(4));
+                Long volume = longValue(row.get(5));
+                Long openInterest = row.size() > 6 ? longValue(row.get(6)) : null;
+
+                if (candleTime == null || open == null || high == null || low == null || close == null) {
+                    continue;
+                }
+
+                candles.add(MarketCandle.builder()
+                        .symbol(normalizedSymbol)
+                        .exchange(instrument.getExchange())
+                        .timeframe(CandleTimeframe.ONE_MINUTE)
+                        .candleTime(candleTime)
+                        .openPrice(open)
+                        .highPrice(high)
+                        .lowPrice(low)
+                        .closePrice(close)
+                        .volume(volume)
+                        .openInterest(openInterest)
+                        .source("ANGEL_ONE")
+                        .isFinalized(true)
+                        .qualityStatus(CandleQualityStatus.VALID)
+                        .build());
+            }
+
+            return candles.stream()
+                    .sorted(Comparator.comparing(MarketCandle::getCandleTime))
+                    .toList();
+
+        } catch (ProviderException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new ProviderException("Failed to fetch Angel One 1-minute candles for symbol=" + normalizedSymbol,
+                    ex);
+        }
+    }
+
+    private InstrumentMaster getRequiredInstrument(String symbol) {
+        InstrumentMaster instrument = instrumentMasterRepository
+                .findBySymbolAndExchange(symbol, "NSE")
+                .orElseThrow(() -> new ProviderException(
+                        "Instrument not found in instrument_master for symbol=" + symbol + ", exchange=NSE"));
+
+        if (instrument.getBrokerToken() == null || instrument.getBrokerToken().isBlank()) {
+            throw new ProviderException("broker_token is missing for symbol=" + symbol);
+        }
+
+        return instrument;
+    }
+
+    private AngelOneMarketDtos.AngelOneCandleResponse callHistoricalCandleApi(
             String jwtToken,
             String exchange,
             String symbolToken,
+            String interval,
             LocalDate from,
-            LocalDate to
-    ) throws Exception {
+            LocalDate to) throws Exception {
 
         String url = properties.baseUrl() + "/rest/secure/angelbroking/historical/v1/getCandleData";
 
-        AngelOneCandleRequest requestBody = new AngelOneCandleRequest(
+        AngelOneMarketDtos.AngelOneCandleRequest requestBody = new AngelOneMarketDtos.AngelOneCandleRequest(
                 exchange,
                 symbolToken,
-                INTERVAL_ONE_DAY,
+                interval,
                 from.atTime(0, 0).format(REQUEST_DATE_TIME_FORMAT),
-                to.atTime(23, 59).format(REQUEST_DATE_TIME_FORMAT)
-        );
+                to.atTime(23, 59).format(REQUEST_DATE_TIME_FORMAT));
 
         String jsonBody = objectMapper.writeValueAsString(requestBody);
 
@@ -213,7 +311,36 @@ public class AngelOneMarketDataProvider implements MarketDataProvider {
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-        return objectMapper.readValue(response.body(), AngelOneCandleResponse.class);
+        return objectMapper.readValue(response.body(), AngelOneMarketDtos.AngelOneCandleResponse.class);
+    }
+
+    private LocalDateTime parseCandleTime(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+
+        try {
+            return OffsetDateTime.parse(value).toLocalDateTime();
+        } catch (Exception ignored) {
+        }
+
+        String normalized = value.replace('T', ' ').trim();
+
+        try {
+            if (normalized.length() >= 19) {
+                return LocalDateTime.parse(normalized.substring(0, 19), RESPONSE_SECOND_FORMAT);
+            }
+        } catch (Exception ignored) {
+        }
+
+        try {
+            if (normalized.length() >= 16) {
+                return LocalDateTime.parse(normalized.substring(0, 16), RESPONSE_MINUTE_FORMAT);
+            }
+        } catch (Exception ignored) {
+        }
+
+        return null;
     }
 
     private String stringValue(Object value) {
