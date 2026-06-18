@@ -31,6 +31,7 @@ public class InstrumentTokenSyncService {
     private final AngelOneProperties angelOneProperties;
     private final AngelOneSessionService angelOneSessionService;
     private final ObjectMapper objectMapper;
+    private final SymbolAliasService symbolAliasService;
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(20))
@@ -73,7 +74,6 @@ public class InstrumentTokenSyncService {
                         if (resolved != null) {
                             break;
                         }
-
                         sleepQuietly(250L * attempt);
                     } catch (Exception ex) {
                         lastException = ex;
@@ -94,7 +94,6 @@ public class InstrumentTokenSyncService {
                         log.warn("Instrument token sync did not find exact match for symbol={} exchange={}",
                                 instrument.getSymbol(), instrument.getExchange());
                     }
-
                     continue;
                 }
 
@@ -140,8 +139,10 @@ public class InstrumentTokenSyncService {
     }
 
     private SearchResult searchAndResolve(String jwtToken, InstrumentMaster instrument) throws Exception {
+        String lookupSymbol = symbolAliasService.resolveLookupSymbol(instrument.getSymbol());
+
         AngelOneMarketDtos.AngelOneSearchScripResponse searchResponse = callSearchScrip(jwtToken,
-                instrument.getExchange(), instrument.getSymbol());
+                instrument.getExchange(), lookupSymbol);
 
         if (searchResponse.status() == null
                 || !searchResponse.status()
@@ -150,7 +151,7 @@ public class InstrumentTokenSyncService {
             return null;
         }
 
-        String expectedSymbol = instrument.getSymbol().trim().toUpperCase(Locale.ROOT);
+        String expectedSymbol = lookupSymbol.trim().toUpperCase(Locale.ROOT);
         String expectedEqSymbol = expectedSymbol + "-EQ";
 
         AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem exactEqMatch = searchResponse.data()
@@ -178,12 +179,15 @@ public class InstrumentTokenSyncService {
         return null;
     }
 
-    private AngelOneMarketDtos.AngelOneSearchScripResponse callSearchScrip(String jwtToken, String exchange,
+    private AngelOneMarketDtos.AngelOneSearchScripResponse callSearchScrip(
+            String jwtToken,
+            String exchange,
             String symbol) throws Exception {
         String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
 
         AngelOneMarketDtos.AngelOneSearchScripRequest requestBody = new AngelOneMarketDtos.AngelOneSearchScripRequest(
                 exchange, symbol);
+
         String jsonBody = objectMapper.writeValueAsString(requestBody);
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -202,7 +206,6 @@ public class InstrumentTokenSyncService {
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
         return objectMapper.readValue(response.body(), AngelOneMarketDtos.AngelOneSearchScripResponse.class);
     }
 
@@ -214,11 +217,12 @@ public class InstrumentTokenSyncService {
 
         try {
             AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
-
             String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
 
+            String lookupSymbol = symbolAliasService.resolveLookupSymbol(symbol);
             AngelOneMarketDtos.AngelOneSearchScripRequest requestBody = new AngelOneMarketDtos.AngelOneSearchScripRequest(
-                    exchange, symbol);
+                    exchange, lookupSymbol);
+
             String jsonBody = objectMapper.writeValueAsString(requestBody);
 
             HttpRequest request = HttpRequest.newBuilder()
