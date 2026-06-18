@@ -5,8 +5,6 @@ import org.springframework.validation.annotation.Validated;
 
 import jakarta.validation.constraints.NotNull;
 
-@Validated
-@ConfigurationProperties(prefix = "rules.breakout")
 public record BreakoutRuleProperties(
     @NotNull Integer lookbackWindow,
     @NotNull Integer rsiPeriod,

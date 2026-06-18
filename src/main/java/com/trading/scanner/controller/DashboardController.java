@@ -8,6 +8,8 @@ import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.service.state.ExecutionStateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -18,6 +20,7 @@ import java.util.Map;
 
 @Slf4j
 @Controller
+@Profile("dashboard")
 @RequiredArgsConstructor
 public class DashboardController {
 
