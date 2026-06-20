@@ -16,14 +16,19 @@ public interface MarketCandleRepository extends JpaRepository<MarketCandle, Inte
             String symbol,
             String exchange,
             CandleTimeframe timeframe,
-            LocalDateTime candleTime
-    );
+            LocalDateTime candleTime);
 
     List<MarketCandle> findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
             String symbol,
             String exchange,
             CandleTimeframe timeframe,
             LocalDateTime from,
-            LocalDateTime to
-    );
+            LocalDateTime to);
+
+    long countBySymbolAndExchangeAndTimeframeAndCandleTimeBetween(
+            String symbol,
+            String exchange,
+            CandleTimeframe timeframe,
+            LocalDateTime from,
+            LocalDateTime to);
 }

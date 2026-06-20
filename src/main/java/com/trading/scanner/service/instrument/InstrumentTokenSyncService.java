@@ -1,10 +1,10 @@
 package com.trading.scanner.service.instrument;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.config.provider.AngelOneProperties;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.repository.InstrumentMasterRepository;
 import com.trading.scanner.service.provider.ProviderException;
+import com.trading.scanner.service.provider.angelone.AngelOneApiExecutor;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneMarketDtos;
@@ -13,14 +13,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -30,12 +27,8 @@ public class InstrumentTokenSyncService {
     private final InstrumentMasterRepository instrumentMasterRepository;
     private final AngelOneProperties angelOneProperties;
     private final AngelOneSessionService angelOneSessionService;
-    private final ObjectMapper objectMapper;
+    private final AngelOneApiExecutor angelOneApiExecutor;
     private final SymbolAliasService symbolAliasService;
-
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(20))
-            .build();
 
     @Transactional
     public TokenSyncResult syncAngelOneTokens(boolean onlyMissing) {
@@ -138,7 +131,7 @@ public class InstrumentTokenSyncService {
                 "Token sync completed");
     }
 
-    private SearchResult searchAndResolve(String jwtToken, InstrumentMaster instrument) throws Exception {
+    private SearchResult searchAndResolve(String jwtToken, InstrumentMaster instrument) {
         String lookupSymbol = symbolAliasService.resolveLookupSymbol(instrument.getSymbol());
 
         AngelOneMarketDtos.AngelOneSearchScripResponse searchResponse = callSearchScrip(jwtToken,
@@ -182,31 +175,29 @@ public class InstrumentTokenSyncService {
     private AngelOneMarketDtos.AngelOneSearchScripResponse callSearchScrip(
             String jwtToken,
             String exchange,
-            String symbol) throws Exception {
+            String symbol) {
         String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
 
         AngelOneMarketDtos.AngelOneSearchScripRequest requestBody = new AngelOneMarketDtos.AngelOneSearchScripRequest(
                 exchange, symbol);
 
-        String jsonBody = objectMapper.writeValueAsString(requestBody);
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Content-Type", "application/json");
+        headers.put("Accept", "application/json");
+        headers.put("Authorization", "Bearer " + jwtToken);
+        headers.put("X-UserType", "USER");
+        headers.put("X-SourceID", "WEB");
+        headers.put("X-ClientLocalIP", angelOneProperties.clientLocalIp());
+        headers.put("X-ClientPublicIP", angelOneProperties.clientPublicIp());
+        headers.put("X-MACAddress", angelOneProperties.macAddress());
+        headers.put("X-PrivateKey", angelOneProperties.apiKey());
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(30))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .header("Authorization", "Bearer " + jwtToken)
-                .header("X-UserType", "USER")
-                .header("X-SourceID", "WEB")
-                .header("X-ClientLocalIP", angelOneProperties.clientLocalIp())
-                .header("X-ClientPublicIP", angelOneProperties.clientPublicIp())
-                .header("X-MACAddress", angelOneProperties.macAddress())
-                .header("X-PrivateKey", angelOneProperties.apiKey())
-                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-                .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        return objectMapper.readValue(response.body(), AngelOneMarketDtos.AngelOneSearchScripResponse.class);
+        return angelOneApiExecutor.postJson(
+                AngelOneApiExecutor.ApiEndpoint.SEARCH_SCRIP,
+                url,
+                headers,
+                requestBody,
+                AngelOneMarketDtos.AngelOneSearchScripResponse.class);
     }
 
     @Transactional(readOnly = true)
@@ -215,37 +206,29 @@ public class InstrumentTokenSyncService {
             throw new ProviderException("Angel One provider is disabled. Set ANGELONE_ENABLED=true");
         }
 
-        try {
-            AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
-            String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
+        AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
+        String url = angelOneProperties.baseUrl() + "/rest/secure/angelbroking/order/v1/searchScrip";
 
-            String lookupSymbol = symbolAliasService.resolveLookupSymbol(symbol);
-            AngelOneMarketDtos.AngelOneSearchScripRequest requestBody = new AngelOneMarketDtos.AngelOneSearchScripRequest(
-                    exchange, lookupSymbol);
+        String lookupSymbol = symbolAliasService.resolveLookupSymbol(symbol);
+        AngelOneMarketDtos.AngelOneSearchScripRequest requestBody = new AngelOneMarketDtos.AngelOneSearchScripRequest(
+                exchange, lookupSymbol);
 
-            String jsonBody = objectMapper.writeValueAsString(requestBody);
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Content-Type", "application/json");
+        headers.put("Accept", "application/json");
+        headers.put("Authorization", "Bearer " + sessionTokens.jwtToken());
+        headers.put("X-UserType", "USER");
+        headers.put("X-SourceID", "WEB");
+        headers.put("X-ClientLocalIP", angelOneProperties.clientLocalIp());
+        headers.put("X-ClientPublicIP", angelOneProperties.clientPublicIp());
+        headers.put("X-MACAddress", angelOneProperties.macAddress());
+        headers.put("X-PrivateKey", angelOneProperties.apiKey());
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(30))
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .header("Authorization", "Bearer " + sessionTokens.jwtToken())
-                    .header("X-UserType", "USER")
-                    .header("X-SourceID", "WEB")
-                    .header("X-ClientLocalIP", angelOneProperties.clientLocalIp())
-                    .header("X-ClientPublicIP", angelOneProperties.clientPublicIp())
-                    .header("X-MACAddress", angelOneProperties.macAddress())
-                    .header("X-PrivateKey", angelOneProperties.apiKey())
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            return response.body();
-
-        } catch (Exception ex) {
-            throw new ProviderException("Failed to debug Angel One searchScrip", ex);
-        }
+        return angelOneApiExecutor.postJsonForBody(
+                AngelOneApiExecutor.ApiEndpoint.SEARCH_SCRIP,
+                url,
+                headers,
+                requestBody);
     }
 
     private void sleepQuietly(long millis) {

@@ -17,18 +17,19 @@ public interface InstrumentMasterRepository extends JpaRepository<InstrumentMast
     List<InstrumentMaster> findByIsActiveTrueOrderBySymbolAsc();
 
     @Query("""
-        select im
-        from InstrumentMaster im
-        where im.isActive = true
-          and im.exchange = :exchange
-          and (
-                lower(im.symbol) like lower(concat('%', :query, '%'))
-             or lower(im.companyName) like lower(concat('%', :query, '%'))
-          )
-        order by im.symbol asc
-    """)
+                select im
+                from InstrumentMaster im
+                where im.isActive = true
+                  and im.exchange = :exchange
+                  and (
+                        lower(im.symbol) like lower(concat('%', :query, '%'))
+                     or lower(im.companyName) like lower(concat('%', :query, '%'))
+                  )
+                order by im.symbol asc
+            """)
     List<InstrumentMaster> searchActiveByExchangeAndQuery(
             @Param("exchange") String exchange,
-            @Param("query") String query
-    );
+            @Param("query") String query);
+
+    Optional<InstrumentMaster> findByBrokerToken(String brokerToken);
 }
