@@ -3,6 +3,7 @@ package com.trading.scanner.service.provider.angelone;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.config.provider.AngelOneProperties;
+import com.trading.scanner.service.data.LiveMarketCandleService;
 import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,8 @@ public class AngelOneWebSocketService {
     private final TimeProvider timeProvider;
     private final ObjectMapper objectMapper;
     private final WebSocketFrameCaptureService frameCaptureService;
+    private final AngelOneTickParserService angelOneTickParserService;
+    private final LiveMarketCandleService liveMarketCandleService;
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(20))
@@ -48,6 +51,8 @@ public class AngelOneWebSocketService {
     private volatile long messagesReceived;
     private volatile long messagesSent;
     private volatile long subscriptionsSent;
+    private volatile long parsedTicksReceived;
+    private volatile long parserFailures;
 
     public synchronized Status connect() {
         validateConfig();
@@ -186,7 +191,9 @@ public class AngelOneWebSocketService {
                 lastBinarySize,
                 messagesReceived,
                 messagesSent,
-                subscriptionsSent);
+                subscriptionsSent,
+                parsedTicksReceived,
+                parserFailures);
     }
 
     private void ensureConnected() {
@@ -210,6 +217,29 @@ public class AngelOneWebSocketService {
         }
     }
 
+    private void handleParsedTick(AngelOneTickParserService.NormalizedTick tick) {
+        try {
+            if (tick.symbol() == null || tick.exchange() == null || tick.tickTime() == null
+                    || tick.lastPrice() == null) {
+                parserFailures++;
+                return;
+            }
+
+            liveMarketCandleService.ingestTick(
+                    new LiveMarketCandleService.TickInput(
+                            tick.symbol(),
+                            tick.exchange(),
+                            tick.tickTime(),
+                            tick.lastPrice(),
+                            tick.lastTradedQuantity()));
+
+            parsedTicksReceived++;
+        } catch (Exception ex) {
+            parserFailures++;
+            log.warn("Failed to ingest parsed websocket tick: {}", ex.getMessage());
+        }
+    }
+
     private final class SocketListener implements WebSocket.Listener {
 
         @Override
@@ -219,7 +249,8 @@ public class AngelOneWebSocketService {
             lastConnectedAt = timeProvider.nowDateTime();
             lastError = null;
             log.info("Angel One websocket connected");
-            WebSocket.Listener.super.onOpen(webSocket);
+
+            webSocket.request(1);
         }
 
         @Override
@@ -227,18 +258,42 @@ public class AngelOneWebSocketService {
             messagesReceived++;
             lastTextMessagePreview = data == null ? null : abbreviate(data.toString(), 500);
             frameCaptureService.captureText(data != null ? data.toString() : null);
+
+            angelOneTickParserService.tryParseText(data != null ? data.toString() : null)
+                    .ifPresent(AngelOneWebSocketService.this::handleParsedTick);
+
+            webSocket.request(1);
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
             messagesReceived++;
+
             byte[] bytes = new byte[data.remaining()];
             data.get(bytes);
+
             lastBinarySize = bytes.length;
             lastBinaryMessagePreview = toHexPreview(bytes, 96);
             frameCaptureService.captureBinary(bytes);
+
+            angelOneTickParserService.tryParseBinary(bytes)
+                    .ifPresent(AngelOneWebSocketService.this::handleParsedTick);
+
+            webSocket.request(1);
             return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<?> onPing(WebSocket webSocket, ByteBuffer message) {
+            webSocket.request(1);
+            return WebSocket.Listener.super.onPing(webSocket, message);
+        }
+
+        @Override
+        public CompletionStage<?> onPong(WebSocket webSocket, ByteBuffer message) {
+            webSocket.request(1);
+            return WebSocket.Listener.super.onPong(webSocket, message);
         }
 
         @Override
@@ -303,6 +358,8 @@ public class AngelOneWebSocketService {
             Integer lastBinarySize,
             long messagesReceived,
             long messagesSent,
-            long subscriptionsSent) {
+            long subscriptionsSent,
+            long parsedTicksReceived,
+            long parserFailures) {
     }
 }

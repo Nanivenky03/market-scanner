@@ -1,20 +1,14 @@
 package com.trading.scanner.service.provider.angelone;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.config.provider.AngelOneProperties;
 import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
-import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos.AngelOneLoginResponse.AngelOneLoginData;
-
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -22,12 +16,8 @@ import java.time.Duration;
 public class AngelOneSessionService {
 
     private final AngelOneProperties properties;
-    private final ObjectMapper objectMapper;
     private final TotpService totpService;
-
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(20))
-            .build();
+    private final AngelOneApiExecutor angelOneApiExecutor;
 
     public AngelOneAuthDtos.AngelOneSessionInfo createSession() {
         AngelOneAuthDtos.AngelOneSessionTokens tokens = createSessionTokens();
@@ -69,25 +59,21 @@ public class AngelOneSessionService {
                     properties.password() != null ? properties.password().trim() : null,
                     totp.trim());
 
-            String jsonBody = objectMapper.writeValueAsString(requestBody);
+            Map<String, String> headers = new LinkedHashMap<>();
+            headers.put("Content-Type", "application/json");
+            headers.put("Accept", "application/json");
+            headers.put("X-UserType", "USER");
+            headers.put("X-SourceID", "WEB");
+            headers.put("X-ClientLocalIP", properties.clientLocalIp());
+            headers.put("X-ClientPublicIP", properties.clientPublicIp());
+            headers.put("X-MACAddress", properties.macAddress());
+            headers.put("X-PrivateKey", properties.apiKey());
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(30))
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .header("X-UserType", "USER")
-                    .header("X-SourceID", "WEB")
-                    .header("X-ClientLocalIP", properties.clientLocalIp())
-                    .header("X-ClientPublicIP", properties.clientPublicIp())
-                    .header("X-MACAddress", properties.macAddress())
-                    .header("X-PrivateKey", properties.apiKey())
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            AngelOneAuthDtos.AngelOneLoginResponse loginResponse = objectMapper.readValue(response.body(),
+            AngelOneAuthDtos.AngelOneLoginResponse loginResponse = angelOneApiExecutor.postJson(
+                    AngelOneApiExecutor.ApiEndpoint.AUTH_LOGIN,
+                    url,
+                    headers,
+                    requestBody,
                     AngelOneAuthDtos.AngelOneLoginResponse.class);
 
             if (loginResponse.status() == null || !loginResponse.status()) {
@@ -97,7 +83,7 @@ public class AngelOneSessionService {
                 throw new ProviderException(errorMessage);
             }
 
-            AngelOneLoginData data = loginResponse.data();
+            AngelOneAuthDtos.AngelOneLoginResponse.AngelOneLoginData data = loginResponse.data();
             if (data == null || isBlank(data.jwtToken()) || isBlank(data.refreshToken()) || isBlank(data.feedToken())) {
                 throw new ProviderException("Angel One login succeeded but tokens were missing in the response");
             }

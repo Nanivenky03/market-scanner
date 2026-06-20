@@ -1,7 +1,7 @@
 package com.trading.scanner.service.simulation;
 
-import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.config.SimulationUniverseSeeder;
+import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.SimulationState;
 import com.trading.scanner.model.StockUniverse;
@@ -40,21 +40,21 @@ public class SimulationResetService {
                 .map(SimulationState::getBaseDate)
                 .orElse(timeProvider.today());
 
-        simulationTradeRepository.deleteAllInBatch();
-        simulationVariantRepository.deleteAllInBatch();
-        simulationRunGroupRepository.deleteAllInBatch();
+        simulationTradeRepository.deleteAll();
+        simulationVariantRepository.deleteAll();
+        simulationRunGroupRepository.deleteAll();
 
-        signalOutcomeRepository.deleteAllInBatch();
-        scanResultRepository.deleteAllInBatch();
+        signalOutcomeRepository.deleteAll();
+        scanResultRepository.deleteAll();
 
-        marketCandleRepository.deleteAllInBatch();
-        stockPriceRepository.deleteAllInBatch();
-        scannerRunRepository.deleteAllInBatch();
-        scanExecutionStateRepository.deleteAllInBatch();
+        marketCandleRepository.deleteAll();
+        stockPriceRepository.deleteAll();
+        scannerRunRepository.deleteAll();
+        scanExecutionStateRepository.deleteAll();
 
-        instrumentMasterRepository.deleteAllInBatch();
-        stockUniverseRepository.deleteAllInBatch();
-        simulationStateRepository.deleteAllInBatch();
+        instrumentMasterRepository.deleteAll();
+        stockUniverseRepository.deleteAll();
+        simulationStateRepository.deleteAll();
 
         SimulationUniverseSeeder.SeedResult universeSeed = simulationUniverseSeeder.seedIfNeeded();
 

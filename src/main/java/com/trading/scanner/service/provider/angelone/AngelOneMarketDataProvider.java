@@ -1,6 +1,5 @@
 package com.trading.scanner.service.provider.angelone;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.config.provider.AngelOneProperties;
 import com.trading.scanner.model.CandleQualityStatus;
 import com.trading.scanner.model.CandleTimeframe;
@@ -16,19 +15,16 @@ import com.trading.scanner.service.provider.angelone.dto.AngelOneMarketDtos;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -45,11 +41,7 @@ public class AngelOneMarketDataProvider implements MarketDataProvider {
     private final AngelOneProperties properties;
     private final InstrumentMasterRepository instrumentMasterRepository;
     private final AngelOneSessionService angelOneSessionService;
-    private final ObjectMapper objectMapper;
-
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(20))
-            .build();
+    private final AngelOneApiExecutor angelOneApiExecutor;
 
     @Override
     public ProviderType getProviderType() {
@@ -281,8 +273,7 @@ public class AngelOneMarketDataProvider implements MarketDataProvider {
             String symbolToken,
             String interval,
             LocalDate from,
-            LocalDate to) throws Exception {
-
+            LocalDate to) {
         String url = properties.baseUrl() + "/rest/secure/angelbroking/historical/v1/getCandleData";
 
         AngelOneMarketDtos.AngelOneCandleRequest requestBody = new AngelOneMarketDtos.AngelOneCandleRequest(
@@ -292,26 +283,23 @@ public class AngelOneMarketDataProvider implements MarketDataProvider {
                 from.atTime(0, 0).format(REQUEST_DATE_TIME_FORMAT),
                 to.atTime(23, 59).format(REQUEST_DATE_TIME_FORMAT));
 
-        String jsonBody = objectMapper.writeValueAsString(requestBody);
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Content-Type", "application/json");
+        headers.put("Accept", "application/json");
+        headers.put("Authorization", "Bearer " + jwtToken);
+        headers.put("X-UserType", "USER");
+        headers.put("X-SourceID", "WEB");
+        headers.put("X-ClientLocalIP", properties.clientLocalIp());
+        headers.put("X-ClientPublicIP", properties.clientPublicIp());
+        headers.put("X-MACAddress", properties.macAddress());
+        headers.put("X-PrivateKey", properties.apiKey());
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(30))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .header("Authorization", "Bearer " + jwtToken)
-                .header("X-UserType", "USER")
-                .header("X-SourceID", "WEB")
-                .header("X-ClientLocalIP", properties.clientLocalIp())
-                .header("X-ClientPublicIP", properties.clientPublicIp())
-                .header("X-MACAddress", properties.macAddress())
-                .header("X-PrivateKey", properties.apiKey())
-                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-                .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-        return objectMapper.readValue(response.body(), AngelOneMarketDtos.AngelOneCandleResponse.class);
+        return angelOneApiExecutor.postJson(
+                AngelOneApiExecutor.ApiEndpoint.HISTORICAL_CANDLE,
+                url,
+                headers,
+                requestBody,
+                AngelOneMarketDtos.AngelOneCandleResponse.class);
     }
 
     private LocalDateTime parseCandleTime(String value) {
