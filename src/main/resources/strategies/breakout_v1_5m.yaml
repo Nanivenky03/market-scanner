@@ -4,6 +4,7 @@ displayName: Breakout V1 5M
 timeframe: FIVE_MINUTE
 simulationEnabled: true
 liveEnabled: false
+nextCandleConfirmationRequired: true
 status: DRAFT
 
 breakout:

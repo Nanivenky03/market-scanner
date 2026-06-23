@@ -31,4 +31,10 @@ public interface MarketCandleRepository extends JpaRepository<MarketCandle, Inte
             CandleTimeframe timeframe,
             LocalDateTime from,
             LocalDateTime to);
+
+    long countByTimeframe(CandleTimeframe timeframe);
+
+    long countByTimeframeAndSource(CandleTimeframe timeframe, String source);
+
+    long countBySource(String source);
 }

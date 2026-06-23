@@ -9,6 +9,7 @@ public record StrategyYamlDefinition(
         StrategyTimeframe timeframe,
         Boolean simulationEnabled,
         Boolean liveEnabled,
+        Boolean nextCandleConfirmationRequired,
         StrategyStatus status,
         BreakoutRuleProperties breakout,
         StrategyScoringModels.StrategyScoringDefinition scoring) {

@@ -45,6 +45,7 @@ class StrategyScoringServiceTest {
                 StrategyTimeframe.FIFTEEN_MINUTE,
                 true,
                 false,
+                false,
                 StrategyStatus.DRAFT,
                 new BreakoutRuleProperties(
                         21, 14, 20, 50, 200,
