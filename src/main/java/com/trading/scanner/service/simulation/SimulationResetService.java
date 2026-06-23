@@ -24,6 +24,7 @@ public class SimulationResetService {
     private final SimulationRunGroupRepository simulationRunGroupRepository;
     private final SignalOutcomeRepository signalOutcomeRepository;
     private final ScanResultRepository scanResultRepository;
+    private final LiveSimulationSignalRepository liveSimulationSignalRepository;
     private final MarketCandleRepository marketCandleRepository;
     private final StockPriceRepository stockPriceRepository;
     private final ScannerRunRepository scannerRunRepository;
@@ -46,6 +47,7 @@ public class SimulationResetService {
 
         signalOutcomeRepository.deleteAll();
         scanResultRepository.deleteAll();
+        liveSimulationSignalRepository.deleteAll();
 
         marketCandleRepository.deleteAll();
         stockPriceRepository.deleteAll();
