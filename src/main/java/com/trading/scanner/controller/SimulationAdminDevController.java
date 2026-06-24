@@ -1,6 +1,8 @@
 package com.trading.scanner.controller;
 
+import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.LiveSimulationSignal;
+import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.simulation.LiveSimulationSignalService;
 import com.trading.scanner.service.simulation.SimulationResetService;
 import com.trading.scanner.service.simulation.SimulationRuntimeAutomationService;
@@ -13,19 +15,21 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 
 @RestController
 @RequestMapping("/dev/admin/simulation")
 @Profile("simulation")
 @RequiredArgsConstructor
-@Tag(name = "Simulation Admin Dev", description = "Simulation-only admin endpoints for reset, reseed, runtime automation, readiness checks, and live signal inspection")
+@Tag(name = "Simulation Admin Dev", description = "Simulation-only admin endpoints for reset, reseed, runtime automation, readiness checks, daily context, and live signal inspection")
 public class SimulationAdminDevController {
 
     private final SimulationResetService simulationResetService;
     private final SimulationRuntimeAutomationService simulationRuntimeAutomationService;
     private final LiveSimulationSignalService liveSimulationSignalService;
     private final SimulationRuntimePreflightService simulationRuntimePreflightService;
+    private final DailyStockContextService dailyStockContextService;
 
     @Operation(summary = "Reset and reseed the simulation dataset", description = "Clears simulation/history tables, reloads the universe from the CSV seed file, rebuilds instrument master, and resets simulation state")
     @PostMapping("/reset-and-reseed")
@@ -55,6 +59,13 @@ public class SimulationAdminDevController {
     @GetMapping("/runtime/preflight")
     public ResponseEntity<SimulationRuntimePreflightService.PreflightStatus> runtimePreflight() {
         return ResponseEntity.ok(simulationRuntimePreflightService.status());
+    }
+
+    @Operation(summary = "List daily stock context rows for one trading date", description = "Returns first-candle and opening-range context built from finalized 1-minute candles")
+    @GetMapping("/runtime/daily-stock-context")
+    public ResponseEntity<List<DailyStockContext>> dailyStockContext(
+            @Parameter(description = "Trading date in yyyy-MM-dd format", example = "2026-06-24") @RequestParam LocalDate date) {
+        return ResponseEntity.ok(dailyStockContextService.findByTradingDate(date));
     }
 
     @Operation(summary = "List recent live simulation signals", description = "Returns the most recent live signals generated from finalized 5m/15m candles")

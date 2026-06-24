@@ -5,22 +5,20 @@ import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.LiveSimulationSignal;
 import com.trading.scanner.model.MarketCandle;
-import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.repository.LiveSimulationSignalRepository;
-import com.trading.scanner.repository.MarketCandleRepository;
-import com.trading.scanner.repository.StockPriceRepository;
-import com.trading.scanner.strategy.ScoreDecision;
+import com.trading.scanner.service.engine.BreakoutSignalEvaluator;
+import com.trading.scanner.service.engine.BreakoutSignalGenerator;
+import com.trading.scanner.service.engine.MarketContext;
+import com.trading.scanner.service.engine.MarketContextBuilder;
+import com.trading.scanner.service.engine.SymbolContext;
 import com.trading.scanner.strategy.StrategyCatalogService;
 import com.trading.scanner.strategy.StrategyScoringModels;
-import com.trading.scanner.strategy.StrategyScoringService;
 import com.trading.scanner.strategy.StrategyTimeframe;
 import com.trading.scanner.strategy.StrategyYamlDefinition;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,12 +28,11 @@ import java.util.Optional;
 public class LiveSimulationSignalService {
 
     private final LiveSimulationSignalRepository liveSimulationSignalRepository;
-    private final MarketCandleRepository marketCandleRepository;
-    private final StockPriceRepository stockPriceRepository;
     private final StrategyCatalogService strategyCatalogService;
-    private final StrategyScoringService strategyScoringService;
     private final TimeProvider timeProvider;
     private final ObjectMapper objectMapper;
+    private final MarketContextBuilder marketContextBuilder;
+    private final BreakoutSignalGenerator breakoutSignalGenerator;
 
     @Transactional
     public void processFinalizedDerivedCandle(MarketCandle candle) {
@@ -48,12 +45,15 @@ public class LiveSimulationSignalService {
             return;
         }
 
+        MarketContext marketContext = marketContextBuilder.buildMarketContext(candle);
+        SymbolContext symbolContext = marketContextBuilder.buildSymbolContext(candle);
+
         List<StrategyYamlDefinition> matchingStrategies = strategyCatalogService.simulationEnabled().stream()
                 .filter(def -> def.timeframe() == strategyTimeframe)
                 .toList();
 
         for (StrategyYamlDefinition strategy : matchingStrategies) {
-            EvaluationSnapshot snapshot = buildEvaluationSnapshot(strategy, candle);
+            EvaluationSnapshot snapshot = buildEvaluationSnapshot(strategy, candle, marketContext, symbolContext);
 
             boolean pendingHandled = false;
             if (Boolean.TRUE.equals(strategy.nextCandleConfirmationRequired())) {
@@ -163,92 +163,33 @@ public class LiveSimulationSignalService {
         liveSimulationSignalRepository.save(signal);
     }
 
-    private EvaluationSnapshot buildEvaluationSnapshot(StrategyYamlDefinition strategy, MarketCandle candle) {
-        List<MarketCandle> candles = marketCandleRepository
-                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
-                        candle.getSymbol(),
-                        candle.getExchange(),
-                        candle.getTimeframe(),
-                        candle.getCandleTime().minusDays(10),
-                        candle.getCandleTime());
+    private EvaluationSnapshot buildEvaluationSnapshot(
+            StrategyYamlDefinition strategy,
+            MarketCandle candle,
+            MarketContext marketContext,
+            SymbolContext symbolContext) {
+        Optional<BreakoutSignalEvaluator.EvaluationSnapshot> snapshotOpt = switch (candle.getTimeframe()) {
+            case FIVE_MINUTE -> breakoutSignalGenerator.onFiveMinuteCandleClose(strategy, marketContext, symbolContext);
+            case FIFTEEN_MINUTE ->
+                breakoutSignalGenerator.onFifteenMinuteCandleClose(strategy, marketContext, symbolContext);
+            default -> Optional.empty();
+        };
 
-        if (candles.size() < 20) {
+        if (snapshotOpt.isEmpty()) {
             return null;
         }
 
-        List<StockPrice> dailyPrices = stockPriceRepository.findBySymbolAndDateBetweenOrderByDateAsc(
-                candle.getSymbol(),
-                candle.getCandleTime().toLocalDate().minusDays(10),
-                candle.getCandleTime().toLocalDate());
-
-        if (dailyPrices.isEmpty()) {
-            return null;
-        }
-
-        StockPrice previousDay = findPreviousTradingDayPrice(dailyPrices, candle.getCandleTime().toLocalDate());
-        if (previousDay == null || previousDay.getHighPrice() == null || previousDay.getClosePrice() == null) {
-            return null;
-        }
-
-        if (previousDay.getClosePrice() <= 50.0) {
-            return null;
-        }
-
-        MarketCandle current = candles.get(candles.size() - 1);
-        double previousDayHigh = previousDay.getHighPrice();
-        double close = current.getClosePrice();
-
-        if (close <= previousDayHigh) {
-            return null;
-        }
-
-        double breakoutRatio = (close - previousDayHigh) / previousDayHigh;
-        if (breakoutRatio > strategy.breakout().maxGap()) {
-            return null;
-        }
-
-        Double volumeRatio = computeVolumeRatio(candles, candles.size() - 1, 20);
-        if (volumeRatio == null || volumeRatio < strategy.breakout().volumeMultiplierMatch()) {
-            return null;
-        }
-
-        Double rsi = computeRsi(candles, candles.size() - 1, strategy.breakout().rsiPeriod());
-        if (rsi == null || rsi < strategy.breakout().rsiThresholdMatch()) {
-            return null;
-        }
-
-        Double vwap = computeIntradayVwap(candles, candles.size() - 1);
-        if (vwap == null || close <= vwap) {
-            return null;
-        }
-
-        double closeStrength = computeCloseStrength(current);
-        if (closeStrength < 0.70) {
-            return null;
-        }
-
-        double breakoutPercent = breakoutRatio * 100.0;
-
-        StrategyScoringModels.StrategyScoreResult scoreResult = strategyScoringService.score(
-                strategy,
-                Map.of(
-                        "breakoutPercent", breakoutPercent,
-                        "volumeRatio", volumeRatio,
-                        "rsi", rsi));
-
-        if (scoreResult.decision() != ScoreDecision.INVEST) {
-            return null;
-        }
+        BreakoutSignalEvaluator.EvaluationSnapshot snapshot = snapshotOpt.get();
 
         return new EvaluationSnapshot(
-                close,
-                previousDayHigh,
-                breakoutPercent,
-                volumeRatio,
-                rsi,
-                vwap,
-                closeStrength,
-                scoreResult);
+                snapshot.closePrice(),
+                snapshot.previousDayHigh(),
+                snapshot.breakoutPercent(),
+                snapshot.volumeRatio(),
+                snapshot.rsi(),
+                snapshot.vwap(),
+                snapshot.closeStrength(),
+                snapshot.scoreResult());
     }
 
     private StrategyTimeframe mapStrategyTimeframe(CandleTimeframe timeframe) {
@@ -257,111 +198,6 @@ public class LiveSimulationSignalService {
             case FIFTEEN_MINUTE -> StrategyTimeframe.FIFTEEN_MINUTE;
             default -> null;
         };
-    }
-
-    private StockPrice findPreviousTradingDayPrice(List<StockPrice> prices, LocalDate currentDate) {
-        StockPrice previous = null;
-        for (StockPrice price : prices) {
-            if (price.getDate().isBefore(currentDate)) {
-                previous = price;
-            } else {
-                break;
-            }
-        }
-        return previous;
-    }
-
-    private Double computeVolumeRatio(List<MarketCandle> candles, int currentIndex, int window) {
-        if (currentIndex < window) {
-            return null;
-        }
-
-        long currentVolume = candles.get(currentIndex).getVolume() != null ? candles.get(currentIndex).getVolume() : 0L;
-        if (currentVolume <= 0) {
-            return null;
-        }
-
-        double total = 0.0;
-        int count = 0;
-
-        for (int i = currentIndex - window; i < currentIndex; i++) {
-            Long volume = candles.get(i).getVolume();
-            if (volume != null) {
-                total += volume;
-                count++;
-            }
-        }
-
-        if (count == 0 || total <= 0.0) {
-            return null;
-        }
-
-        return currentVolume / (total / count);
-    }
-
-    private Double computeRsi(List<MarketCandle> candles, int currentIndex, int period) {
-        if (currentIndex < period) {
-            return null;
-        }
-
-        double gain = 0.0;
-        double loss = 0.0;
-
-        for (int i = currentIndex - period + 1; i <= currentIndex; i++) {
-            double change = candles.get(i).getClosePrice() - candles.get(i - 1).getClosePrice();
-            if (change > 0) {
-                gain += change;
-            } else {
-                loss += Math.abs(change);
-            }
-        }
-
-        double avgGain = gain / period;
-        double avgLoss = loss / period;
-
-        if (avgLoss == 0.0) {
-            return 100.0;
-        }
-
-        double rs = avgGain / avgLoss;
-        return 100.0 - (100.0 / (1.0 + rs));
-    }
-
-    private Double computeIntradayVwap(List<MarketCandle> candles, int currentIndex) {
-        LocalDate currentDate = candles.get(currentIndex).getCandleTime().toLocalDate();
-
-        double totalPriceVolume = 0.0;
-        long totalVolume = 0L;
-
-        for (int i = 0; i <= currentIndex; i++) {
-            MarketCandle candle = candles.get(i);
-
-            if (!currentDate.equals(candle.getCandleTime().toLocalDate())) {
-                continue;
-            }
-
-            if (candle.getVolume() == null || candle.getVolume() <= 0) {
-                continue;
-            }
-
-            double typicalPrice = (candle.getHighPrice() + candle.getLowPrice() + candle.getClosePrice()) / 3.0;
-            totalPriceVolume += typicalPrice * candle.getVolume();
-            totalVolume += candle.getVolume();
-        }
-
-        if (totalVolume == 0L) {
-            return null;
-        }
-
-        return totalPriceVolume / totalVolume;
-    }
-
-    private double computeCloseStrength(MarketCandle candle) {
-        double range = candle.getHighPrice() - candle.getLowPrice();
-        if (range <= 0.0) {
-            return 0.5;
-        }
-        return (candle.getClosePrice() - candle.getLowPrice()) / range;
     }
 
     private String toJson(Object value) {

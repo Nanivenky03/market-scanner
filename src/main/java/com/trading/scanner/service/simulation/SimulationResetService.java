@@ -19,86 +19,88 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SimulationResetService {
 
-    private final SimulationTradeRepository simulationTradeRepository;
-    private final SimulationVariantRepository simulationVariantRepository;
-    private final SimulationRunGroupRepository simulationRunGroupRepository;
-    private final SignalOutcomeRepository signalOutcomeRepository;
-    private final ScanResultRepository scanResultRepository;
-    private final LiveSimulationSignalRepository liveSimulationSignalRepository;
-    private final MarketCandleRepository marketCandleRepository;
-    private final StockPriceRepository stockPriceRepository;
-    private final ScannerRunRepository scannerRunRepository;
-    private final ScanExecutionStateRepository scanExecutionStateRepository;
-    private final InstrumentMasterRepository instrumentMasterRepository;
-    private final StockUniverseRepository stockUniverseRepository;
-    private final SimulationStateRepository simulationStateRepository;
-    private final SimulationUniverseSeeder simulationUniverseSeeder;
-    private final TimeProvider timeProvider;
+        private final SimulationTradeRepository simulationTradeRepository;
+        private final SimulationVariantRepository simulationVariantRepository;
+        private final SimulationRunGroupRepository simulationRunGroupRepository;
+        private final SignalOutcomeRepository signalOutcomeRepository;
+        private final ScanResultRepository scanResultRepository;
+        private final LiveSimulationSignalRepository liveSimulationSignalRepository;
+        private final DailyStockContextRepository dailyStockContextRepository;
+        private final MarketCandleRepository marketCandleRepository;
+        private final StockPriceRepository stockPriceRepository;
+        private final ScannerRunRepository scannerRunRepository;
+        private final ScanExecutionStateRepository scanExecutionStateRepository;
+        private final InstrumentMasterRepository instrumentMasterRepository;
+        private final StockUniverseRepository stockUniverseRepository;
+        private final SimulationStateRepository simulationStateRepository;
+        private final SimulationUniverseSeeder simulationUniverseSeeder;
+        private final TimeProvider timeProvider;
 
-    @Transactional
-    public ResetResult resetAndReseed() {
-        LocalDate baseDate = simulationStateRepository.findById(1)
-                .map(SimulationState::getBaseDate)
-                .orElse(timeProvider.today());
+        @Transactional
+        public ResetResult resetAndReseed() {
+                LocalDate baseDate = simulationStateRepository.findById(1)
+                                .map(SimulationState::getBaseDate)
+                                .orElse(timeProvider.today());
 
-        simulationTradeRepository.deleteAll();
-        simulationVariantRepository.deleteAll();
-        simulationRunGroupRepository.deleteAll();
+                simulationTradeRepository.deleteAll();
+                simulationVariantRepository.deleteAll();
+                simulationRunGroupRepository.deleteAll();
 
-        signalOutcomeRepository.deleteAll();
-        scanResultRepository.deleteAll();
-        liveSimulationSignalRepository.deleteAll();
+                signalOutcomeRepository.deleteAll();
+                scanResultRepository.deleteAll();
+                liveSimulationSignalRepository.deleteAll();
+                dailyStockContextRepository.deleteAll();
 
-        marketCandleRepository.deleteAll();
-        stockPriceRepository.deleteAll();
-        scannerRunRepository.deleteAll();
-        scanExecutionStateRepository.deleteAll();
+                marketCandleRepository.deleteAll();
+                stockPriceRepository.deleteAll();
+                scannerRunRepository.deleteAll();
+                scanExecutionStateRepository.deleteAll();
 
-        instrumentMasterRepository.deleteAll();
-        stockUniverseRepository.deleteAll();
-        simulationStateRepository.deleteAll();
+                instrumentMasterRepository.deleteAll();
+                stockUniverseRepository.deleteAll();
+                simulationStateRepository.deleteAll();
 
-        SimulationUniverseSeeder.SeedResult universeSeed = simulationUniverseSeeder.seedIfNeeded();
+                SimulationUniverseSeeder.SeedResult universeSeed = simulationUniverseSeeder.seedIfNeeded();
 
-        List<StockUniverse> stockUniverseRows = stockUniverseRepository.findAll();
-        instrumentMasterRepository.saveAll(
-                stockUniverseRows.stream()
-                        .map(this::toInstrumentMaster)
-                        .toList());
+                List<StockUniverse> stockUniverseRows = stockUniverseRepository.findAll();
+                instrumentMasterRepository.saveAll(
+                                stockUniverseRows.stream()
+                                                .map(this::toInstrumentMaster)
+                                                .toList());
 
-        simulationStateRepository.save(
-                SimulationState.builder()
-                        .id(1)
-                        .version(0)
-                        .baseDate(baseDate)
-                        .tradingOffset(0)
-                        .build());
+                simulationStateRepository.save(
+                                SimulationState.builder()
+                                                .id(1)
+                                                .version(0)
+                                                .baseDate(baseDate)
+                                                .tradingOffset(0)
+                                                .build());
 
-        return new ResetResult(
-                universeSeed.inserted(),
-                stockUniverseRows.size(),
-                baseDate,
-                "Simulation data reset and reseeded");
-    }
+                return new ResetResult(
+                                universeSeed.inserted(),
+                                stockUniverseRows.size(),
+                                baseDate,
+                                "Simulation data reset and reseeded");
+        }
 
-    private InstrumentMaster toInstrumentMaster(StockUniverse stock) {
-        return InstrumentMaster.builder()
-                .symbol(stock.getSymbol())
-                .exchange(stock.getExchange().name())
-                .companyName(stock.getCompanyName())
-                .instrumentType("EQUITY")
-                .segment("CASH")
-                .brokerSymbol(null)
-                .brokerToken(null)
-                .isin(null)
-                .isActive(true)
-                .build();
-    }
+        private InstrumentMaster toInstrumentMaster(StockUniverse stock) {
+                return InstrumentMaster.builder()
+                                .symbol(stock.getSymbol())
+                                .exchange(stock.getExchange().name())
+                                .companyName(stock.getCompanyName())
+                                .instrumentType("EQUITY")
+                                .segment("CASH")
+                                .brokerSymbol(null)
+                                .brokerToken(null)
+                                .isin(null)
+                                .isActive(true)
+                                .build();
+        }
 
-    public record ResetResult(
-            int universeRowsInserted,
-            int instrumentMasterRowsInserted,
-            LocalDate simulationBaseDate,
-            String message) {
-    }
+        public record ResetResult(
+                        int universeRowsInserted,
+                        int instrumentMasterRowsInserted,
+                        LocalDate simulationBaseDate,
+                        String message) {
+        }
 }
