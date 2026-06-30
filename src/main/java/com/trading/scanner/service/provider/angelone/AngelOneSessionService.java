@@ -1,5 +1,6 @@
 package com.trading.scanner.service.provider.angelone;
 
+import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.config.provider.AngelOneProperties;
 import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
@@ -7,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -18,6 +20,10 @@ public class AngelOneSessionService {
     private final AngelOneProperties properties;
     private final TotpService totpService;
     private final AngelOneApiExecutor angelOneApiExecutor;
+    private final TimeProvider timeProvider;
+
+    private volatile AngelOneAuthDtos.AngelOneSessionTokens cachedSessionTokens;
+    private volatile LocalDateTime lastLoginAt;
 
     public AngelOneAuthDtos.AngelOneSessionInfo createSession() {
         AngelOneAuthDtos.AngelOneSessionTokens tokens = createSessionTokens();
@@ -29,21 +35,68 @@ public class AngelOneSessionService {
         return toSessionInfo(tokens, "SUCCESS");
     }
 
-    public AngelOneAuthDtos.AngelOneSessionTokens createSessionTokens() {
+    public synchronized AngelOneAuthDtos.AngelOneSessionTokens createSessionTokens() {
         validateBaseConfig();
 
-        String generatedTotp = totpService.generateCurrentTotp(properties.totpSecret());
-        return createSessionTokensInternal(generatedTotp);
+        if (cachedSessionTokens != null) {
+            return cachedSessionTokens;
+        }
+
+        return refreshSessionTokens();
     }
 
-    public AngelOneAuthDtos.AngelOneSessionTokens createSessionTokens(String manualTotp) {
+    public synchronized AngelOneAuthDtos.AngelOneSessionTokens createSessionTokens(String manualTotp) {
         validateBaseConfig();
 
         String totpToUse = (manualTotp != null && !manualTotp.isBlank())
                 ? manualTotp.trim()
                 : totpService.generateCurrentTotp(properties.totpSecret());
 
-        return createSessionTokensInternal(totpToUse);
+        AngelOneAuthDtos.AngelOneSessionTokens tokens = createSessionTokensInternal(totpToUse);
+        cachedSessionTokens = tokens;
+        lastLoginAt = timeProvider.nowDateTime();
+        return tokens;
+    }
+
+    public synchronized AngelOneAuthDtos.AngelOneSessionTokens refreshSessionTokens() {
+        validateBaseConfig();
+
+        String generatedTotp = totpService.generateCurrentTotp(properties.totpSecret());
+        AngelOneAuthDtos.AngelOneSessionTokens tokens = createSessionTokensInternal(generatedTotp);
+        cachedSessionTokens = tokens;
+        lastLoginAt = timeProvider.nowDateTime();
+        return tokens;
+    }
+
+    public synchronized SessionWarmupResult warmUpSession() {
+        AngelOneAuthDtos.AngelOneSessionTokens tokens = refreshSessionTokens();
+        return new SessionWarmupResult(
+                true,
+                lastLoginAt,
+                !isBlank(tokens.jwtToken()),
+                !isBlank(tokens.refreshToken()),
+                !isBlank(tokens.feedToken()),
+                "Angel One session warmed up");
+    }
+
+    public synchronized SessionClearResult clearCachedSession() {
+        boolean hadSession = cachedSessionTokens != null;
+        cachedSessionTokens = null;
+        lastLoginAt = null;
+
+        return new SessionClearResult(
+                hadSession,
+                "Cleared cached Angel One session");
+    }
+
+    public SessionStatus sessionStatus() {
+        AngelOneAuthDtos.AngelOneSessionTokens tokens = cachedSessionTokens;
+        return new SessionStatus(
+                tokens != null,
+                lastLoginAt,
+                tokens != null && !isBlank(tokens.jwtToken()),
+                tokens != null && !isBlank(tokens.refreshToken()),
+                tokens != null && !isBlank(tokens.feedToken()));
     }
 
     private AngelOneAuthDtos.AngelOneSessionTokens createSessionTokensInternal(String totp) {
@@ -155,5 +208,27 @@ public class AngelOneSessionService {
             return token;
         }
         return token.substring(0, 6) + "..." + token.substring(token.length() - 6);
+    }
+
+    public record SessionStatus(
+            boolean cachedSessionPresent,
+            LocalDateTime lastLoginAt,
+            boolean hasJwtToken,
+            boolean hasRefreshToken,
+            boolean hasFeedToken) {
+    }
+
+    public record SessionWarmupResult(
+            boolean success,
+            LocalDateTime lastLoginAt,
+            boolean hasJwtToken,
+            boolean hasRefreshToken,
+            boolean hasFeedToken,
+            String message) {
+    }
+
+    public record SessionClearResult(
+            boolean clearedExistingSession,
+            String message) {
     }
 }

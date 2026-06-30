@@ -12,29 +12,31 @@ import java.util.Optional;
 @Repository
 public interface MarketCandleRepository extends JpaRepository<MarketCandle, Integer> {
 
-    Optional<MarketCandle> findBySymbolAndExchangeAndTimeframeAndCandleTime(
-            String symbol,
-            String exchange,
-            CandleTimeframe timeframe,
-            LocalDateTime candleTime);
+        Optional<MarketCandle> findBySymbolAndExchangeAndTimeframeAndCandleTime(
+                        String symbol,
+                        String exchange,
+                        CandleTimeframe timeframe,
+                        LocalDateTime candleTime);
 
-    List<MarketCandle> findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
-            String symbol,
-            String exchange,
-            CandleTimeframe timeframe,
-            LocalDateTime from,
-            LocalDateTime to);
+        List<MarketCandle> findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                        String symbol,
+                        String exchange,
+                        CandleTimeframe timeframe,
+                        LocalDateTime from,
+                        LocalDateTime to);
 
-    long countBySymbolAndExchangeAndTimeframeAndCandleTimeBetween(
-            String symbol,
-            String exchange,
-            CandleTimeframe timeframe,
-            LocalDateTime from,
-            LocalDateTime to);
+        long countBySymbolAndExchangeAndTimeframeAndCandleTimeBetween(
+                        String symbol,
+                        String exchange,
+                        CandleTimeframe timeframe,
+                        LocalDateTime from,
+                        LocalDateTime to);
 
-    long countByTimeframe(CandleTimeframe timeframe);
+        long countByTimeframe(CandleTimeframe timeframe);
 
-    long countByTimeframeAndSource(CandleTimeframe timeframe, String source);
+        long countByTimeframeAndSource(CandleTimeframe timeframe, String source);
 
-    long countBySource(String source);
+        long countBySource(String source);
+
+        long deleteByTimeframeAndCandleTimeBefore(CandleTimeframe timeframe, LocalDateTime candleTime);
 }

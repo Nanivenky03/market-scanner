@@ -20,7 +20,7 @@ import java.util.Map;
 @RequestMapping("/dev/strategies")
 @Profile("simulation")
 @RequiredArgsConstructor
-@Tag(name = "Strategy Dev", description = "Simulation-only strategy catalog and score preview endpoints")
+@Tag(name = "Strategy Dev", description = "Strategy catalog and score preview endpoints")
 public class StrategyDevController {
 
     private final StrategyCatalogService strategyCatalogService;
@@ -35,16 +35,22 @@ public class StrategyDevController {
         return ResponseEntity.ok(strategyCatalogService.all());
     }
 
-    @Operation(summary = "List simulation-enabled strategies")
-    @GetMapping("/simulation-enabled")
-    public ResponseEntity<List<StrategyYamlDefinition>> simulationEnabled() {
-        return ResponseEntity.ok(strategyCatalogService.simulationEnabled());
+    @Operation(summary = "List historical-eligible strategies")
+    @GetMapping("/historical-eligible")
+    public ResponseEntity<List<StrategyYamlDefinition>> historicalEligible() {
+        return ResponseEntity.ok(strategyCatalogService.historicalEligible());
     }
 
-    @Operation(summary = "List live-enabled strategies")
-    @GetMapping("/live-enabled")
-    public ResponseEntity<List<StrategyYamlDefinition>> liveEnabled() {
-        return ResponseEntity.ok(strategyCatalogService.liveEnabled());
+    @Operation(summary = "List live-signal-eligible strategies")
+    @GetMapping("/live-signal-eligible")
+    public ResponseEntity<List<StrategyYamlDefinition>> liveSignalEligible() {
+        return ResponseEntity.ok(strategyCatalogService.liveSignalEligible());
+    }
+
+    @Operation(summary = "List real-execution-eligible strategies")
+    @GetMapping("/real-execution-eligible")
+    public ResponseEntity<List<StrategyYamlDefinition>> realExecutionEligible() {
+        return ResponseEntity.ok(strategyCatalogService.realExecutionEligible());
     }
 
     @Operation(summary = "Get one strategy definition by strategyId")

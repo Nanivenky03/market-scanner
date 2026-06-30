@@ -1,4 +1,4 @@
-package com.trading.scanner.service.simulation;
+package com.trading.scanner.service.runtime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.config.TimeProvider;
@@ -16,6 +16,7 @@ import com.trading.scanner.strategy.StrategyScoringModels;
 import com.trading.scanner.strategy.StrategyTimeframe;
 import com.trading.scanner.strategy.StrategyYamlDefinition;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,7 +26,7 @@ import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
-public class LiveSimulationSignalService {
+public class LiveSignalService {
 
     private final LiveSimulationSignalRepository liveSimulationSignalRepository;
     private final StrategyCatalogService strategyCatalogService;
@@ -48,7 +49,7 @@ public class LiveSimulationSignalService {
         MarketContext marketContext = marketContextBuilder.buildMarketContext(candle);
         SymbolContext symbolContext = marketContextBuilder.buildSymbolContext(candle);
 
-        List<StrategyYamlDefinition> matchingStrategies = strategyCatalogService.simulationEnabled().stream()
+        List<StrategyYamlDefinition> matchingStrategies = strategyCatalogService.liveSignalEligible().stream()
                 .filter(def -> def.timeframe() == strategyTimeframe)
                 .toList();
 
@@ -68,14 +69,14 @@ public class LiveSimulationSignalService {
 
     @Transactional(readOnly = true)
     public List<LiveSimulationSignal> recentSignals(int limit) {
-        return liveSimulationSignalRepository.findRecent(limit);
+        return liveSimulationSignalRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, limit));
     }
 
     @Transactional
     public ClearSignalsResult clearSignals() {
-        int removed = liveSimulationSignalRepository.findAll().size();
+        long removed = liveSimulationSignalRepository.count();
         liveSimulationSignalRepository.deleteAll();
-        return new ClearSignalsResult(removed, "Cleared live simulation signals");
+        return new ClearSignalsResult(removed, "Cleared live signals");
     }
 
     private boolean processPendingCandidate(
@@ -220,7 +221,7 @@ public class LiveSimulationSignalService {
     }
 
     public record ClearSignalsResult(
-            int removed,
+            long removed,
             String message) {
     }
 }

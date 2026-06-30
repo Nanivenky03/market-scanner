@@ -17,4 +17,6 @@ public interface DailyStockContextRepository extends JpaRepository<DailyStockCon
             LocalDate tradingDate);
 
     List<DailyStockContext> findByTradingDateOrderBySymbolAsc(LocalDate tradingDate);
+
+    long deleteByTradingDateBefore(LocalDate tradingDate);
 }
