@@ -1,68 +1,57 @@
 package com.trading.scanner.strategy;
 
-import com.trading.scanner.config.BreakoutRuleProperties;
+import com.trading.scanner.service.runtime.RuleExecutionPolicyService;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 
 class StrategyScoringServiceTest {
 
-    private final StrategyScoringService scoringService = new StrategyScoringService();
+        private final StrategyScoringService strategyScoringService = new StrategyScoringService();
 
-    @Test
-    void score_shouldReturnInvestForStrongInputs() {
-        StrategyYamlDefinition definition = buildStrategy();
+        @Test
+        void score_shouldLoadYamlStrategyAndReturnInvestDecisionForStrongFactors() {
+                StrategyCatalogService strategyCatalogService = new StrategyCatalogService(
+                                new RuleExecutionPolicyService());
+                strategyCatalogService.load();
 
-        StrategyScoringModels.StrategyScoreResult result = scoringService.score(definition, Map.of(
-                "breakoutPercent", 0.30,
-                "volumeRatio", 2.0,
-                "rsi", 60.0));
+                StrategyYamlDefinition definition = strategyCatalogService.getRequired("breakout_v1");
 
-        assertEquals(ScoreDecision.INVEST, result.decision());
-        assertEquals(3, result.factors().size());
-    }
+                StrategyScoringModels.StrategyScoreResult result = strategyScoringService.score(
+                                definition,
+                                Map.of(
+                                                "breakoutPercent", 0.35,
+                                                "volumeRatio", 2.1,
+                                                "rsi", 61.0));
 
-    @Test
-    void score_shouldReturnIgnoreForWeakInputs() {
-        StrategyYamlDefinition definition = buildStrategy();
+                assertNotNull(result);
+                assertNotNull(result.decision());
+                assertNotNull(result.factors());
+                assertTrue(result.totalScore() > 0.0);
+                assertEquals(3, result.factors().size());
+                assertEquals(ScoreDecision.INVEST, result.decision());
+        }
 
-        StrategyScoringModels.StrategyScoreResult result = scoringService.score(definition, Map.of(
-                "breakoutPercent", 1.20,
-                "volumeRatio", 1.2,
-                "rsi", 52.0));
+        @Test
+        void score_shouldReturnNoInvestForWeakFactors() {
+                StrategyCatalogService strategyCatalogService = new StrategyCatalogService(
+                                new RuleExecutionPolicyService());
+                strategyCatalogService.load();
 
-        assertEquals(ScoreDecision.IGNORE, result.decision());
-    }
+                StrategyYamlDefinition definition = strategyCatalogService.getRequired("breakout_v1");
 
-    private StrategyYamlDefinition buildStrategy() {
-        return new StrategyYamlDefinition(
-                "breakout_v1",
-                "1.0.0",
-                "Breakout V1",
-                StrategyTimeframe.FIFTEEN_MINUTE,
-                true,
-                false,
-                false,
-                StrategyStatus.DRAFT,
-                new BreakoutRuleProperties(
-                        21, 14, 20, 50, 200,
-                        50.0, 1.5, 60.0, 2.0,
-                        0.5, 0.1, 1.0, 0.05),
-                new StrategyScoringModels.StrategyScoringDefinition(
-                        Map.of(
-                                "breakoutPercent", new StrategyScoringModels.FactorScoreDefinition(1.0, List.of(
-                                        new StrategyScoringModels.ScoreBandDefinition("GOOD", 0.0, 0.4, 1.0),
-                                        new StrategyScoringModels.ScoreBandDefinition("LATE", 1.0, 999.0, 0.0))),
-                                "volumeRatio", new StrategyScoringModels.FactorScoreDefinition(1.0, List.of(
-                                        new StrategyScoringModels.ScoreBandDefinition("IGNORE", 0.0, 1.5, 0.0),
-                                        new StrategyScoringModels.ScoreBandDefinition("GOOD", 1.5, 999.0, 1.0))),
-                                "rsi", new StrategyScoringModels.FactorScoreDefinition(1.0, List.of(
-                                        new StrategyScoringModels.ScoreBandDefinition("WEAK", 0.0, 55.0, 0.0),
-                                        new StrategyScoringModels.ScoreBandDefinition("GOOD", 55.0, 70.0, 1.0),
-                                        new StrategyScoringModels.ScoreBandDefinition("LATE", 70.0, 999.0, 0.0)))),
-                        new StrategyScoringModels.DecisionThresholds(0.45, 0.65)));
-    }
+                StrategyScoringModels.StrategyScoreResult result = strategyScoringService.score(
+                                definition,
+                                Map.of(
+                                                "breakoutPercent", 0.01,
+                                                "volumeRatio", 1.0,
+                                                "rsi", 40.0));
+
+                assertNotNull(result);
+                assertNotNull(result.decision());
+                assertTrue(result.totalScore() >= 0.0);
+                assertEquals(ScoreDecision.IGNORE, result.decision());
+        }
 }

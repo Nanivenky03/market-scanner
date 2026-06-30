@@ -44,6 +44,7 @@ public class AngelOneWebSocketService {
     private volatile boolean connecting;
     private volatile LocalDateTime lastConnectedAt;
     private volatile LocalDateTime lastDisconnectedAt;
+    private volatile LocalDateTime lastMessageReceivedAt;
     private volatile String lastError;
     private volatile String lastTextMessagePreview;
     private volatile String lastBinaryMessagePreview;
@@ -185,6 +186,7 @@ public class AngelOneWebSocketService {
                 connecting,
                 lastConnectedAt,
                 lastDisconnectedAt,
+                lastMessageReceivedAt,
                 lastError,
                 lastTextMessagePreview,
                 lastBinaryMessagePreview,
@@ -256,6 +258,7 @@ public class AngelOneWebSocketService {
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             messagesReceived++;
+            lastMessageReceivedAt = timeProvider.nowDateTime();
             lastTextMessagePreview = data == null ? null : abbreviate(data.toString(), 500);
             frameCaptureService.captureText(data != null ? data.toString() : null);
 
@@ -269,6 +272,7 @@ public class AngelOneWebSocketService {
         @Override
         public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
             messagesReceived++;
+            lastMessageReceivedAt = timeProvider.nowDateTime();
 
             byte[] bytes = new byte[data.remaining()];
             data.get(bytes);
@@ -286,12 +290,14 @@ public class AngelOneWebSocketService {
 
         @Override
         public CompletionStage<?> onPing(WebSocket webSocket, ByteBuffer message) {
+            lastMessageReceivedAt = timeProvider.nowDateTime();
             webSocket.request(1);
             return WebSocket.Listener.super.onPing(webSocket, message);
         }
 
         @Override
         public CompletionStage<?> onPong(WebSocket webSocket, ByteBuffer message) {
+            lastMessageReceivedAt = timeProvider.nowDateTime();
             webSocket.request(1);
             return WebSocket.Listener.super.onPong(webSocket, message);
         }
@@ -352,6 +358,7 @@ public class AngelOneWebSocketService {
             boolean connecting,
             LocalDateTime lastConnectedAt,
             LocalDateTime lastDisconnectedAt,
+            LocalDateTime lastMessageReceivedAt,
             String lastError,
             String lastTextMessagePreview,
             String lastBinaryMessagePreview,

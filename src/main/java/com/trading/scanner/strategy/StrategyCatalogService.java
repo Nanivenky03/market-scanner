@@ -1,75 +1,75 @@
 package com.trading.scanner.strategy;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import com.trading.scanner.service.provider.ProviderException;
+import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import com.trading.scanner.service.runtime.RuleExecutionPolicyService;
 import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.stereotype.Service;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.io.InputStream;
+import java.util.Comparator;
+import java.util.List;
 
 @Service
+@RequiredArgsConstructor
 public class StrategyCatalogService {
 
-    private final Map<String, StrategyYamlDefinition> definitionsById = new LinkedHashMap<>();
-    private final ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
+    private final RuleExecutionPolicyService ruleExecutionPolicyService;
+    private final YAMLMapper yamlMapper = new YAMLMapper();
+
+    private List<StrategyYamlDefinition> strategies = List.of();
 
     @PostConstruct
-    public void loadDefinitions() {
+    public void load() {
         try {
             PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-            Resource[] resources = resolver.getResources("classpath*:strategies/*.yaml");
+            Resource[] resources = resolver.getResources("classpath:strategies/*.yaml");
 
-            definitionsById.clear();
-
-            for (Resource resource : resources) {
-                StrategyYamlDefinition definition =
-                        yamlMapper.readValue(resource.getInputStream(), StrategyYamlDefinition.class);
-
-                if (definition.strategyId() == null || definition.strategyId().isBlank()) {
-                    throw new ProviderException("Strategy file is missing strategyId: " + resource.getFilename());
-                }
-
-                if (definitionsById.containsKey(definition.strategyId())) {
-                    throw new ProviderException("Duplicate strategyId found: " + definition.strategyId());
-                }
-
-                definitionsById.put(definition.strategyId(), definition);
-            }
-
-            if (definitionsById.isEmpty()) {
-                throw new ProviderException("No strategy YAML files found under classpath:strategies/");
-            }
-
+            strategies = java.util.Arrays.stream(resources)
+                    .map(this::readStrategy)
+                    .sorted(Comparator.comparing(StrategyYamlDefinition::strategyId))
+                    .toList();
         } catch (Exception ex) {
-            throw new ProviderException("Failed to load strategy YAML definitions", ex);
+            throw new IllegalStateException("Failed to load strategy catalog", ex);
         }
-    }
-
-    public StrategyYamlDefinition getRequired(String strategyId) {
-        StrategyYamlDefinition definition = definitionsById.get(strategyId);
-        if (definition == null) {
-            throw new ProviderException("Strategy definition not found for strategyId=" + strategyId);
-        }
-        return definition;
     }
 
     public List<StrategyYamlDefinition> all() {
-        return definitionsById.values().stream().toList();
+        return strategies;
     }
 
-    public List<StrategyYamlDefinition> simulationEnabled() {
-        return definitionsById.values().stream()
-                .filter(def -> Boolean.TRUE.equals(def.simulationEnabled()))
-                .collect(Collectors.toList());
+    public List<StrategyYamlDefinition> historicalEligible() {
+        return strategies.stream()
+                .filter(ruleExecutionPolicyService::allowHistoricalSimulation)
+                .toList();
     }
 
-    public List<StrategyYamlDefinition> liveEnabled() {
-        return definitionsById.values().stream()
-                .filter(def -> Boolean.TRUE.equals(def.liveEnabled()))
-                .collect(Collectors.toList());
+    public List<StrategyYamlDefinition> liveSignalEligible() {
+        return strategies.stream()
+                .filter(ruleExecutionPolicyService::allowLiveSignalGeneration)
+                .toList();
+    }
+
+    public List<StrategyYamlDefinition> realExecutionEligible() {
+        return strategies.stream()
+                .filter(ruleExecutionPolicyService::allowRealExecution)
+                .toList();
+    }
+
+    public StrategyYamlDefinition getRequired(String strategyId) {
+        return strategies.stream()
+                .filter(s -> s.strategyId().equals(strategyId))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Strategy not found: " + strategyId));
+    }
+
+    private StrategyYamlDefinition readStrategy(Resource resource) {
+        try (InputStream in = resource.getInputStream()) {
+            return yamlMapper.readValue(in, StrategyYamlDefinition.class);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to read strategy YAML: " + resource.getFilename(), ex);
+        }
     }
 }

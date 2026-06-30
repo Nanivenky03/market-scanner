@@ -2,10 +2,8 @@ strategyId: breakout_v1_5m
 version: 1.0.0
 displayName: Breakout V1 5M
 timeframe: FIVE_MINUTE
-simulationEnabled: true
-liveEnabled: false
 nextCandleConfirmationRequired: true
-status: DRAFT
+status: LIVESIM
 
 breakout:
   lookbackWindow: 21

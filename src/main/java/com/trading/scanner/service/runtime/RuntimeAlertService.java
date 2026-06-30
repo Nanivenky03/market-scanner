@@ -1,0 +1,389 @@
+package com.trading.scanner.service.runtime;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trading.scanner.config.RuntimeAutomationProperties;
+import com.trading.scanner.config.TimeProvider;
+import com.trading.scanner.model.RuntimeAlertState;
+import com.trading.scanner.repository.RuntimeAlertStateRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class RuntimeAlertService {
+
+    private static final String STATUS_OPEN = "OPEN";
+    private static final String STATUS_RESOLVED = "RESOLVED";
+
+    private final RuntimeAlertStateRepository runtimeAlertStateRepository;
+    private final RuntimeReadinessService runtimeReadinessService;
+    private final RuntimeAutomationService runtimeAutomationService;
+    private final RuntimeSettingService runtimeSettingService;
+    private final RuntimeAutomationProperties runtimeAutomationProperties;
+    private final TimeProvider timeProvider;
+    private final ObjectMapper objectMapper;
+    private final JavaMailSender javaMailSender;
+
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+
+    @Transactional
+    public AlertEvaluationResult evaluateNow() {
+        RuntimeReadinessService.ReadinessStatus readiness = runtimeReadinessService.status();
+        RuntimeAutomationService.RuntimeStatus runtimeStatus = runtimeAutomationService.runtimeStatus();
+
+        int opened = 0;
+        int resolved = 0;
+
+        if (!readiness.readyForLiveRuntime()) {
+            upsertOpen(
+                    "runtime.not_ready",
+                    "HIGH",
+                    "Runtime is not ready for live operation",
+                    Map.of(
+                            "missingBrokerTokenCount", readiness.missingBrokerTokenCount(),
+                            "activeUniverseCount", readiness.activeUniverseCount(),
+                            "instrumentMasterCount", readiness.instrumentMasterCount()));
+            opened++;
+        } else if (resolve("runtime.not_ready")) {
+            resolved++;
+        }
+
+        if (!runtimeStatus.autoRunEnabled()) {
+            upsertOpen(
+                    "runtime.auto_run_disabled",
+                    "MEDIUM",
+                    "Auto-run is disabled",
+                    Map.of("subscriptionMode", runtimeStatus.subscriptionMode()));
+            opened++;
+        } else if (resolve("runtime.auto_run_disabled")) {
+            resolved++;
+        }
+
+        if (runtimeStatus.parserFailures() >= runtimeSettingService.parserFailuresThreshold()) {
+            upsertOpen(
+                    "runtime.parser_failures_high",
+                    "HIGH",
+                    "Parser failures crossed threshold",
+                    Map.of(
+                            "parserFailures", runtimeStatus.parserFailures(),
+                            "threshold", runtimeSettingService.parserFailuresThreshold()));
+            opened++;
+        } else if (resolve("runtime.parser_failures_high")) {
+            resolved++;
+        }
+
+        if (runtimeStatus.websocketConnected() && runtimeStatus.lastMessageReceivedAt() != null) {
+            long idleMinutes = Duration.between(runtimeStatus.lastMessageReceivedAt(), timeProvider.nowDateTime())
+                    .toMinutes();
+
+            if (idleMinutes >= runtimeSettingService.staleTicksMinutes()) {
+                upsertOpen(
+                        "runtime.stale_ticks",
+                        "HIGH",
+                        "No ticks/messages received within threshold",
+                        Map.of(
+                                "idleMinutes", idleMinutes,
+                                "threshold", runtimeSettingService.staleTicksMinutes()));
+                opened++;
+            } else if (resolve("runtime.stale_ticks")) {
+                resolved++;
+            }
+        } else if (resolve("runtime.stale_ticks")) {
+            resolved++;
+        }
+
+        if (runtimeStatus.startupRecoveryWarning() != null && !runtimeStatus.startupRecoveryWarning().isBlank()) {
+            upsertOpen(
+                    "runtime.unclean_previous_shutdown",
+                    "HIGH",
+                    "Previous runtime shutdown was not graceful",
+                    Map.of(
+                            "startupRecoveryWarning", runtimeStatus.startupRecoveryWarning(),
+                            "lastShutdownAt", runtimeStatus.lastShutdownAt(),
+                            "lastShutdownGraceful", runtimeStatus.lastShutdownGraceful()));
+            opened++;
+        } else if (resolve("runtime.unclean_previous_shutdown")) {
+            resolved++;
+        }
+
+        return new AlertEvaluationResult(
+                timeProvider.nowDateTime(),
+                opened,
+                resolved,
+                openHighAlertCount(),
+                "Runtime alert evaluation completed");
+    }
+
+    @Scheduled(fixedDelayString = "${runtime.alert.evaluation-interval-ms:60000}", initialDelayString = "${runtime.alert.evaluation-interval-ms:60000}")
+    public void scheduledEvaluate() {
+        if (!runtimeAutomationProperties.getAlert().isAutoRun()) {
+            return;
+        }
+
+        try {
+            AlertEvaluationResult result = evaluateNow();
+            log.info("Scheduled runtime alert evaluation completed: {}", result);
+        } catch (Exception ex) {
+            log.warn("Scheduled runtime alert evaluation failed: {}", ex.getMessage(), ex);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<RuntimeAlertState> allAlerts() {
+        return runtimeAlertStateRepository.findAllRecent();
+    }
+
+    @Transactional(readOnly = true)
+    public List<RuntimeAlertState> openAlerts() {
+        return runtimeAlertStateRepository.findByStatusOrderByUpdatedAtDesc(STATUS_OPEN);
+    }
+
+    @Transactional(readOnly = true)
+    public List<RuntimeAlertState> openHighAlerts() {
+        return runtimeAlertStateRepository.findByStatusAndSeverityOrderByUpdatedAtDesc(STATUS_OPEN, "HIGH");
+    }
+
+    @Transactional(readOnly = true)
+    public long openHighAlertCount() {
+        return runtimeAlertStateRepository.countByStatusAndSeverity(STATUS_OPEN, "HIGH");
+    }
+
+    @Transactional(readOnly = true)
+    public boolean hasBlockingOpenAlerts() {
+        return openHighAlertCount() > 0;
+    }
+
+    public TestAlertResult sendTestAlert() {
+        boolean webhookDelivered = notifyWebhook(
+                "runtime.test",
+                "HIGH",
+                "TEST",
+                "Runtime test alert",
+                "{\"type\":\"test\"}");
+
+        boolean emailDelivered = notifyEmail(
+                "runtime.test",
+                "HIGH",
+                "TEST",
+                "Runtime test alert",
+                "{\"type\":\"test\"}");
+
+        return new TestAlertResult(
+                webhookDelivered,
+                emailDelivered,
+                (webhookDelivered || emailDelivered)
+                        ? "Test alert delivered through at least one channel"
+                        : "No alert channel delivered the test alert");
+    }
+
+    private void upsertOpen(String key, String severity, String message, Object details) {
+        LocalDateTime now = timeProvider.nowDateTime();
+
+        RuntimeAlertState alert = runtimeAlertStateRepository.findByAlertKey(key)
+                .orElseGet(() -> RuntimeAlertState.builder()
+                        .alertKey(key)
+                        .firstTriggeredAt(now)
+                        .createdAt(now)
+                        .build());
+
+        boolean wasOpen = STATUS_OPEN.equalsIgnoreCase(alert.getStatus());
+
+        alert.setSeverity(severity);
+        alert.setStatus(STATUS_OPEN);
+        alert.setMessage(message);
+        alert.setDetails(toJson(details));
+        alert.setLastTriggeredAt(now);
+        alert.setUpdatedAt(now);
+
+        runtimeAlertStateRepository.save(alert);
+
+        if (!wasOpen) {
+            notifyWebhook(key, severity, STATUS_OPEN, message, alert.getDetails());
+            notifyEmail(key, severity, STATUS_OPEN, message, alert.getDetails());
+        }
+    }
+
+    private boolean resolve(String key) {
+        Optional<RuntimeAlertState> alertOpt = runtimeAlertStateRepository.findByAlertKey(key);
+        if (alertOpt.isEmpty()) {
+            return false;
+        }
+
+        RuntimeAlertState alert = alertOpt.get();
+        if (!STATUS_OPEN.equalsIgnoreCase(alert.getStatus())) {
+            return false;
+        }
+
+        LocalDateTime now = timeProvider.nowDateTime();
+        alert.setStatus(STATUS_RESOLVED);
+        alert.setLastResolvedAt(now);
+        alert.setUpdatedAt(now);
+        runtimeAlertStateRepository.save(alert);
+
+        notifyWebhook(
+                alert.getAlertKey(),
+                alert.getSeverity(),
+                STATUS_RESOLVED,
+                alert.getMessage(),
+                alert.getDetails());
+        notifyEmail(
+                alert.getAlertKey(),
+                alert.getSeverity(),
+                STATUS_RESOLVED,
+                alert.getMessage(),
+                alert.getDetails());
+
+        return true;
+    }
+
+    private boolean notifyWebhook(String alertKey, String severity, String status, String message, String details) {
+        if (!runtimeAutomationProperties.getAlert().isWebhookEnabled()) {
+            return false;
+        }
+
+        String webhookUrl = runtimeAutomationProperties.getAlert().getWebhookUrl();
+        if (webhookUrl == null || webhookUrl.isBlank()) {
+            return false;
+        }
+
+        if (!shouldNotifySeverity(severity, runtimeAutomationProperties.getAlert().getWebhookMinSeverity())) {
+            return false;
+        }
+
+        try {
+            String payload = objectMapper.writeValueAsString(Map.of(
+                    "alertKey", alertKey,
+                    "severity", severity,
+                    "status", status,
+                    "message", message,
+                    "details", details,
+                    "timestamp", timeProvider.nowDateTime().toString()));
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(webhookUrl))
+                    .timeout(Duration.ofMillis(runtimeAutomationProperties.getAlert().getWebhookTimeoutMs()))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                log.info("Runtime alert webhook delivered. alertKey={} status={} severity={}", alertKey, status,
+                        severity);
+                return true;
+            }
+
+            log.warn("Runtime alert webhook failed. alertKey={} status={} severity={} httpStatus={}",
+                    alertKey, status, severity, response.statusCode());
+            return false;
+        } catch (Exception ex) {
+            log.warn("Runtime alert webhook delivery error. alertKey={} status={} severity={} error={}",
+                    alertKey, status, severity, ex.getMessage());
+            return false;
+        }
+    }
+
+    private boolean notifyEmail(String alertKey, String severity, String status, String message, String details) {
+        if (!runtimeAutomationProperties.getAlert().isEmailEnabled()) {
+            return false;
+        }
+
+        String emailTo = runtimeAutomationProperties.getAlert().getEmailTo();
+        String emailFrom = runtimeAutomationProperties.getAlert().getEmailFrom();
+
+        if (emailTo == null || emailTo.isBlank()) {
+            return false;
+        }
+
+        if (!shouldNotifySeverity(severity, runtimeAutomationProperties.getAlert().getEmailMinSeverity())) {
+            return false;
+        }
+
+        try {
+            SimpleMailMessage mail = new SimpleMailMessage();
+            if (emailFrom != null && !emailFrom.isBlank()) {
+                mail.setFrom(emailFrom);
+            }
+            mail.setTo(emailTo);
+            mail.setSubject(runtimeAutomationProperties.getAlert().getEmailSubjectPrefix()
+                    + " " + severity + " " + status + " " + alertKey);
+            mail.setText(buildEmailBody(alertKey, severity, status, message, details));
+
+            javaMailSender.send(mail);
+
+            log.info("Runtime alert email delivered. alertKey={} status={} severity={}", alertKey, status, severity);
+            return true;
+        } catch (Exception ex) {
+            log.warn("Runtime alert email delivery error. alertKey={} status={} severity={} error={}",
+                    alertKey, status, severity, ex.getMessage());
+            return false;
+        }
+    }
+
+    private boolean shouldNotifySeverity(String severity, String minimumSeverity) {
+        return severityRank(severity) >= severityRank(minimumSeverity);
+    }
+
+    private int severityRank(String severity) {
+        if (severity == null) {
+            return 0;
+        }
+
+        return switch (severity.toUpperCase()) {
+            case "CRITICAL" -> 4;
+            case "HIGH" -> 3;
+            case "MEDIUM" -> 2;
+            case "LOW" -> 1;
+            default -> 0;
+        };
+    }
+
+    private String buildEmailBody(String alertKey, String severity, String status, String message, String details) {
+        return "Market Scanner Runtime Alert\n\n"
+                + "Alert Key: " + alertKey + "\n"
+                + "Severity: " + severity + "\n"
+                + "Status: " + status + "\n"
+                + "Message: " + message + "\n"
+                + "Timestamp: " + timeProvider.nowDateTime() + "\n\n"
+                + "Details:\n" + details + "\n";
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception ex) {
+            return "{\"error\":\"serialization_failed\"}";
+        }
+    }
+
+    public record AlertEvaluationResult(
+            LocalDateTime evaluatedAt,
+            int openedAlerts,
+            int resolvedAlerts,
+            long currentlyOpenHighAlerts,
+            String message) {
+    }
+
+    public record TestAlertResult(
+            boolean webhookDelivered,
+            boolean emailDelivered,
+            String message) {
+    }
+}
