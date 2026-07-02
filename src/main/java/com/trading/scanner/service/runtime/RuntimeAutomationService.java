@@ -45,6 +45,7 @@ public class RuntimeAutomationService {
     private final RuntimeSettingService runtimeSettingService;
     private final RuntimeAutomationProperties runtimeAutomationProperties;
     private final RuntimeReadinessService runtimeReadinessService;
+    private final RuntimeBootstrapService runtimeBootstrapService;
     private final TimeProvider timeProvider;
 
     private volatile LocalDateTime nextWebsocketCloseCheckAt;
@@ -192,6 +193,13 @@ public class RuntimeAutomationService {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
+        try {
+            RuntimeBootstrapService.BootstrapResult bootstrapResult = runtimeBootstrapService.bootstrapIfNeeded();
+            log.info("Runtime bootstrap completed: {}", bootstrapResult);
+        } catch (Exception ex) {
+            log.warn("Runtime bootstrap failed: {}", ex.getMessage(), ex);
+        }
+
         if (!runtimeAutomationProperties.getLive().isAutoRun()) {
             return;
         }
