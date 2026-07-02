@@ -13,6 +13,7 @@ public class RuntimeAutomationProperties {
     private final Housekeeping housekeeping = new Housekeeping();
     private final Defaults defaults = new Defaults();
     private final Alert alert = new Alert();
+    private final Bootstrap bootstrap = new Bootstrap();
 
     @Data
     public static class Live {
@@ -56,6 +57,13 @@ public class RuntimeAutomationProperties {
         private String emailTo = "";
         private String emailFrom = "";
         private String emailMinSeverity = "HIGH";
-        private String emailSubjectPrefix = "[Market Scanner]";
+        private String emailSubjectPrefix = "[Mithron]";
+    }
+
+    @Data
+    public static class Bootstrap {
+        private boolean autoSeedUniverse = true;
+        private boolean autoBuildInstrumentMaster = true;
+        private boolean autoSyncMissingTokens = true;
     }
 }

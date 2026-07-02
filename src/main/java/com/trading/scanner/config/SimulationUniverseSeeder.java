@@ -20,7 +20,6 @@ import java.util.List;
 
 @Slf4j
 @Component
-@Profile("simulation")
 @RequiredArgsConstructor
 public class SimulationUniverseSeeder {
 

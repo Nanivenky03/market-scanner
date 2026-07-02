@@ -13,9 +13,9 @@
     </parent>
 
     <groupId>com.trading</groupId>
-    <artifactId>market-scanner</artifactId>
-    <version>1.8.0</version>
-    <name>Market Scanner</name>
+    <artifactId>Mithron</artifactId>
+    <version>1.0.0</version>
+    <name>Mithron</name>
     <description>Production-grade market data scanner</description>
 
     <properties>
