@@ -19,6 +19,9 @@ public class RuntimeAutomationProperties {
     public static class Live {
         private boolean autoRun = false;
         private int subscriptionMode = 1;
+        private boolean autoRecover = true;
+        private long recoveryIntervalMs = 60000L;
+        private int reconnectBackoffSeconds = 30;
     }
 
     @Data
