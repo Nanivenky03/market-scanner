@@ -1,12 +1,15 @@
 package com.trading.scanner.controller;
 
+import com.trading.scanner.calendar.NseHolidayCalendar;
 import com.trading.scanner.model.DailyStockContext;
+import com.trading.scanner.model.ExchangeHoliday;
 import com.trading.scanner.model.LiveSimulationSignal;
 import com.trading.scanner.model.RuntimeAlertState;
 import com.trading.scanner.model.RuntimeSetting;
 import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
 import com.trading.scanner.service.runtime.LiveSignalService;
+import com.trading.scanner.service.runtime.MarketCalendarService;
 import com.trading.scanner.service.runtime.RuntimeAlertService;
 import com.trading.scanner.service.runtime.RuntimeAutomationService;
 import com.trading.scanner.service.runtime.RuntimeHousekeepingService;
@@ -21,7 +24,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/admin/runtime")
@@ -37,6 +42,7 @@ public class RuntimeAdminController {
     private final RuntimeHousekeepingService runtimeHousekeepingService;
     private final RuntimeAlertService runtimeAlertService;
     private final AngelOneSessionService angelOneSessionService;
+    private final MarketCalendarService marketCalendarService;
 
     public record UpsertRuntimeSettingRequest(
             @Schema(example = "websocket.connect.time") String key,
@@ -112,7 +118,7 @@ public class RuntimeAdminController {
         return ResponseEntity.ok(runtimeAlertService.evaluateNow());
     }
 
-    @Operation(summary = "Send a test alert via webhook")
+    @Operation(summary = "Send a test alert via webhook/email")
     @PostMapping("/alerts/test")
     public ResponseEntity<RuntimeAlertService.TestAlertResult> testAlertWebhook() {
         return ResponseEntity.ok(runtimeAlertService.sendTestAlert());
@@ -147,6 +153,42 @@ public class RuntimeAdminController {
                         request.valueType(),
                         request.description(),
                         request.updatedBy()));
+    }
+
+    @Operation(summary = "List exchange holidays for a date range")
+    @GetMapping("/calendar/holidays")
+    public ResponseEntity<List<ExchangeHoliday>> holidays(
+            @Parameter(description = "Range start date in yyyy-MM-dd format", example = "2026-01-01") @RequestParam LocalDate fromDate,
+            @Parameter(description = "Range end date in yyyy-MM-dd format", example = "2026-12-31") @RequestParam LocalDate toDate) {
+        return ResponseEntity.ok(marketCalendarService.holidays(fromDate, toDate));
+    }
+
+    @Operation(summary = "Refresh persisted exchange holidays from current static authority")
+    @PostMapping("/calendar/refresh-static-authority")
+    public ResponseEntity<NseHolidayCalendar.HolidayRefreshResult> refreshStaticAuthority() {
+        return ResponseEntity.ok(marketCalendarService.refreshFromStaticAuthority());
+    }
+
+    @Operation(summary = "Refresh persisted exchange holidays from official NSE source")
+    @PostMapping("/calendar/refresh-official-source")
+    public ResponseEntity<MarketCalendarService.OfficialHolidayRefreshResult> refreshOfficialSource() {
+        return ResponseEntity.ok(marketCalendarService.refreshFromOfficialNseSource());
+    }
+
+    @Operation(summary = "Get exchange holiday calendar summary")
+    @GetMapping("/calendar/summary")
+    public ResponseEntity<Map<String, Object>> calendarSummary() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("holidayCount", marketCalendarService.holidayCount());
+        body.put("lastOfficialRefreshMonth",
+                runtimeSettingService.getString("calendar.last.official.refresh.month", null));
+        body.put("lastOfficialRefreshAt", runtimeSettingService.getString("calendar.last.official.refresh.at", null));
+        body.put("lastOfficialRefreshStatus",
+                runtimeSettingService.getString("calendar.last.official.refresh.status", null));
+        body.put("lastOfficialRefreshMessage",
+                runtimeSettingService.getString("calendar.last.official.refresh.message", null));
+        body.put("message", "Exchange holiday summary loaded");
+        return ResponseEntity.ok(body);
     }
 
     @Operation(summary = "List daily stock context rows for one trading date")
