@@ -12,7 +12,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -297,7 +296,6 @@ public class RuntimeAutomationService {
         }
     }
 
-    @Scheduled(cron = "0 * * * * *", zone = "Asia/Kolkata")
     public void scheduledBrokerWarmup() {
         if (!runtimeAutomationProperties.getLive().isAutoRun()) {
             return;
@@ -323,7 +321,6 @@ public class RuntimeAutomationService {
         }
     }
 
-    @Scheduled(cron = "0 * * * * *", zone = "Asia/Kolkata")
     public void scheduledConnectAndSubscribe() {
         if (!runtimeAutomationProperties.getLive().isAutoRun()) {
             return;
@@ -349,7 +346,6 @@ public class RuntimeAutomationService {
         }
     }
 
-    @Scheduled(fixedDelayString = "${runtime.live.recovery-interval-ms:60000}", initialDelayString = "${runtime.live.recovery-interval-ms:60000}")
     public void scheduledRecoverLiveRuntime() {
         if (!runtimeAutomationProperties.getLive().isAutoRun()) {
             return;
@@ -369,7 +365,6 @@ public class RuntimeAutomationService {
         }
     }
 
-    @Scheduled(cron = "0 * * * * *", zone = "Asia/Kolkata")
     public void scheduledConditionalFlushAndDisconnect() {
         if (!runtimeAutomationProperties.getLive().isAutoRun()) {
             return;
@@ -423,7 +418,6 @@ public class RuntimeAutomationService {
         }
     }
 
-    @Scheduled(cron = "0 * * * * *", zone = "Asia/Kolkata")
     public void scheduledBrokerSessionClear() {
         if (!runtimeAutomationProperties.getLive().isAutoRun()) {
             return;

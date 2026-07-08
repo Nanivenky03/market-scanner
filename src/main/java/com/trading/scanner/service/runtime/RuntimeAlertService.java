@@ -9,7 +9,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,6 +29,11 @@ public class RuntimeAlertService {
 
     private static final String STATUS_OPEN = "OPEN";
     private static final String STATUS_RESOLVED = "RESOLVED";
+
+    private static final String KEY_CALENDAR_REFRESH_STATUS = "calendar.last.official.refresh.status";
+    private static final String KEY_CALENDAR_REFRESH_MESSAGE = "calendar.last.official.refresh.message";
+    private static final String KEY_CALENDAR_REFRESH_AT = "calendar.last.official.refresh.at";
+    private static final String ALERT_KEY_CALENDAR_REFRESH_FAILED = "calendar.official_refresh_failed";
 
     private final RuntimeAlertStateRepository runtimeAlertStateRepository;
     private final RuntimeReadinessService runtimeReadinessService;
@@ -122,6 +126,20 @@ public class RuntimeAlertService {
             resolved++;
         }
 
+        String calendarRefreshStatus = runtimeSettingService.getString(KEY_CALENDAR_REFRESH_STATUS, "");
+        if ("FAILED".equalsIgnoreCase(calendarRefreshStatus)) {
+            upsertOpen(
+                    ALERT_KEY_CALENDAR_REFRESH_FAILED,
+                    "HIGH",
+                    "Official NSE holiday refresh failed",
+                    Map.of(
+                            "lastRefreshAt", runtimeSettingService.getString(KEY_CALENDAR_REFRESH_AT, ""),
+                            "failureMessage", runtimeSettingService.getString(KEY_CALENDAR_REFRESH_MESSAGE, "")));
+            opened++;
+        } else if (resolve(ALERT_KEY_CALENDAR_REFRESH_FAILED)) {
+            resolved++;
+        }
+
         return new AlertEvaluationResult(
                 timeProvider.nowDateTime(),
                 opened,
@@ -130,7 +148,6 @@ public class RuntimeAlertService {
                 "Runtime alert evaluation completed");
     }
 
-    @Scheduled(fixedDelayString = "${runtime.alert.evaluation-interval-ms:60000}", initialDelayString = "${runtime.alert.evaluation-interval-ms:60000}")
     public void scheduledEvaluate() {
         if (!runtimeAutomationProperties.getAlert().isAutoRun()) {
             return;
@@ -356,7 +373,7 @@ public class RuntimeAlertService {
     }
 
     private String buildEmailBody(String alertKey, String severity, String status, String message, String details) {
-        return "Market Scanner Runtime Alert\n\n"
+        return "Mithron Runtime Alert\n\n"
                 + "Alert Key: " + alertKey + "\n"
                 + "Severity: " + severity + "\n"
                 + "Status: " + status + "\n"

@@ -1,6 +1,8 @@
 package com.trading.scanner.calendar;
 
+import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.repository.EmergencyClosureRepository;
+import com.trading.scanner.repository.ExchangeHolidayRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -9,9 +11,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.lenient;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -20,117 +24,105 @@ class DefaultTradingCalendarTest {
     @Mock
     private EmergencyClosureRepository emergencyClosureRepository;
 
+    @Mock
+    private ExchangeHolidayRepository exchangeHolidayRepository;
+
+    @Mock
+    private TimeProvider timeProvider;
+
     private TradingCalendar tradingCalendar;
 
     @BeforeEach
     void setUp() {
-        lenient().when(emergencyClosureRepository.existsByDate(any(LocalDate.class)))
-                .thenReturn(false);
-
-        NseHolidayCalendar holidayCalendar = new NseHolidayCalendar(emergencyClosureRepository);
+        NseHolidayCalendar holidayCalendar = new NseHolidayCalendar(
+                emergencyClosureRepository,
+                exchangeHolidayRepository,
+                timeProvider);
         tradingCalendar = new DefaultTradingCalendar(holidayCalendar);
     }
 
     @Test
-    void nextTradingDay_shouldSkipWeekend() {
-        LocalDate friday = LocalDate.of(2024, 4, 5);
-
-        LocalDate next = tradingCalendar.nextTradingDay(friday);
-
-        assertEquals(LocalDate.of(2024, 4, 8), next);
-    }
-
-    @Test
-    void previousTradingDay_shouldSkipWeekend() {
-        LocalDate monday = LocalDate.of(2024, 4, 8);
-
-        LocalDate previous = tradingCalendar.previousTradingDay(monday);
-
-        assertEquals(LocalDate.of(2024, 4, 5), previous);
-    }
-
-    @Test
-    void nextTradingDay_shouldSkipKnownHoliday() {
-        // 2024-03-25 = Holi
-        LocalDate beforeHoliday = LocalDate.of(2024, 3, 22);
-
-        LocalDate next = tradingCalendar.nextTradingDay(beforeHoliday);
-
-        assertEquals(LocalDate.of(2024, 3, 26), next);
-    }
-
-    @Test
-    void addTradingDays_shouldMoveForwardByTradingDaysOnly() {
-        LocalDate start = LocalDate.of(2024, 4, 5); // Friday
-
-        LocalDate result = tradingCalendar.addTradingDays(start, 3);
-
-        assertEquals(LocalDate.of(2024, 4, 10), result);
-    }
-
-    @Test
-    void addTradingDays_shouldMoveBackwardByTradingDaysOnly() {
-        LocalDate start = LocalDate.of(2024, 4, 10); // Wednesday
-
-        LocalDate result = tradingCalendar.addTradingDays(start, -3);
-
-        assertEquals(LocalDate.of(2024, 4, 5), result);
-    }
-
-    @Test
-    void getSession_shouldReturnWeekend() {
-        SessionType session = tradingCalendar.getSession(LocalDate.of(2024, 4, 6));
-
-        assertEquals(SessionType.WEEKEND, session);
-    }
-
-    @Test
-    void getSession_shouldReturnHoliday() {
-        SessionType session = tradingCalendar.getSession(LocalDate.of(2024, 3, 25));
-
-        assertEquals(SessionType.HOLIDAY, session);
-    }
-
-    @Test
     void isTradingDay_shouldReturnFalseForWeekend() {
-        assertFalse(tradingCalendar.isTradingDay(LocalDate.of(2024, 4, 6)));
+        LocalDate saturday = LocalDate.of(2026, 7, 4);
+
+        boolean tradingDay = tradingCalendar.isTradingDay(saturday);
+
+        assertFalse(tradingDay);
     }
 
     @Test
     void isTradingDay_shouldReturnFalseForKnownHoliday() {
-        assertFalse(tradingCalendar.isTradingDay(LocalDate.of(2024, 3, 25)));
+        LocalDate republicDay = LocalDate.of(2026, 1, 26);
+
+        when(exchangeHolidayRepository.existsByExchangeAndTradingDate("NSE", republicDay)).thenReturn(true);
+
+        boolean tradingDay = tradingCalendar.isTradingDay(republicDay);
+
+        assertFalse(tradingDay);
+    }
+
+    @Test
+    void isTradingDay_shouldReturnFalseForEmergencyClosure() {
+        LocalDate tradingDay = LocalDate.of(2026, 7, 1);
+
+        when(emergencyClosureRepository.existsByDate(tradingDay)).thenReturn(true);
+
+        boolean result = tradingCalendar.isTradingDay(tradingDay);
+
+        assertFalse(result);
     }
 
     @Test
     void isTradingDay_shouldReturnTrueForNormalWeekday() {
-        assertTrue(tradingCalendar.isTradingDay(LocalDate.of(2024, 4, 9)));
+        LocalDate normalDay = LocalDate.of(2026, 7, 1);
+
+        when(exchangeHolidayRepository.existsByExchangeAndTradingDate("NSE", normalDay)).thenReturn(false);
+        when(emergencyClosureRepository.existsByDate(normalDay)).thenReturn(false);
+
+        boolean result = tradingCalendar.isTradingDay(normalDay);
+
+        assertTrue(result);
     }
 
     @Test
-    void getSession_shouldReturnUnexpectedClosureWhenEmergencyClosureExists() {
-        LocalDate emergencyDate = LocalDate.of(2024, 4, 9);
+    void nextTradingDay_shouldSkipWeekendAndHoliday() {
+        LocalDate friday = LocalDate.of(2026, 1, 23);
+        LocalDate republicDay = LocalDate.of(2026, 1, 26);
 
-        when(emergencyClosureRepository.existsByDate(emergencyDate)).thenReturn(true);
+        when(exchangeHolidayRepository.existsByExchangeAndTradingDate(eq("NSE"), any(LocalDate.class)))
+                .thenReturn(false);
+        when(exchangeHolidayRepository.existsByExchangeAndTradingDate("NSE", republicDay)).thenReturn(true);
 
-        NseHolidayCalendar holidayCalendar = new NseHolidayCalendar(emergencyClosureRepository);
-        TradingCalendar emergencyAwareCalendar = new DefaultTradingCalendar(holidayCalendar);
+        LocalDate nextTradingDay = tradingCalendar.nextTradingDay(friday);
 
-        SessionType session = emergencyAwareCalendar.getSession(emergencyDate);
-
-        assertEquals(SessionType.UNEXPECTED_CLOSURE, session);
+        assertEquals(LocalDate.of(2026, 1, 27), nextTradingDay);
     }
 
     @Test
-    void nextTradingDay_shouldSkipEmergencyClosure() {
-        LocalDate emergencyDate = LocalDate.of(2024, 4, 9);
+    void previousTradingDay_shouldSkipWeekendAndHoliday() {
+        LocalDate tuesday = LocalDate.of(2026, 1, 27);
+        LocalDate republicDay = LocalDate.of(2026, 1, 26);
 
-        when(emergencyClosureRepository.existsByDate(emergencyDate)).thenReturn(true);
+        when(exchangeHolidayRepository.existsByExchangeAndTradingDate(eq("NSE"), any(LocalDate.class)))
+                .thenReturn(false);
+        when(exchangeHolidayRepository.existsByExchangeAndTradingDate("NSE", republicDay)).thenReturn(true);
 
-        NseHolidayCalendar holidayCalendar = new NseHolidayCalendar(emergencyClosureRepository);
-        TradingCalendar emergencyAwareCalendar = new DefaultTradingCalendar(holidayCalendar);
+        LocalDate previousTradingDay = tradingCalendar.previousTradingDay(tuesday);
 
-        LocalDate next = emergencyAwareCalendar.nextTradingDay(LocalDate.of(2024, 4, 8));
+        assertEquals(LocalDate.of(2026, 1, 23), previousTradingDay);
+    }
 
-        assertEquals(LocalDate.of(2024, 4, 10), next);
+    @Test
+    void addTradingDays_shouldMoveAcrossWeekendAndHoliday() {
+        LocalDate friday = LocalDate.of(2026, 1, 23);
+        LocalDate republicDay = LocalDate.of(2026, 1, 26);
+
+        when(exchangeHolidayRepository.existsByExchangeAndTradingDate(eq("NSE"), any(LocalDate.class)))
+                .thenReturn(false);
+        when(exchangeHolidayRepository.existsByExchangeAndTradingDate("NSE", republicDay)).thenReturn(true);
+
+        LocalDate result = tradingCalendar.addTradingDays(friday, 1);
+
+        assertEquals(LocalDate.of(2026, 1, 27), result);
     }
 }

@@ -9,7 +9,6 @@ import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -75,7 +74,6 @@ public class RuntimeHousekeepingService {
         return lastResult;
     }
 
-    @Scheduled(cron = "0 * * * * *", zone = "Asia/Kolkata")
     public void scheduledHousekeeping() {
         if (!runtimeAutomationProperties.getHousekeeping().isAutoRun()) {
             return;

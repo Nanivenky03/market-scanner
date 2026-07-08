@@ -162,6 +162,22 @@ class RuntimeAutomationServiceTest {
     }
 
     @Test
+    void recoverLiveRuntimeIfNeeded_shouldSkipWhenNotTradingDay() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 4, 10, 15);
+
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(false);
+        when(liveMarketCandleService.openCandles()).thenReturn(List.of());
+
+        RuntimeAutomationService.RuntimeActionResult result = runtimeAutomationService.recoverLiveRuntimeIfNeeded();
+
+        assertEquals("NO_ACTION", result.action());
+        verify(runtimeAutomationService, never()).warmUpBrokerSession();
+        verify(runtimeAutomationService, never()).connectAndSubscribe();
+        verify(angelOneWebSocketService, never()).disconnect();
+    }
+
+    @Test
     void recoverLiveRuntimeIfNeeded_shouldSkipWhenWebsocketIsHealthy() {
         LocalDateTime now = LocalDateTime.of(2026, 7, 1, 10, 15);
 
@@ -170,8 +186,8 @@ class RuntimeAutomationServiceTest {
         when(runtimeSettingService.websocketConnectTime()).thenReturn(LocalTime.of(9, 0));
         when(runtimeSettingService.websocketDisconnectTime()).thenReturn(LocalTime.of(15, 40));
         when(runtimeSettingService.staleTicksMinutes()).thenReturn(10);
-        when(liveMarketCandleService.openCandles()).thenReturn(List.of());
         when(angelOneWebSocketService.status()).thenReturn(healthyConnectedStatus(now));
+        when(liveMarketCandleService.openCandles()).thenReturn(List.of());
 
         RuntimeAutomationService.RuntimeActionResult result = runtimeAutomationService.recoverLiveRuntimeIfNeeded();
 
@@ -189,7 +205,6 @@ class RuntimeAutomationServiceTest {
         when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(true);
         when(runtimeSettingService.websocketConnectTime()).thenReturn(LocalTime.of(9, 0));
         when(runtimeSettingService.websocketDisconnectTime()).thenReturn(LocalTime.of(15, 40));
-        when(liveMarketCandleService.openCandles()).thenReturn(List.of());
         when(angelOneWebSocketService.status()).thenReturn(disconnectedStatus(now));
         when(angelOneSessionService.sessionStatus()).thenReturn(sessionStatus(now, true));
 
@@ -207,6 +222,77 @@ class RuntimeAutomationServiceTest {
         assertEquals("LIVE_RUNTIME_RECOVERY", first.action());
         assertEquals("NO_ACTION", second.action());
         verify(runtimeAutomationService, times(1)).connectAndSubscribe();
+    }
+
+    @Test
+    void reconcileStartupState_shouldSkipBrokerAndWebsocketOnNonTradingDay() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 4, 8, 0);
+
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(false);
+        when(runtimeSettingService.getString("runtime.lifecycle.state", "STOPPED")).thenReturn("STOPPED");
+        when(runtimeSettingService.getString("runtime.last.shutdown.at", "")).thenReturn("");
+        when(runtimeSettingService.getString("runtime.last.shutdown.graceful", "true")).thenReturn("true");
+        when(liveMarketCandleService.openCandles()).thenReturn(List.of());
+        when(angelOneWebSocketService.status()).thenReturn(disconnectedStatus(now));
+
+        RuntimeAutomationService.RuntimeActionResult result = runtimeAutomationService.reconcileStartupState();
+
+        assertEquals("STARTUP_RECONCILE", result.action());
+        verify(runtimeAutomationService, never()).warmUpBrokerSession();
+        verify(runtimeAutomationService, never()).connectAndSubscribe();
+    }
+
+    @Test
+    void scheduledBrokerWarmup_shouldSkipOnNonTradingDay() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 4, 8, 50);
+
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(false);
+
+        runtimeAutomationService.scheduledBrokerWarmup();
+
+        verify(runtimeAutomationService, never()).warmUpBrokerSession();
+        verify(runtimeSettingService, never()).loginTime();
+    }
+
+    @Test
+    void scheduledConnectAndSubscribe_shouldSkipOnNonTradingDay() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 4, 9, 0);
+
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(false);
+
+        runtimeAutomationService.scheduledConnectAndSubscribe();
+
+        verify(runtimeAutomationService, never()).connectAndSubscribe();
+        verify(runtimeSettingService, never()).websocketConnectTime();
+    }
+
+    @Test
+    void scheduledConditionalFlushAndDisconnect_shouldSkipOnNonTradingDay() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 4, 15, 45);
+
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(false);
+
+        runtimeAutomationService.scheduledConditionalFlushAndDisconnect();
+
+        verify(runtimeAutomationService, never()).flushAndDisconnect();
+        verify(angelOneWebSocketService, never()).status();
+    }
+
+    @Test
+    void scheduledBrokerSessionClear_shouldSkipOnNonTradingDay() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 4, 16, 0);
+
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(false);
+
+        runtimeAutomationService.scheduledBrokerSessionClear();
+
+        verify(runtimeAutomationService, never()).clearBrokerSession();
+        verify(angelOneWebSocketService, never()).status();
     }
 
     private AngelOneWebSocketService.Status disconnectedStatus(LocalDateTime now) {

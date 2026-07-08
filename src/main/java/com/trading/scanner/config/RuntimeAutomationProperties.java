@@ -14,6 +14,7 @@ public class RuntimeAutomationProperties {
     private final Defaults defaults = new Defaults();
     private final Alert alert = new Alert();
     private final Bootstrap bootstrap = new Bootstrap();
+    private final Calendar calendar = new Calendar();
 
     @Data
     public static class Live {
@@ -68,5 +69,14 @@ public class RuntimeAutomationProperties {
         private boolean autoSeedUniverse = true;
         private boolean autoBuildInstrumentMaster = true;
         private boolean autoSyncMissingTokens = true;
+    }
+
+    @Data
+    public static class Calendar {
+        private String officialNseUrl = "https://www.nseindia.com/resources/exchange-communication-holidays";
+        private long refreshTimeoutMs = 10000L;
+        private boolean autoRefresh = true;
+        private String refreshDay = "SUNDAY";
+        private String refreshCheckTime = "17:00";
     }
 }

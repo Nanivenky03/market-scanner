@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestController
@@ -45,15 +46,20 @@ public class RuntimeHealthController {
 
         boolean ready = readiness.readyForLiveRuntime() && blockingOpenHighAlerts == 0;
 
-        return ResponseEntity.status(ready ? 200 : 503).body(Map.of(
-                "status", ready ? "READY" : "NOT_READY",
-                "activeUniverseCount", readiness.activeUniverseCount(),
-                "missingBrokerTokenCount", readiness.missingBrokerTokenCount(),
-                "websocketConnected", readiness.websocketConnected(),
-                "autoRunEnabled", readiness.autoRunEnabled(),
-                "subscriptionMode", readiness.subscriptionMode(),
-                "parserFailures", readiness.websocketParserFailures(),
-                "blockingOpenHighAlerts", blockingOpenHighAlerts));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", ready ? "READY" : "NOT_READY");
+        body.put("businessDate", readiness.businessDate());
+        body.put("tradingDay", readiness.tradingDay());
+        body.put("marketSessionOpen", readiness.marketSessionOpen());
+        body.put("activeUniverseCount", readiness.activeUniverseCount());
+        body.put("missingBrokerTokenCount", readiness.missingBrokerTokenCount());
+        body.put("websocketConnected", readiness.websocketConnected());
+        body.put("autoRunEnabled", readiness.autoRunEnabled());
+        body.put("subscriptionMode", readiness.subscriptionMode());
+        body.put("parserFailures", readiness.websocketParserFailures());
+        body.put("blockingOpenHighAlerts", blockingOpenHighAlerts);
+
+        return ResponseEntity.status(ready ? 200 : 503).body(body);
     }
 
     @Operation(summary = "Operational status summary")
