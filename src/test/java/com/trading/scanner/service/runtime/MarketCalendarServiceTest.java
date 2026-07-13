@@ -1,5 +1,6 @@
 package com.trading.scanner.service.runtime;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.calendar.NseHolidayCalendar;
 import com.trading.scanner.config.RuntimeAutomationProperties;
 import com.trading.scanner.config.TimeProvider;
@@ -9,6 +10,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -16,10 +19,13 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class MarketCalendarServiceTest {
+
+    private static final int REAL_CM_FIXTURE_HOLIDAY_COUNT = 20;
 
     private NseHolidayCalendar nseHolidayCalendar;
     private ExchangeHolidayRepository exchangeHolidayRepository;
@@ -41,7 +47,8 @@ class MarketCalendarServiceTest {
                 exchangeHolidayRepository,
                 runtimeAutomationProperties,
                 runtimeSettingService,
-                timeProvider));
+                timeProvider,
+                new ObjectMapper()));
     }
 
     @Test
@@ -90,39 +97,39 @@ class MarketCalendarServiceTest {
     }
 
     @Test
-    void refreshFromOfficialNseSource_shouldInsertParsedHolidays() {
+    void refreshFromOfficialNseSource_shouldInsertParsedHolidays_fromRealFixture() throws Exception {
         when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
-        doReturn("""
-                {"DATE":"26-Jan-26","DAY":"Monday","DESCRIPTION":"Republic Day"}
-                {"DATE":"03-Mar-26","DAY":"Tuesday","DESCRIPTION":"Holi"}
-                """).when(marketCalendarService).fetchOfficialNseHolidayPage();
 
-        when(exchangeHolidayRepository.findByExchangeAndTradingDate("NSE", LocalDate.of(2026, 1, 26)))
-                .thenReturn(Optional.empty());
-        when(exchangeHolidayRepository.findByExchangeAndTradingDate("NSE", LocalDate.of(2026, 3, 3)))
+        String payload = loadFixture("contracts/nse-holiday-trading-2026.json");
+        doReturn(payload).when(marketCalendarService).fetchOfficialNseTradingHolidayPayload(2026);
+
+        when(exchangeHolidayRepository.findByExchangeAndTradingDate(anyString(), any(LocalDate.class)))
                 .thenReturn(Optional.empty());
 
         MarketCalendarService.OfficialHolidayRefreshResult result = marketCalendarService
                 .refreshFromOfficialNseSource();
 
         ArgumentCaptor<ExchangeHoliday> captor = ArgumentCaptor.forClass(ExchangeHoliday.class);
-        verify(exchangeHolidayRepository, times(2)).save(captor.capture());
+        verify(exchangeHolidayRepository, times(REAL_CM_FIXTURE_HOLIDAY_COUNT)).save(captor.capture());
 
         List<ExchangeHoliday> saved = captor.getAllValues();
 
-        assertEquals(2, result.parsedHolidays());
-        assertEquals(2, result.insertedHolidays());
+        assertEquals(REAL_CM_FIXTURE_HOLIDAY_COUNT, result.parsedHolidays());
+        assertEquals(REAL_CM_FIXTURE_HOLIDAY_COUNT, result.insertedHolidays());
         assertEquals(0, result.updatedHolidays());
         assertEquals("NSE", saved.get(0).getExchange());
         assertEquals("OFFICIAL_NSE", saved.get(0).getSource());
     }
 
     @Test
-    void refreshFromOfficialNseSource_shouldUpdateExistingHolidayWhenDescriptionChanges() {
+    void refreshFromOfficialNseSource_shouldUpdateExistingHolidayWhenDescriptionChanges() throws Exception {
         when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
-        doReturn("""
-                {"DATE":"26-Jan-26","DAY":"Monday","DESCRIPTION":"Republic Day"}
-                """).when(marketCalendarService).fetchOfficialNseHolidayPage();
+
+        String payload = loadFixture("contracts/nse-holiday-trading-2026.json");
+        doReturn(payload).when(marketCalendarService).fetchOfficialNseTradingHolidayPayload(2026);
+
+        when(exchangeHolidayRepository.findByExchangeAndTradingDate(anyString(), any(LocalDate.class)))
+                .thenReturn(Optional.empty());
 
         ExchangeHoliday existing = ExchangeHoliday.builder()
                 .exchange("NSE")
@@ -139,24 +146,23 @@ class MarketCalendarServiceTest {
         MarketCalendarService.OfficialHolidayRefreshResult result = marketCalendarService
                 .refreshFromOfficialNseSource();
 
-        verify(exchangeHolidayRepository, times(1)).save(existing);
+        verify(exchangeHolidayRepository, atLeastOnce()).save(existing);
         assertEquals("Republic Day", existing.getDescription());
         assertEquals("OFFICIAL_NSE", existing.getSource());
         assertEquals(1, result.updatedHolidays());
+        assertEquals(REAL_CM_FIXTURE_HOLIDAY_COUNT - 1, result.insertedHolidays());
     }
 
     @Test
-    void parseOfficialNseHolidayPage_shouldParseOfficialDateDescriptionPairs() {
-        String content = """
-                {"DATE":"26-Jan-26","DAY":"Monday","DESCRIPTION":"Republic Day"}
-                {"DATE":"03-Mar-26","DAY":"Tuesday","DESCRIPTION":"Holi"}
-                """;
+    void parseOfficialNseTradingHolidayPayload_shouldParseRealApiFixture() throws Exception {
+        String payload = loadFixture("contracts/nse-holiday-trading-2026.json");
 
-        var parsed = marketCalendarService.parseOfficialNseHolidayPage(content);
+        var parsed = marketCalendarService.parseOfficialNseTradingHolidayPayload(payload);
 
-        assertEquals(2, parsed.size());
+        assertEquals(REAL_CM_FIXTURE_HOLIDAY_COUNT, parsed.size());
         assertTrue(parsed.containsKey(LocalDate.of(2026, 1, 26)));
         assertEquals("Republic Day", parsed.get(LocalDate.of(2026, 1, 26)));
+        assertEquals("Municipal Corporation Election - Maharashtra", parsed.get(LocalDate.of(2026, 1, 15)));
     }
 
     @Test
@@ -263,5 +269,11 @@ class MarketCalendarServiceTest {
                 eq("STRING"),
                 anyString(),
                 eq("system"));
+    }
+
+    private String loadFixture(String path) throws Exception {
+        try (InputStream inputStream = getClass().getClassLoader().getResourceAsStream(path)) {
+            return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 }

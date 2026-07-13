@@ -1,5 +1,7 @@
 package com.trading.scanner.service.runtime;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.calendar.NseHolidayCalendar;
 import com.trading.scanner.config.RuntimeAutomationProperties;
 import com.trading.scanner.config.TimeProvider;
@@ -24,8 +26,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
@@ -40,9 +40,6 @@ public class MarketCalendarService {
     private static final String KEY_LAST_OFFICIAL_REFRESH_STATUS = "calendar.last.official.refresh.status";
     private static final String KEY_LAST_OFFICIAL_REFRESH_MESSAGE = "calendar.last.official.refresh.message";
 
-    private static final Pattern NSE_DATE_DESCRIPTION_PATTERN = Pattern.compile(
-            "\"DATE\"\\s*:\\s*\"([0-9]{1,2}-[A-Za-z]{3}-[0-9]{2,4})\"\\s*,\\s*\"DAY\"\\s*:\\s*\"[^\"]+\"\\s*,\\s*\"DESCRIPTION\"\\s*:\\s*\"([^\"]+)\"");
-
     private static final DateTimeFormatter NSE_DATE_FORMAT_SHORT = DateTimeFormatter.ofPattern("d-MMM-yy",
             Locale.ENGLISH);
     private static final DateTimeFormatter NSE_DATE_FORMAT_LONG = DateTimeFormatter.ofPattern("d-MMM-yyyy",
@@ -53,6 +50,7 @@ public class MarketCalendarService {
     private final RuntimeAutomationProperties runtimeAutomationProperties;
     private final RuntimeSettingService runtimeSettingService;
     private final TimeProvider timeProvider;
+    private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
     public List<ExchangeHoliday> holidays(LocalDate fromDate, LocalDate toDate) {
@@ -74,12 +72,19 @@ public class MarketCalendarService {
 
     @Transactional
     public OfficialHolidayRefreshResult refreshFromOfficialNseSource() {
-        String pageContent = fetchOfficialNseHolidayPage();
-        Map<LocalDate, String> parsedHolidays = parseOfficialNseHolidayPage(pageContent);
+        LocalDateTime now = timeProvider.nowDateTime();
+        Map<LocalDate, String> parsedHolidays = new LinkedHashMap<>();
+
+        parsedHolidays.putAll(parseOfficialNseTradingHolidayPayload(
+                fetchOfficialNseTradingHolidayPayload(now.getYear())));
+
+        if (now.getMonthValue() == 12) {
+            parsedHolidays.putAll(parseOfficialNseTradingHolidayPayload(
+                    fetchOfficialNseTradingHolidayPayload(now.getYear() + 1)));
+        }
 
         int inserted = 0;
         int updated = 0;
-        LocalDateTime now = timeProvider.nowDateTime();
 
         for (Map.Entry<LocalDate, String> entry : parsedHolidays.entrySet()) {
             LocalDate tradingDate = entry.getKey();
@@ -239,13 +244,17 @@ public class MarketCalendarService {
         }
     }
 
-    protected String fetchOfficialNseHolidayPage() {
+    protected String fetchOfficialNseTradingHolidayPayload(int year) {
         try {
+            String url = String.format(
+                    runtimeAutomationProperties.getCalendar().getOfficialNseTradingApiUrlTemplate(),
+                    year);
+
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(runtimeAutomationProperties.getCalendar().getOfficialNseUrl()))
+                    .uri(URI.create(url))
                     .timeout(Duration.ofMillis(runtimeAutomationProperties.getCalendar().getRefreshTimeoutMs()))
                     .header("User-Agent", "Mozilla/5.0")
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept", "application/json,text/plain,*/*")
                     .GET()
                     .build();
 
@@ -253,33 +262,53 @@ public class MarketCalendarService {
                     .send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalStateException("Official NSE holiday source returned HTTP " + response.statusCode());
+                throw new IllegalStateException("Official NSE holiday API returned HTTP " + response.statusCode());
             }
 
             return response.body();
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to fetch official NSE holiday source", ex);
+            throw new IllegalStateException("Failed to fetch official NSE trading holiday API", ex);
         }
     }
 
-    protected Map<LocalDate, String> parseOfficialNseHolidayPage(String pageContent) {
-        Map<LocalDate, String> holidays = new LinkedHashMap<>();
-        Matcher matcher = NSE_DATE_DESCRIPTION_PATTERN.matcher(pageContent);
+    protected Map<LocalDate, String> parseOfficialNseTradingHolidayPayload(String payload) {
+        try {
+            JsonNode root = objectMapper.readTree(payload);
+            String segment = runtimeAutomationProperties.getCalendar().getOfficialNseTradingSegment();
+            JsonNode segmentNode = root.path(segment);
 
-        while (matcher.find()) {
-            LocalDate tradingDate = parseNseDate(matcher.group(1));
-            String description = matcher.group(2).trim();
-
-            if (!holidays.containsKey(tradingDate)) {
-                holidays.put(tradingDate, description);
+            if (!segmentNode.isArray() || segmentNode.isEmpty()) {
+                throw new IllegalStateException("No exchange holidays found for NSE segment " + segment);
             }
-        }
 
-        if (holidays.isEmpty()) {
-            throw new IllegalStateException("No exchange holidays could be parsed from official NSE source");
-        }
+            Map<LocalDate, String> holidays = new LinkedHashMap<>();
 
-        return holidays;
+            for (int i = 0; i < segmentNode.size(); i++) {
+                JsonNode holidayNode = segmentNode.get(i);
+                JsonNode tradingDateNode = holidayNode.get("tradingDate");
+                JsonNode descriptionNode = holidayNode.get("description");
+
+                if (tradingDateNode == null || descriptionNode == null) {
+                    continue;
+                }
+
+                LocalDate tradingDate = parseNseTradingDate(tradingDateNode.asText());
+                String description = descriptionNode.asText().trim();
+
+                holidays.putIfAbsent(tradingDate, description);
+            }
+
+            if (holidays.isEmpty()) {
+                throw new IllegalStateException(
+                        "No exchange holidays could be parsed from official NSE trading holiday API");
+            }
+
+            return holidays;
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to parse official NSE trading holiday API payload", ex);
+        }
     }
 
     private DayOfWeek configuredRefreshDay() {
@@ -290,7 +319,7 @@ public class MarketCalendarService {
         return date.plusDays(7).getMonth() != date.getMonth();
     }
 
-    private LocalDate parseNseDate(String rawDate) {
+    private LocalDate parseNseTradingDate(String rawDate) {
         if (rawDate.length() == 9) {
             return LocalDate.parse(rawDate, NSE_DATE_FORMAT_SHORT);
         }

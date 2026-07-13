@@ -73,7 +73,8 @@ public class RuntimeAutomationProperties {
 
     @Data
     public static class Calendar {
-        private String officialNseUrl = "https://www.nseindia.com/resources/exchange-communication-holidays";
+        private String officialNseTradingApiUrlTemplate = "https://www.nseindia.com/api/holiday-master?type=trading&year=%d";
+        private String officialNseTradingSegment = "CM";
         private long refreshTimeoutMs = 10000L;
         private boolean autoRefresh = true;
         private String refreshDay = "SUNDAY";
