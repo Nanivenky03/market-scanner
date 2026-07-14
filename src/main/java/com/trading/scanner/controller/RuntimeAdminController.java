@@ -4,10 +4,13 @@ import com.trading.scanner.calendar.NseHolidayCalendar;
 import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.ExchangeHoliday;
 import com.trading.scanner.model.LiveSimulationSignal;
+import com.trading.scanner.model.MarketMinuteSnapshot;
 import com.trading.scanner.model.RuntimeAlertState;
 import com.trading.scanner.model.RuntimeSetting;
 import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
+import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
+import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
 import com.trading.scanner.service.runtime.LiveSignalService;
 import com.trading.scanner.service.runtime.MarketCalendarService;
 import com.trading.scanner.service.runtime.RuntimeAlertService;
@@ -43,6 +46,8 @@ public class RuntimeAdminController {
     private final RuntimeAlertService runtimeAlertService;
     private final AngelOneSessionService angelOneSessionService;
     private final MarketCalendarService marketCalendarService;
+    private final LiveMarketSnapshotService liveMarketSnapshotService;
+    private final WebSocketFrameCaptureService webSocketFrameCaptureService;
 
     public record UpsertRuntimeSettingRequest(
             @Schema(example = "websocket.connect.time") String key,
@@ -98,6 +103,39 @@ public class RuntimeAdminController {
     @GetMapping("/readiness")
     public ResponseEntity<RuntimeReadinessService.ReadinessStatus> runtimeReadiness() {
         return ResponseEntity.ok(runtimeReadinessService.status());
+    }
+
+    @Operation(summary = "List latest parsed live market snapshots")
+    @GetMapping("/websocket/ticks/latest")
+    public ResponseEntity<List<LiveMarketSnapshotService.SnapshotView>> latestTicks(
+            @Parameter(description = "Maximum number of snapshots to return", example = "20") @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok(liveMarketSnapshotService.latest(limit));
+    }
+
+    @Operation(summary = "Clear latest parsed live market snapshots")
+    @PostMapping("/websocket/ticks/clear")
+    public ResponseEntity<LiveMarketSnapshotService.ClearResult> clearLatestTicks() {
+        return ResponseEntity.ok(liveMarketSnapshotService.clear());
+    }
+
+    @Operation(summary = "List recently captured websocket frame previews")
+    @GetMapping("/websocket/frames")
+    public ResponseEntity<List<WebSocketFrameCaptureService.FrameRecord>> recentFrames(
+            @Parameter(description = "Maximum number of frames to return", example = "20") @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok(webSocketFrameCaptureService.recent(limit));
+    }
+
+    @Operation(summary = "Clear captured websocket frame previews")
+    @PostMapping("/websocket/frames/clear")
+    public ResponseEntity<WebSocketFrameCaptureService.ClearResult> clearFrames() {
+        return ResponseEntity.ok(webSocketFrameCaptureService.clear());
+    }
+
+    @Operation(summary = "List persisted minute market snapshots")
+    @GetMapping("/websocket/minute-snapshots")
+    public ResponseEntity<List<MarketMinuteSnapshot>> recentMinuteSnapshots(
+            @Parameter(description = "Maximum number of persisted minute snapshots to return", example = "20") @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok(liveMarketSnapshotService.recentPersisted(limit));
     }
 
     @Operation(summary = "Run housekeeping now")

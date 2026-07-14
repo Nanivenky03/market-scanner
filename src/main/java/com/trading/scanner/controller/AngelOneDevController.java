@@ -7,6 +7,7 @@ import com.trading.scanner.service.instrument.InstrumentTokenSyncService;
 import com.trading.scanner.service.provider.DailyBarDto;
 import com.trading.scanner.service.provider.angelone.*;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
+import com.trading.scanner.service.runtime.RuntimeSettingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -38,6 +39,8 @@ public class AngelOneDevController {
         private final UniverseWebSocketSubscriptionService universeWebSocketSubscriptionService;
         private final LiveMarketCandleService liveMarketCandleService;
         private final WebSocketFrameCaptureService webSocketFrameCaptureService;
+        private final LiveMarketSnapshotService liveMarketSnapshotService;
+        private final RuntimeSettingService runtimeSettingService;
 
         public record TotpRequest(
                         @Schema(description = "Manual 6-digit TOTP for debugging", example = "123456") String totp) {
@@ -111,6 +114,19 @@ public class AngelOneDevController {
                 return ResponseEntity.ok(webSocketFrameCaptureService.clear());
         }
 
+        @Operation(summary = "List latest normalized live market snapshots", description = "Shows the latest parsed tick/quote snapshots currently held in memory")
+        @GetMapping("/websocket/ticks/latest")
+        public ResponseEntity<List<LiveMarketSnapshotService.SnapshotView>> latestTicks(
+                        @Parameter(description = "Maximum number of snapshots to return", example = "20") @RequestParam(defaultValue = "20") int limit) {
+                return ResponseEntity.ok(liveMarketSnapshotService.latest(limit));
+        }
+
+        @Operation(summary = "Clear latest normalized live market snapshots", description = "Removes in-memory latest parsed tick/quote snapshots")
+        @PostMapping("/websocket/ticks/clear")
+        public ResponseEntity<LiveMarketSnapshotService.ClearResult> clearLatestTicks() {
+                return ResponseEntity.ok(liveMarketSnapshotService.clear());
+        }
+
         @Operation(summary = "Send raw websocket payload", description = "Utility endpoint for manually sending raw websocket JSON during development")
         @PostMapping("/websocket/send-raw")
         public ResponseEntity<AngelOneWebSocketService.Status> sendRawWebSocketPayload(
@@ -125,15 +141,17 @@ public class AngelOneDevController {
         @Operation(summary = "Subscribe active universe on websocket", description = "Subscribes all active universe symbols using broker tokens, chunked by websocket quota")
         @PostMapping("/websocket/subscribe-active-universe")
         public ResponseEntity<UniverseWebSocketSubscriptionService.SubscriptionResult> subscribeActiveUniverse(
-                        @Parameter(description = "SmartAPI mode; choose the mode you want to stream", example = "1") @RequestParam(defaultValue = "1") int mode) {
-                return ResponseEntity.ok(universeWebSocketSubscriptionService.subscribeActiveUniverse(mode));
+                        @Parameter(description = "SmartAPI mode; if omitted, current runtime setting is used", example = "3") @RequestParam(required = false) Integer mode) {
+                return ResponseEntity
+                                .ok(universeWebSocketSubscriptionService.subscribeActiveUniverse(resolveMode(mode)));
         }
 
         @Operation(summary = "Unsubscribe active universe on websocket", description = "Unsubscribes all active universe symbols using broker tokens, chunked by websocket quota")
         @PostMapping("/websocket/unsubscribe-active-universe")
         public ResponseEntity<UniverseWebSocketSubscriptionService.SubscriptionResult> unsubscribeActiveUniverse(
-                        @Parameter(description = "SmartAPI mode used during subscription", example = "1") @RequestParam(defaultValue = "1") int mode) {
-                return ResponseEntity.ok(universeWebSocketSubscriptionService.unsubscribeActiveUniverse(mode));
+                        @Parameter(description = "SmartAPI mode; if omitted, current runtime setting is used", example = "3") @RequestParam(required = false) Integer mode) {
+                return ResponseEntity
+                                .ok(universeWebSocketSubscriptionService.unsubscribeActiveUniverse(resolveMode(mode)));
         }
 
         @Operation(summary = "Manually ingest one tick into the live candle builder", description = "Testing endpoint for validating in-memory 1-minute candle building before wiring real websocket parsing")
@@ -229,5 +247,9 @@ public class AngelOneDevController {
                                                 request.symbols(),
                                                 request.from(),
                                                 request.to()));
+        }
+
+        private int resolveMode(Integer mode) {
+                return mode != null ? mode : runtimeSettingService.subscriptionMode();
         }
 }
