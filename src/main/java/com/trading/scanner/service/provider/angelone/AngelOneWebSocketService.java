@@ -34,6 +34,7 @@ public class AngelOneWebSocketService {
     private final WebSocketFrameCaptureService frameCaptureService;
     private final AngelOneTickParserService angelOneTickParserService;
     private final LiveMarketCandleService liveMarketCandleService;
+    private final LiveMarketSnapshotService liveMarketSnapshotService;
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(20))
@@ -219,13 +220,15 @@ public class AngelOneWebSocketService {
         }
     }
 
-    private void handleParsedTick(AngelOneTickParserService.NormalizedTick tick) {
+    void handleParsedTick(AngelOneTickParserService.NormalizedTick tick) {
         try {
             if (tick.symbol() == null || tick.exchange() == null || tick.tickTime() == null
                     || tick.lastPrice() == null) {
                 parserFailures++;
                 return;
             }
+
+            liveMarketSnapshotService.update(tick);
 
             liveMarketCandleService.ingestTick(
                     new LiveMarketCandleService.TickInput(
@@ -334,7 +337,7 @@ public class AngelOneWebSocketService {
         }
 
         int limit = Math.min(bytes.length, maxBytes);
-        StringBuilder sb = new StringBuilder(limit * 2);
+        StringBuilder sb = new StringBuilder(limit * 3);
 
         for (int i = 0; i < limit; i++) {
             sb.append(String.format("%02X", bytes[i]));
