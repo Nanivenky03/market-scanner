@@ -1,6 +1,8 @@
 package com.trading.scanner.scheduler;
 
 import com.trading.scanner.config.TimeProvider;
+import com.trading.scanner.service.engine.MarketStateService;
+import com.trading.scanner.service.engine.VolumeBaselineService;
 import com.trading.scanner.service.runtime.MarketCalendarService;
 import com.trading.scanner.service.runtime.RuntimeAlertService;
 import com.trading.scanner.service.runtime.RuntimeAutomationService;
@@ -19,6 +21,8 @@ public class MarketScheduler {
     private final RuntimeHousekeepingService runtimeHousekeepingService;
     private final RuntimeAlertService runtimeAlertService;
     private final MarketCalendarService marketCalendarService;
+    private final VolumeBaselineService volumeBaselineService;
+    private final MarketStateService marketStateService;
     private final TimeProvider timeProvider;
 
     @Scheduled(cron = "0 * * * * *", zone = "Asia/Kolkata")
@@ -51,6 +55,16 @@ public class MarketScheduler {
         runtimeHousekeepingService.scheduledHousekeeping();
     }
 
+    @Scheduled(cron = "0 * * * * *", zone = "Asia/Kolkata")
+    public void scheduledVolumeBaselinePreCalculation() {
+        volumeBaselineService.scheduledPreCalculateBaselines();
+    }
+
+    @Scheduled(cron = "0 * * * * *", zone = "Asia/Kolkata")
+    public void scheduledMarketStateUpdate() {
+        marketStateService.scheduledUpdate();
+    }
+
     @Scheduled(fixedDelayString = "${runtime.alert.evaluation-interval-ms:60000}", initialDelayString = "${runtime.alert.evaluation-interval-ms:60000}")
     public void scheduledAlertEvaluation() {
         runtimeAlertService.scheduledEvaluate();
@@ -61,7 +75,6 @@ public class MarketScheduler {
         try {
             MarketCalendarService.ScheduledCalendarRefreshResult result = marketCalendarService
                     .refreshFromOfficialSourceIfDue(timeProvider.nowDateTime());
-
             if (!"NO_ACTION".equals(result.action())) {
                 log.info("Scheduled market calendar refresh completed: {}", result);
             }

@@ -5,7 +5,6 @@ import com.trading.scanner.config.BreakoutRuleProperties;
 import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.service.indicators.IndicatorBundle;
 import com.trading.scanner.service.scanner.rules.BreakoutConfirmedRule;
-
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
@@ -17,23 +16,25 @@ import static org.junit.jupiter.api.Assertions.*;
 class BreakoutConfirmedRuleTest {
 
     private final BreakoutRuleProperties properties = new BreakoutRuleProperties(
-            21,     // lookbackWindow
-            14,     // rsiPeriod
-            20,     // smaShortPeriod
-            50,     // smaMediumPeriod
-            200,    // smaLongPeriod
-            50.0,   // rsiThresholdMatch
-            1.5,    // volumeMultiplierMatch
-            60.0,   // rsiThresholdConfidence
-            2.0,    // volumeMultiplierConfidence
-            0.5,    // baseConfidence
-            0.1,    // confidenceIncrement
-            1.0,    // maxConfidenceCap
-            0.05    // maxGap
+            21, // lookbackWindow
+            14, // rsiPeriod
+            20, // smaShortPeriod
+            50, // smaMediumPeriod
+            200, // smaLongPeriod
+            50.0, // rsiThresholdMatch
+            1.5, // volumeMultiplierMatch
+            60.0, // rsiThresholdConfidence
+            2.0, // volumeMultiplierConfidence
+            0.5, // baseConfidence
+            0.1, // confidenceIncrement
+            1.0, // maxConfidenceCap
+            0.05, // maxGap
+            null, // firstCandleVolumeMultiplierMin
+            null, // openingRangeParticipationMin
+            null // requiredRecentVolumeDirection
     );
 
-    private final BreakoutConfirmedRule rule =
-            new BreakoutConfirmedRule(new ObjectMapper(), properties);
+    private final BreakoutConfirmedRule rule = new BreakoutConfirmedRule(new ObjectMapper(), properties);
 
     @Test
     void matches_shouldReturnFalse_whenInsufficientHistory() {
@@ -48,7 +49,6 @@ class BreakoutConfirmedRuleTest {
     @Test
     void matches_shouldReturnFalse_whenIndicatorsMissing() {
         List<StockPrice> prices = buildPriceSeries(21, 103.0, 1800);
-
         IndicatorBundle indicators = IndicatorBundle.builder()
                 .aboveSma20(true)
                 .build();
@@ -91,7 +91,6 @@ class BreakoutConfirmedRuleTest {
     @Test
     void matches_shouldReturnFalse_whenRsiTooWeak() {
         List<StockPrice> prices = buildPriceSeries(21, 103.0, 1800);
-
         IndicatorBundle indicators = IndicatorBundle.builder()
                 .rsi(45.0)
                 .sma20(95.0)
@@ -119,11 +118,10 @@ class BreakoutConfirmedRuleTest {
     @Test
     void getConfidence_shouldIncreaseWithStrongConditions() {
         List<StockPrice> prices = buildPriceSeries(21, 103.0, 2500);
-
         IndicatorBundle indicators = IndicatorBundle.builder()
-                .rsi(65.0)              // above confidence threshold
+                .rsi(65.0)
                 .sma20(95.0)
-                .avgVolume20(1000L)     // today volume 2500 > 1000*2.0
+                .avgVolume20(1000L)
                 .aboveSma20(true)
                 .aboveSma50(true)
                 .aboveSma200(true)
@@ -152,8 +150,7 @@ class BreakoutConfirmedRuleTest {
                         "\"smaShortPeriod\":20," +
                         "\"volumeMultiplierConfidence\":2.0," +
                         "\"volumeMultiplierMatch\":1.5}",
-                snapshot
-        );
+                snapshot);
     }
 
     @Test

@@ -4,8 +4,14 @@ import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.MarketCandle;
+import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
+import com.trading.scanner.repository.StockPriceRepository;
+import com.trading.scanner.model.DayType;
+import com.trading.scanner.model.VolumeTimeWindowBaseline;
+import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,7 +21,6 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -27,6 +32,9 @@ public class DailyStockContextService {
 
     private final DailyStockContextRepository dailyStockContextRepository;
     private final MarketCandleRepository marketCandleRepository;
+    private final StockPriceRepository stockPriceRepository;
+    private final MarketStateService marketStateService;
+    private final VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
     private final TimeProvider timeProvider;
 
     @Transactional
@@ -71,13 +79,19 @@ public class DailyStockContextService {
                         .tradingDate(tradingDate)
                         .firstCandleReady(false)
                         .openingRangeReady(false)
+                        .corporateActionFlag(false)
+                        .foBanFlag(false)
+                        .resultsLast3dFlag(false)
+                        .skipToday(false)
                         .createdAt(timeProvider.nowDateTime())
                         .build());
 
+        ensurePreviousDayFactsAndGap(context, candle);
         applyFirstCandle(context, firstCandleWindow);
         applyOpeningRange(context, openingRangeWindow);
-        context.setUpdatedAt(timeProvider.nowDateTime());
+        resolveBreakoutReferencePrice(context);
 
+        context.setUpdatedAt(timeProvider.nowDateTime());
         dailyStockContextRepository.save(context);
     }
 
@@ -109,7 +123,30 @@ public class DailyStockContextService {
         context.setFirstCandleVolume(volume);
         context.setFirstCandleRange(high - low);
         context.setFirstCandleRangePct(low > 0 ? ((high - low) / low) * 100.0 : null);
-        context.setFirstCandleReady(candles.size() >= 5);
+
+        boolean ready = candles.size() >= 5;
+        context.setFirstCandleReady(ready);
+
+        if (!ready || low <= 0.0) {
+            context.setFirstCandleBullish(false);
+            context.setFirstCandleValid(false);
+            return;
+        }
+
+        Double open = context.getFirstCandleOpen();
+        Double close = context.getFirstCandleClose();
+        Double rangePct = context.getFirstCandleRangePct();
+
+        boolean bullish = close != null && open != null && close > open;
+        context.setFirstCandleBullish(bullish);
+
+        boolean valid = Boolean.TRUE.equals(bullish)
+                && rangePct != null
+                && rangePct >= 0.15
+                && rangePct <= 3.0
+                && volume >= 50_000L;
+
+        context.setFirstCandleValid(valid);
     }
 
     private void applyOpeningRange(DailyStockContext context, List<MarketCandle> candles) {
@@ -123,11 +160,183 @@ public class DailyStockContextService {
 
         double high = candles.stream().mapToDouble(MarketCandle::getHighPrice).max().orElse(first.getHighPrice());
         double low = candles.stream().mapToDouble(MarketCandle::getLowPrice).min().orElse(first.getLowPrice());
+        long volume = candles.stream()
+                .map(MarketCandle::getVolume)
+                .filter(v -> v != null)
+                .mapToLong(Long::longValue)
+                .sum();
 
         context.setOpeningRangeHigh(high);
         context.setOpeningRangeLow(low);
         context.setOpeningRangeSize(high - low);
         context.setOpeningRangeSizePct(low > 0 ? ((high - low) / low) * 100.0 : null);
-        context.setOpeningRangeReady(candles.size() >= 15);
+        context.setOpeningRangeVolume(volume);
+
+        boolean ready = candles.size() >= 15;
+        context.setOpeningRangeReady(ready);
+
+        if (!ready || low <= 0.0 || high <= low) {
+            context.setOpeningRangeSkew(null);
+            context.setOpeningRangeValid(false);
+            return;
+        }
+
+        double midpoint = (high + low) / 2.0;
+        double upperHalf = high - midpoint;
+        double lowerHalf = midpoint - low;
+
+        Double skew = (lowerHalf > 0.0) ? (upperHalf / lowerHalf) : null;
+        context.setOpeningRangeSkew(skew);
+
+        Double sizePct = context.getOpeningRangeSizePct();
+
+        // --- NEW: baseline participation check using V1.3.3 baselines ---
+        VolumeTimeWindowBaseline baseline = volumeTimeWindowBaselineRepository
+                .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
+                        context.getSymbol(),
+                        context.getExchange(),
+                        context.getTradingDate(),
+                        14 // session minute 14 = 9:29 AM
+                )
+                .orElse(null);
+
+        Long baselineVolume = baseline != null ? baseline.getAvgCumulativeVolume20() : null;
+        Double participationRatio = (baselineVolume != null && baselineVolume > 0L)
+                ? volume / (double) baselineVolume
+                : null;
+        // ---------------------------------------------------------------
+
+        boolean valid = sizePct != null
+                && sizePct >= 0.15
+                && sizePct <= 2.5
+                && skew != null
+                && skew >= 0.5
+                && skew <= 2.0
+                && participationRatio != null
+                && participationRatio >= 0.5;
+
+        context.setOpeningRangeValid(valid);
     }
+
+    private void ensurePreviousDayFactsAndGap(DailyStockContext context, MarketCandle todayFirstCandle) {
+        if (context.getPrevDayClose() != null) {
+            return;
+        }
+
+        LocalDate tradingDate = context.getTradingDate();
+        LocalDate prevDate = tradingDate.minusDays(1);
+
+        List<StockPrice> history = stockPriceRepository
+                .findBySymbolAndDateLessThanEqualOrderByDateAsc(context.getSymbol(), tradingDate);
+
+        if (history.isEmpty()) {
+            return;
+        }
+
+        // Previous day row
+        StockPrice prev = history.stream()
+                .filter(p -> tradingDate.minusDays(1).equals(p.getDate()))
+                .reduce((first, second) -> second)
+                .orElse(null);
+
+        if (prev == null) {
+            return;
+        }
+
+        Double prevOpen = prev.getOpenPrice();
+        Double prevHigh = prev.getHighPrice();
+        Double prevLow = prev.getLowPrice();
+        Double prevClose = prev.getClosePrice();
+
+        context.setPrevDayOpen(prevOpen);
+        context.setPrevDayHigh(prevHigh);
+        context.setPrevDayLow(prevLow);
+        context.setPrevDayClose(prevClose);
+
+        if (prevOpen != null && prevClose != null && prevOpen != 0.0) {
+            double prevRangePct = Math.abs(prevClose - prevOpen) / prevOpen * 100.0;
+            context.setPrevDayRangePct(prevRangePct);
+        }
+
+        // consecutive red/green days ending yesterday
+        int consecutiveRed = 0;
+        int consecutiveGreen = 0;
+
+        StockPrice prevIter = prev;
+        for (int i = history.size() - 2; i >= 0; i--) {
+            StockPrice current = history.get(i);
+            if (current.getClosePrice() == null || prevIter.getClosePrice() == null) {
+                break;
+            }
+
+            if (current.getClosePrice() < prevIter.getClosePrice()) {
+                if (consecutiveGreen > 0)
+                    break;
+                consecutiveRed++;
+            } else if (current.getClosePrice() > prevIter.getClosePrice()) {
+                if (consecutiveRed > 0)
+                    break;
+                consecutiveGreen++;
+            } else {
+                break;
+            }
+
+            prevIter = current;
+        }
+
+        context.setConsecutiveRedDays(consecutiveRed);
+        context.setConsecutiveGreenDays(consecutiveGreen);
+
+        // highestClose15d and distFromResistancePct
+        int fromIndex = Math.max(0, history.size() - 15);
+        List<StockPrice> last15 = history.subList(fromIndex, history.size());
+        double highestClose = last15.stream()
+                .map(StockPrice::getClosePrice)
+                .filter(c -> c != null)
+                .max(Double::compareTo)
+                .orElse(prevClose != null ? prevClose : 0.0);
+
+        context.setHighestClose15d(highestClose);
+
+        if (prevClose != null && prevClose != 0.0) {
+            double distFromResistancePct = (highestClose - prevClose) / prevClose * 100.0;
+            context.setDistFromResistancePct(distFromResistancePct);
+        }
+
+        // gapPct using today's first candle open
+        Double todayOpen = todayFirstCandle.getOpenPrice();
+        if (todayOpen != null && prevClose != null && prevClose != 0.0) {
+            double gapPct = (todayOpen - prevClose) / prevClose * 100.0;
+            context.setGapPct(gapPct);
+        }
+
+        // exclusion flags already defaulted to false in builder; skipToday is OR of
+        // them
+        boolean skipToday = Boolean.TRUE.equals(context.getCorporateActionFlag())
+                || Boolean.TRUE.equals(context.getFoBanFlag())
+                || Boolean.TRUE.equals(context.getResultsLast3dFlag());
+        context.setSkipToday(skipToday);
+    }
+
+    private void resolveBreakoutReferencePrice(DailyStockContext context) {
+        if (context.getBreakoutReferencePrice() != null) {
+            return;
+        }
+
+        var state = marketStateService.currentState();
+        if (state == null || state.dayType() == null) {
+            return;
+        }
+
+        DayType dayType = state.dayType();
+
+        if (dayType == DayType.NORMAL) {
+            context.setBreakoutReferencePrice(context.getPrevDayHigh());
+        } else if (dayType == DayType.GAP_UP) {
+            context.setBreakoutReferencePrice(context.getOpeningRangeHigh());
+        } else if (dayType == DayType.GAP_DOWN) {
+            context.setBreakoutReferencePrice(null);
+        }
+    }
+
 }

@@ -18,6 +18,7 @@ import java.util.Map;
 public class BreakoutSignalEvaluator {
 
     private final StrategyScoringService strategyScoringService;
+    private final VolumeEngineService volumeEngineService;
 
     public EvaluationSnapshot evaluate(
             StrategyYamlDefinition strategy,
@@ -57,17 +58,22 @@ public class BreakoutSignalEvaluator {
             return null;
         }
 
-        Double volumeRatio = computeVolumeRatio(candles, candles.size() - 1, 20);
+        VolumeEngineService.VolumeState volumeState = volumeEngineService.currentVolumeState(
+                current.getSymbol(),
+                current.getExchange(),
+                current.getCandleTime().toLocalDate());
+
+        Double volumeRatio = volumeState != null ? volumeState.volX() : null;
         if (volumeRatio == null || volumeRatio < strategy.breakout().volumeMultiplierMatch()) {
             return null;
         }
 
-        Double rsi = computeRsi(candles, candles.size() - 1, strategy.breakout().rsiPeriod());
+        Double rsi = current.getRsi14();
         if (rsi == null || rsi < strategy.breakout().rsiThresholdMatch()) {
             return null;
         }
 
-        Double vwap = computeIntradayVwap(candles, candles.size() - 1);
+        Double vwap = current.getVwap();
         if (vwap == null || close <= vwap) {
             return null;
         }
@@ -112,91 +118,6 @@ public class BreakoutSignalEvaluator {
             }
         }
         return previous;
-    }
-
-    private Double computeVolumeRatio(List<MarketCandle> candles, int currentIndex, int window) {
-        if (currentIndex < window) {
-            return null;
-        }
-
-        long currentVolume = candles.get(currentIndex).getVolume() != null ? candles.get(currentIndex).getVolume() : 0L;
-        if (currentVolume <= 0) {
-            return null;
-        }
-
-        double total = 0.0;
-        int count = 0;
-
-        for (int i = currentIndex - window; i < currentIndex; i++) {
-            Long volume = candles.get(i).getVolume();
-            if (volume != null) {
-                total += volume;
-                count++;
-            }
-        }
-
-        if (count == 0 || total <= 0.0) {
-            return null;
-        }
-
-        return currentVolume / (total / count);
-    }
-
-    private Double computeRsi(List<MarketCandle> candles, int currentIndex, int period) {
-        if (currentIndex < period) {
-            return null;
-        }
-
-        double gain = 0.0;
-        double loss = 0.0;
-
-        for (int i = currentIndex - period + 1; i <= currentIndex; i++) {
-            double change = candles.get(i).getClosePrice() - candles.get(i - 1).getClosePrice();
-            if (change > 0) {
-                gain += change;
-            } else {
-                loss += Math.abs(change);
-            }
-        }
-
-        double avgGain = gain / period;
-        double avgLoss = loss / period;
-
-        if (avgLoss == 0.0) {
-            return 100.0;
-        }
-
-        double rs = avgGain / avgLoss;
-        return 100.0 - (100.0 / (1.0 + rs));
-    }
-
-    private Double computeIntradayVwap(List<MarketCandle> candles, int currentIndex) {
-        LocalDate currentDate = candles.get(currentIndex).getCandleTime().toLocalDate();
-
-        double totalPriceVolume = 0.0;
-        long totalVolume = 0L;
-
-        for (int i = 0; i <= currentIndex; i++) {
-            MarketCandle candle = candles.get(i);
-
-            if (!currentDate.equals(candle.getCandleTime().toLocalDate())) {
-                continue;
-            }
-
-            if (candle.getVolume() == null || candle.getVolume() <= 0) {
-                continue;
-            }
-
-            double typicalPrice = (candle.getHighPrice() + candle.getLowPrice() + candle.getClosePrice()) / 3.0;
-            totalPriceVolume += typicalPrice * candle.getVolume();
-            totalVolume += candle.getVolume();
-        }
-
-        if (totalVolume == 0L) {
-            return null;
-        }
-
-        return totalPriceVolume / totalVolume;
     }
 
     private double computeCloseStrength(MarketCandle candle) {
