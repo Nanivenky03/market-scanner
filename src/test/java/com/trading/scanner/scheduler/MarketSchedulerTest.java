@@ -1,6 +1,8 @@
 package com.trading.scanner.scheduler;
 
 import com.trading.scanner.config.TimeProvider;
+import com.trading.scanner.service.engine.MarketStateService;
+import com.trading.scanner.service.engine.VolumeBaselineService;
 import com.trading.scanner.service.runtime.MarketCalendarService;
 import com.trading.scanner.service.runtime.RuntimeAlertService;
 import com.trading.scanner.service.runtime.RuntimeAutomationService;
@@ -18,6 +20,8 @@ class MarketSchedulerTest {
     private RuntimeHousekeepingService runtimeHousekeepingService;
     private RuntimeAlertService runtimeAlertService;
     private MarketCalendarService marketCalendarService;
+    private VolumeBaselineService volumeBaselineService;
+    private MarketStateService marketStateService;
     private TimeProvider timeProvider;
     private MarketScheduler marketScheduler;
 
@@ -27,6 +31,8 @@ class MarketSchedulerTest {
         runtimeHousekeepingService = mock(RuntimeHousekeepingService.class);
         runtimeAlertService = mock(RuntimeAlertService.class);
         marketCalendarService = mock(MarketCalendarService.class);
+        volumeBaselineService = mock(VolumeBaselineService.class);
+        marketStateService = mock(MarketStateService.class);
         timeProvider = mock(TimeProvider.class);
 
         marketScheduler = new MarketScheduler(
@@ -34,62 +40,68 @@ class MarketSchedulerTest {
                 runtimeHousekeepingService,
                 runtimeAlertService,
                 marketCalendarService,
+                volumeBaselineService,
+                marketStateService,
                 timeProvider);
     }
 
     @Test
     void scheduledBrokerWarmup_shouldDelegateToRuntimeAutomationService() {
         marketScheduler.scheduledBrokerWarmup();
-
         verify(runtimeAutomationService, times(1)).scheduledBrokerWarmup();
     }
 
     @Test
     void scheduledConnectAndSubscribe_shouldDelegateToRuntimeAutomationService() {
         marketScheduler.scheduledConnectAndSubscribe();
-
         verify(runtimeAutomationService, times(1)).scheduledConnectAndSubscribe();
     }
 
     @Test
     void scheduledRecoverLiveRuntime_shouldDelegateToRuntimeAutomationService() {
         marketScheduler.scheduledRecoverLiveRuntime();
-
         verify(runtimeAutomationService, times(1)).scheduledRecoverLiveRuntime();
     }
 
     @Test
     void scheduledConditionalFlushAndDisconnect_shouldDelegateToRuntimeAutomationService() {
         marketScheduler.scheduledConditionalFlushAndDisconnect();
-
         verify(runtimeAutomationService, times(1)).scheduledConditionalFlushAndDisconnect();
     }
 
     @Test
     void scheduledBrokerSessionClear_shouldDelegateToRuntimeAutomationService() {
         marketScheduler.scheduledBrokerSessionClear();
-
         verify(runtimeAutomationService, times(1)).scheduledBrokerSessionClear();
     }
 
     @Test
     void scheduledHousekeeping_shouldDelegateToRuntimeHousekeepingService() {
         marketScheduler.scheduledHousekeeping();
-
         verify(runtimeHousekeepingService, times(1)).scheduledHousekeeping();
+    }
+
+    @Test
+    void scheduledVolumeBaselinePreCalculation_shouldDelegateToVolumeBaselineService() {
+        marketScheduler.scheduledVolumeBaselinePreCalculation();
+        verify(volumeBaselineService, times(1)).scheduledPreCalculateBaselines();
+    }
+
+    @Test
+    void scheduledMarketStateUpdate_shouldDelegateToMarketStateService() {
+        marketScheduler.scheduledMarketStateUpdate();
+        verify(marketStateService, times(1)).scheduledUpdate();
     }
 
     @Test
     void scheduledAlertEvaluation_shouldDelegateToRuntimeAlertService() {
         marketScheduler.scheduledAlertEvaluation();
-
         verify(runtimeAlertService, times(1)).scheduledEvaluate();
     }
 
     @Test
     void scheduledCalendarRefresh_shouldDelegateToMarketCalendarService() {
         LocalDateTime now = LocalDateTime.of(2026, 7, 25, 10, 0);
-
         when(timeProvider.nowDateTime()).thenReturn(now);
         when(marketCalendarService.refreshFromOfficialSourceIfDue(now))
                 .thenReturn(new MarketCalendarService.ScheduledCalendarRefreshResult(

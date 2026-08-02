@@ -25,6 +25,12 @@ public interface MarketCandleRepository extends JpaRepository<MarketCandle, Inte
                         LocalDateTime from,
                         LocalDateTime to);
 
+        List<MarketCandle> findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
+                        String symbol,
+                        String exchange,
+                        CandleTimeframe timeframe,
+                        LocalDateTime candleTime);
+
         long countBySymbolAndExchangeAndTimeframeAndCandleTimeBetween(
                         String symbol,
                         String exchange,

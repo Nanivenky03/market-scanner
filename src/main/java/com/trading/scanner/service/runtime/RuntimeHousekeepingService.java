@@ -6,6 +6,8 @@ import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.LiveSimulationSignalRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
+import com.trading.scanner.repository.VolumeDailyBaselineRepository;
+import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
 import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +26,8 @@ public class RuntimeHousekeepingService {
     private final MarketCandleRepository marketCandleRepository;
     private final DailyStockContextRepository dailyStockContextRepository;
     private final LiveSimulationSignalRepository liveSimulationSignalRepository;
+    private final VolumeDailyBaselineRepository volumeDailyBaselineRepository;
+    private final VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
     private final WebSocketFrameCaptureService webSocketFrameCaptureService;
     private final RuntimeSettingService runtimeSettingService;
     private final RuntimeAutomationProperties runtimeAutomationProperties;
@@ -34,22 +38,21 @@ public class RuntimeHousekeepingService {
     @Transactional
     public HousekeepingResult runHousekeeping() {
         LocalDate today = timeProvider.today();
-
         LocalDateTime candleCutoff = today.minusDays(runtimeSettingService.retentionCandlesDays()).atStartOfDay();
         LocalDate contextCutoff = today.minusDays(runtimeSettingService.retentionCandlesDays());
         LocalDate liveSignalCutoff = today.minusDays(runtimeSettingService.retentionLiveSignalsDays());
 
         long deletedOneMinute = marketCandleRepository.deleteByTimeframeAndCandleTimeBefore(
                 CandleTimeframe.ONE_MINUTE, candleCutoff);
-
         long deletedFiveMinute = marketCandleRepository.deleteByTimeframeAndCandleTimeBefore(
                 CandleTimeframe.FIVE_MINUTE, candleCutoff);
-
         long deletedFifteenMinute = marketCandleRepository.deleteByTimeframeAndCandleTimeBefore(
                 CandleTimeframe.FIFTEEN_MINUTE, candleCutoff);
-
         long deletedDailyContext = dailyStockContextRepository.deleteByTradingDateBefore(contextCutoff);
         long deletedLiveSignals = liveSimulationSignalRepository.deleteBySignalDateBefore(liveSignalCutoff);
+        long deletedVolumeDailyBaselines = volumeDailyBaselineRepository.deleteByTradingDateBefore(contextCutoff);
+        long deletedVolumeTimeWindowBaselines = volumeTimeWindowBaselineRepository
+                .deleteByTradingDateBefore(contextCutoff);
 
         WebSocketFrameCaptureService.ClearResult frameClear = webSocketFrameCaptureService.clear();
 
@@ -62,6 +65,8 @@ public class RuntimeHousekeepingService {
                 deletedFifteenMinute,
                 deletedDailyContext,
                 deletedLiveSignals,
+                deletedVolumeDailyBaselines,
+                deletedVolumeTimeWindowBaselines,
                 frameClear.removed(),
                 "Housekeeping completed");
 
@@ -102,6 +107,8 @@ public class RuntimeHousekeepingService {
             long deletedFifteenMinuteCandles,
             long deletedDailyStockContexts,
             long deletedLiveSignals,
+            long deletedVolumeDailyBaselines,
+            long deletedVolumeTimeWindowBaselines,
             int clearedFrameBufferEntries,
             String message) {
     }
