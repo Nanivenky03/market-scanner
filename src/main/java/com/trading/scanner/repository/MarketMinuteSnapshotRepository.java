@@ -11,17 +11,24 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface MarketMinuteSnapshotRepository extends JpaRepository<MarketMinuteSnapshot, Integer> {
+public interface MarketMinuteSnapshotRepository
+                extends JpaRepository<MarketMinuteSnapshot, Integer> {
 
-    Optional<MarketMinuteSnapshot> findBySymbolAndExchangeAndMinuteTime(
-            String symbol,
-            String exchange,
-            LocalDateTime minuteTime);
+        Optional<MarketMinuteSnapshot> findBySymbolAndExchangeAndMinuteTime(
+                        String symbol,
+                        String exchange,
+                        LocalDateTime minuteTime);
 
-    Optional<MarketMinuteSnapshot> findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
-            String symbol,
-            String exchange,
-            LocalDate tradingDate);
+        Optional<MarketMinuteSnapshot> findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
+                        String symbol,
+                        String exchange,
+                        LocalDate tradingDate);
 
-    List<MarketMinuteSnapshot> findAllByOrderByUpdatedAtDesc(Pageable pageable);
+        List<MarketMinuteSnapshot> findBySymbolAndExchangeAndMinuteTimeBetweenOrderByMinuteTimeAsc(
+                        String symbol,
+                        String exchange,
+                        LocalDateTime from,
+                        LocalDateTime to);
+
+        List<MarketMinuteSnapshot> findAllByOrderByUpdatedAtDesc(Pageable pageable);
 }

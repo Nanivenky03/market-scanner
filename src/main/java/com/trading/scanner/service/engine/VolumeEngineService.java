@@ -1,5 +1,7 @@
 package com.trading.scanner.service.engine;
 
+import com.trading.scanner.model.CandleProcessingStatus;
+import com.trading.scanner.model.CandleQualityStatus;
 import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.MarketCandle;
@@ -17,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -29,21 +32,36 @@ import java.util.Optional;
 public class VolumeEngineService {
 
     private static final LocalTime MARKET_OPEN = LocalTime.of(9, 15);
+
+    private static final int MARKET_SESSION_MINUTES = 375;
+
     private static final int OPENING_RANGE_END_SESSION_MINUTE = 14;
+
     private static final int RECENT_DIRECTION_CANDLES = 3;
 
     private final MarketMinuteSnapshotRepository marketMinuteSnapshotRepository;
+
     private final VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
+
     private final VolumeDailyBaselineRepository volumeDailyBaselineRepository;
+
     private final DailyStockContextRepository dailyStockContextRepository;
+
     private final MarketCandleRepository marketCandleRepository;
 
     @Transactional(readOnly = true)
-    public VolumeState currentVolumeState(String symbol, String exchange, LocalDate tradingDate) {
+    public VolumeState currentVolumeState(
+            String symbol,
+            String exchange,
+            LocalDate tradingDate) {
+
         String normalizedSymbol = normalize(symbol);
+
         String normalizedExchange = normalize(exchange);
 
-        if (normalizedSymbol == null || normalizedExchange == null || tradingDate == null) {
+        if (normalizedSymbol == null
+                || normalizedExchange == null
+                || tradingDate == null) {
             return null;
         }
 
@@ -58,14 +76,27 @@ public class VolumeEngineService {
         }
 
         MarketMinuteSnapshot snapshot = snapshotOpt.get();
-        int sessionMinute = sessionMinute(snapshot.getMinuteTime().toLocalTime());
+
+        LocalDateTime snapshotTime = snapshot.getMinuteTime();
+
+        if (snapshotTime == null
+                || !tradingDate.equals(
+                        snapshotTime.toLocalDate())) {
+            return null;
+        }
+
+        Integer currentSessionMinute = sessionMinute(snapshotTime.toLocalTime());
+
+        if (currentSessionMinute == null) {
+            return null;
+        }
 
         VolumeTimeWindowBaseline currentBaseline = volumeTimeWindowBaselineRepository
                 .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
                         normalizedSymbol,
                         normalizedExchange,
                         tradingDate,
-                        sessionMinute)
+                        currentSessionMinute)
                 .orElse(null);
 
         VolumeDailyBaseline dailyBaseline = volumeDailyBaselineRepository
@@ -91,37 +122,61 @@ public class VolumeEngineService {
                 .orElse(null);
 
         Long currentCumulativeVolume = snapshot.getVolumeTradedForDay();
-        Long baselineCumulativeVolume = currentBaseline != null ? currentBaseline.getAvgCumulativeVolume20() : null;
-        Double volX = ratio(currentCumulativeVolume, baselineCumulativeVolume);
 
-        Long openingRangeVolume = dailyContext != null ? dailyContext.getOpeningRangeVolume() : null;
-        Long openingRangeBaselineVolume = openingRangeBaseline != null
-                ? openingRangeBaseline.getAvgCumulativeVolume20()
-                : null;
-        Double openingRangeParticipationRatio = ratio(openingRangeVolume, openingRangeBaselineVolume);
+        Long baselineCumulativeVolume = currentBaseline == null
+                ? null
+                : currentBaseline
+                        .getAvgCumulativeVolume20();
+
+        Double volX = ratio(
+                currentCumulativeVolume,
+                baselineCumulativeVolume);
+
+        Long openingRangeVolume = dailyContext == null
+                ? null
+                : dailyContext
+                        .getOpeningRangeVolume();
+
+        Long openingRangeBaselineVolume = openingRangeBaseline == null
+                ? null
+                : openingRangeBaseline
+                        .getAvgCumulativeVolume20();
+
+        Double openingRangeParticipationRatio = ratio(
+                openingRangeVolume,
+                openingRangeBaselineVolume);
 
         String recentVolumeDirection = resolveRecentVolumeDirection(
                 normalizedSymbol,
                 normalizedExchange,
-                snapshot.getMinuteTime());
+                tradingDate,
+                snapshotTime);
 
         return new VolumeState(
                 normalizedSymbol,
                 normalizedExchange,
                 tradingDate,
-                snapshot.getMinuteTime(),
-                sessionMinute,
+                snapshotTime,
+                currentSessionMinute,
                 currentCumulativeVolume,
                 baselineCumulativeVolume,
                 volX,
-                dailyBaseline != null ? dailyBaseline.getAvgDailyVolume20() : null,
+                dailyBaseline == null
+                        ? null
+                        : dailyBaseline
+                                .getAvgDailyVolume20(),
                 openingRangeVolume,
                 openingRangeBaselineVolume,
                 openingRangeParticipationRatio,
                 recentVolumeDirection);
     }
 
-    private String resolveRecentVolumeDirection(String symbol, String exchange, java.time.LocalDateTime candleTime) {
+    private String resolveRecentVolumeDirection(
+            String symbol,
+            String exchange,
+            LocalDate tradingDate,
+            LocalDateTime candleTime) {
+
         List<MarketCandle> recentDesc = marketCandleRepository
                 .findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
                         symbol,
@@ -129,55 +184,105 @@ public class VolumeEngineService {
                         CandleTimeframe.ONE_MINUTE,
                         candleTime);
 
-        if (recentDesc.size() < RECENT_DIRECTION_CANDLES) {
+        if (recentDesc == null) {
             return "INSUFFICIENT_DATA";
         }
 
-        List<MarketCandle> recent = new ArrayList<>(recentDesc.subList(0, RECENT_DIRECTION_CANDLES));
-        Collections.reverse(recent);
+        List<MarketCandle> recent = recentDesc.stream()
+                .filter(this::isUsableOneMinuteCandle)
+                .filter(candle -> candle.getCandleTime()
+                        .toLocalDate()
+                        .equals(tradingDate))
+                .filter(candle -> candle.getVolume() != null
+                        && candle.getVolume() >= 0L)
+                .limit(RECENT_DIRECTION_CANDLES)
+                .toList();
 
-        long first = volume(recent.get(0));
-        long second = volume(recent.get(1));
-        long third = volume(recent.get(2));
+        if (recent.size() < RECENT_DIRECTION_CANDLES) {
+            return "INSUFFICIENT_DATA";
+        }
 
-        if (first < second && second < third) {
+        List<MarketCandle> chronological = new ArrayList<>(recent);
+
+        Collections.reverse(chronological);
+
+        long first = chronological.get(0).getVolume();
+
+        long second = chronological.get(1).getVolume();
+
+        long third = chronological.get(2).getVolume();
+
+        if (first < second
+                && second < third) {
             return "UP";
         }
 
-        if (first > second && second > third) {
+        if (first > second
+                && second > third) {
             return "DOWN";
         }
 
         return "FLAT";
     }
 
-    private int sessionMinute(LocalTime candleTime) {
-        if (candleTime == null || candleTime.isBefore(MARKET_OPEN)) {
-            return 0;
-        }
-        return (int) Duration.between(MARKET_OPEN, candleTime).toMinutes();
-    }
+    private Integer sessionMinute(
+            LocalTime candleTime) {
 
-    private long volume(MarketCandle candle) {
-        return candle.getVolume() != null ? candle.getVolume() : 0L;
-    }
-
-    private Double ratio(Long numerator, Long denominator) {
-        if (numerator == null || denominator == null || denominator <= 0L) {
+        if (candleTime == null) {
             return null;
         }
+
+        long elapsed = Duration.between(
+                MARKET_OPEN,
+                candleTime)
+                .toMinutes();
+
+        if (elapsed < 0
+                || elapsed >= MARKET_SESSION_MINUTES) {
+            return null;
+        }
+
+        return Math.toIntExact(elapsed);
+    }
+
+    private Double ratio(
+            Long numerator,
+            Long denominator) {
+
+        if (numerator == null
+                || denominator == null
+                || numerator < 0L
+                || denominator <= 0L) {
+            return null;
+        }
+
         return numerator / (double) denominator;
     }
 
+    private boolean isUsableOneMinuteCandle(
+            MarketCandle candle) {
+
+        return candle != null
+                && candle.getCandleTime() != null
+                && Boolean.TRUE.equals(
+                        candle.getIsFinalized())
+                && candle.getQualityStatus() != CandleQualityStatus.SUSPECT
+                && (candle.getProcessingStatus() == null
+                        || candle.getProcessingStatus() == CandleProcessingStatus.RELEASED);
+    }
+
     private String normalize(String value) {
-        return value == null || value.isBlank() ? null : value.trim().toUpperCase(Locale.ROOT);
+        return value == null || value.isBlank()
+                ? null
+                : value.trim()
+                        .toUpperCase(Locale.ROOT);
     }
 
     public record VolumeState(
             String symbol,
             String exchange,
             LocalDate tradingDate,
-            java.time.LocalDateTime snapshotMinuteTime,
+            LocalDateTime snapshotMinuteTime,
             int sessionMinute,
             Long currentCumulativeVolume,
             Long baselineCumulativeVolume,

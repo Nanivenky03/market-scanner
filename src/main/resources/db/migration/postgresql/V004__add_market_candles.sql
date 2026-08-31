@@ -14,23 +14,40 @@ CREATE TABLE market_candles (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     is_finalized BOOLEAN NOT NULL DEFAULT TRUE,
-    quality_status TEXT NOT NULL DEFAULT 'VALID',
+    quality_status TEXT NOT NULL DEFAULT 'LIVE',
     CONSTRAINT uq_market_candles_symbol_exchange_timeframe_time
         UNIQUE (symbol, exchange, timeframe, candle_time),
-    CONSTRAINT ck_market_candles_exchange CHECK (exchange IN ('NSE')),
+    CONSTRAINT ck_market_candles_exchange CHECK (
+        exchange IN ('NSE')
+    ),
     CONSTRAINT ck_market_candles_timeframe CHECK (
-        timeframe IN ('ONE_MINUTE', 'FIVE_MINUTE', 'FIFTEEN_MINUTE', 'THIRTY_MINUTE', 'ONE_HOUR', 'DAILY')
+        timeframe IN (
+            'ONE_MINUTE',
+            'FIVE_MINUTE',
+            'FIFTEEN_MINUTE',
+            'THIRTY_MINUTE',
+            'ONE_HOUR',
+            'DAILY'
+        )
     ),
     CONSTRAINT ck_market_candles_quality_status CHECK (
-        quality_status IN ('VALID', 'SUSPECT', 'RECOVERED')
+        quality_status IN (
+            'LIVE',
+            'REPAIRED',
+            'RECONCILED',
+            'SUSPECT'
+        )
     )
 );
+
 
 CREATE INDEX idx_market_candles_symbol_timeframe_time
     ON market_candles(symbol, timeframe, candle_time);
 
+
 CREATE INDEX idx_market_candles_timeframe_time
     ON market_candles(timeframe, candle_time);
+
 
 CREATE INDEX idx_market_candles_symbol_time
     ON market_candles(symbol, candle_time);

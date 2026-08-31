@@ -146,4 +146,9 @@ public class DailyStockContext {
     @Column(name = "updated_at", nullable = false, columnDefinition = "TEXT")
     @Convert(converter = LocalDateTimeConverter.class)
     private LocalDateTime updatedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "context_status", nullable = false)
+    @Builder.Default
+    private ContextStatus contextStatus = ContextStatus.NOT_STARTED;
 }

@@ -106,52 +106,93 @@ public class RuntimeAutomationService {
         LocalDateTime now = timeProvider.nowDateTime();
         LocalTime currentTime = now.toLocalTime();
 
-        String previousLifecycleState = runtimeSettingService.getString(KEY_LIFECYCLE_STATE, STATE_STOPPED);
-        String previousShutdownAt = runtimeSettingService.getString(KEY_LAST_SHUTDOWN_AT, "");
-        String previousShutdownGraceful = runtimeSettingService.getString(KEY_LAST_SHUTDOWN_GRACEFUL, "true");
+        String previousLifecycleState = runtimeSettingService.getString(
+                KEY_LIFECYCLE_STATE,
+                STATE_STOPPED);
+
+        String previousShutdownAt = runtimeSettingService.getString(
+                KEY_LAST_SHUTDOWN_AT,
+                "");
+
+        String previousShutdownGraceful = runtimeSettingService.getString(
+                KEY_LAST_SHUTDOWN_GRACEFUL,
+                "true");
 
         markLifecycleState(STATE_STARTING);
         recordStartup(now);
 
-        if (!STATE_STOPPED.equals(previousLifecycleState) || !"true".equalsIgnoreCase(previousShutdownGraceful)) {
+        if (!STATE_STOPPED.equals(previousLifecycleState)
+                || !"true".equalsIgnoreCase(
+                        previousShutdownGraceful)) {
+
             startupRecoveryWarning = "Previous runtime ended uncleanly. previousLifecycleState="
-                    + previousLifecycleState + ", previousShutdownAt=" + previousShutdownAt;
+                    + previousLifecycleState
+                    + ", previousShutdownAt="
+                    + previousShutdownAt;
+
             log.warn(startupRecoveryWarning);
         } else {
             startupRecoveryWarning = null;
         }
 
-        if (!runtimeReadinessService.isTradingDay(now.toLocalDate())) {
+        if (!runtimeReadinessService.isTradingDay(
+                now.toLocalDate())) {
+
             markLifecycleState(STATE_RUNNING);
+
             return new RuntimeActionResult(
                     "STARTUP_RECONCILE",
                     angelOneWebSocketService.status().connected(),
                     0,
                     liveMarketCandleService.openCandles().size(),
-                    "Startup reconcile completed. Non-trading day detected, no broker/websocket actions executed");
+                    "Startup reconcile completed. Non-trading day detected");
+        }
+
+        if (!runtimeReadinessService.bootstrapReady()) {
+            markLifecycleState(STATE_RUNNING);
+
+            return new RuntimeActionResult(
+                    "STARTUP_WAITING_FOR_BOOTSTRAP",
+                    angelOneWebSocketService.status().connected(),
+                    0,
+                    liveMarketCandleService.openCandles().size(),
+                    "Live runtime remains disabled until historical bootstrap completes");
         }
 
         LocalTime loginTime = runtimeSettingService.loginTime();
+
         LocalTime websocketConnectTime = runtimeSettingService.websocketConnectTime();
+
         LocalTime websocketDisconnectTime = runtimeSettingService.websocketDisconnectTime();
+
         LocalTime brokerDisconnectTime = runtimeSettingService.angeloneDisconnectTime();
 
         boolean warmed = false;
         boolean connected = false;
 
-        if (!currentTime.isBefore(loginTime) && currentTime.isBefore(brokerDisconnectTime)) {
-            if (!angelOneSessionService.sessionStatus().cachedSessionPresent()) {
+        if (!currentTime.isBefore(loginTime)
+                && currentTime.isBefore(brokerDisconnectTime)) {
+
+            if (!angelOneSessionService
+                    .sessionStatus()
+                    .cachedSessionPresent()) {
+
                 warmUpBrokerSession();
                 warmed = true;
             }
         }
 
-        if (!currentTime.isBefore(websocketConnectTime) && currentTime.isBefore(websocketDisconnectTime)) {
+        if (!currentTime.isBefore(websocketConnectTime)
+                && currentTime.isBefore(websocketDisconnectTime)) {
+
             if (!angelOneWebSocketService.status().connected()) {
-                if (!angelOneSessionService.sessionStatus().cachedSessionPresent()) {
+                if (!angelOneSessionService
+                        .sessionStatus()
+                        .cachedSessionPresent()) {
                     warmUpBrokerSession();
                     warmed = true;
                 }
+
                 connectAndSubscribe();
                 connected = true;
             }
@@ -164,7 +205,10 @@ public class RuntimeAutomationService {
                 angelOneWebSocketService.status().connected(),
                 0,
                 liveMarketCandleService.openCandles().size(),
-                "Startup reconcile completed. warmedSession=" + warmed + ", connectedWebsocket=" + connected);
+                "Startup reconcile completed. warmedSession="
+                        + warmed
+                        + ", connectedWebsocket="
+                        + connected);
     }
 
     public RuntimeActionResult recoverLiveRuntimeIfNeeded() {
@@ -297,27 +341,96 @@ public class RuntimeAutomationService {
     }
 
     public void scheduledBrokerWarmup() {
-        if (!runtimeAutomationProperties.getLive().isAutoRun()) {
+        if (!runtimeAutomationProperties
+                .getLive()
+                .isAutoRun()) {
             return;
         }
 
         LocalDateTime nowDateTime = timeProvider.nowDateTime();
-        if (!runtimeReadinessService.isTradingDay(nowDateTime.toLocalDate())) {
+
+        if (!runtimeReadinessService
+                .isTradingDay(nowDateTime.toLocalDate())) {
             return;
         }
 
         LocalTime now = nowDateTime.toLocalTime();
+
         LocalTime loginTime = runtimeSettingService.loginTime();
 
-        if (now.getHour() != loginTime.getHour() || now.getMinute() != loginTime.getMinute()) {
+        if (now.getHour() != loginTime.getHour()
+                || now.getMinute() != loginTime.getMinute()) {
             return;
         }
 
         try {
             RuntimeActionResult result = warmUpBrokerSession();
-            log.info("Scheduled broker session warmup completed: {}", result);
+
+            log.info(
+                    "Scheduled broker session warmup completed: {}",
+                    result);
         } catch (Exception ex) {
-            log.warn("Scheduled broker session warmup failed: {}", ex.getMessage(), ex);
+            log.warn(
+                    "Scheduled broker session warmup failed: {}",
+                    ex.getMessage(),
+                    ex);
+
+            throw new IllegalStateException(
+                    "Scheduled broker session warmup failed",
+                    ex);
+        }
+    }
+
+    public void scheduledBrokerSessionClear() {
+        if (!runtimeAutomationProperties
+                .getLive()
+                .isAutoRun()) {
+            return;
+        }
+
+        LocalDateTime nowDateTime = timeProvider.nowDateTime();
+
+        if (!runtimeReadinessService
+                .isTradingDay(nowDateTime.toLocalDate())) {
+            return;
+        }
+
+        LocalTime now = nowDateTime.toLocalTime();
+
+        LocalTime brokerDisconnectTime = runtimeSettingService
+                .angeloneDisconnectTime();
+
+        if (now.isBefore(brokerDisconnectTime)) {
+            return;
+        }
+
+        if (angelOneWebSocketService
+                .status()
+                .connected()) {
+            return;
+        }
+
+        if (!angelOneSessionService
+                .sessionStatus()
+                .cachedSessionPresent()) {
+            return;
+        }
+
+        try {
+            RuntimeActionResult result = clearBrokerSession();
+
+            log.info(
+                    "Scheduled broker session clear completed: {}",
+                    result);
+        } catch (Exception ex) {
+            log.warn(
+                    "Scheduled broker session clear failed: {}",
+                    ex.getMessage(),
+                    ex);
+
+            throw new IllegalStateException(
+                    "Scheduled broker session clear failed",
+                    ex);
         }
     }
 
@@ -415,39 +528,6 @@ public class RuntimeAutomationService {
             nextWebsocketCloseCheckAt = now.plusMinutes(runtimeSettingService.websocketCloseRecheckMinutes());
             log.info("Websocket still active after close-check time. idleMinutes={}, nextCheckAt={}",
                     idleForMinutes, nextWebsocketCloseCheckAt);
-        }
-    }
-
-    public void scheduledBrokerSessionClear() {
-        if (!runtimeAutomationProperties.getLive().isAutoRun()) {
-            return;
-        }
-
-        LocalDateTime nowDateTime = timeProvider.nowDateTime();
-        if (!runtimeReadinessService.isTradingDay(nowDateTime.toLocalDate())) {
-            return;
-        }
-
-        LocalTime now = nowDateTime.toLocalTime();
-        LocalTime brokerDisconnectTime = runtimeSettingService.angeloneDisconnectTime();
-
-        if (now.isBefore(brokerDisconnectTime)) {
-            return;
-        }
-
-        if (angelOneWebSocketService.status().connected()) {
-            return;
-        }
-
-        if (!angelOneSessionService.sessionStatus().cachedSessionPresent()) {
-            return;
-        }
-
-        try {
-            RuntimeActionResult result = clearBrokerSession();
-            log.info("Scheduled broker session clear completed: {}", result);
-        } catch (Exception ex) {
-            log.warn("Scheduled broker session clear failed: {}", ex.getMessage(), ex);
         }
     }
 

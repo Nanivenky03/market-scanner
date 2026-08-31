@@ -1,5 +1,7 @@
 package com.trading.scanner.service.engine;
 
+import com.trading.scanner.model.CandleProcessingStatus;
+import com.trading.scanner.model.CandleQualityStatus;
 import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.MarketCandle;
@@ -21,176 +23,353 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class VolumeEngineServiceTest {
 
-    private MarketMinuteSnapshotRepository marketMinuteSnapshotRepository;
-    private VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
-    private VolumeDailyBaselineRepository volumeDailyBaselineRepository;
-    private DailyStockContextRepository dailyStockContextRepository;
-    private MarketCandleRepository marketCandleRepository;
-    private VolumeEngineService service;
+        private MarketMinuteSnapshotRepository marketMinuteSnapshotRepository;
 
-    @BeforeEach
-    void setUp() {
-        marketMinuteSnapshotRepository = mock(MarketMinuteSnapshotRepository.class);
-        volumeTimeWindowBaselineRepository = mock(VolumeTimeWindowBaselineRepository.class);
-        volumeDailyBaselineRepository = mock(VolumeDailyBaselineRepository.class);
-        dailyStockContextRepository = mock(DailyStockContextRepository.class);
-        marketCandleRepository = mock(MarketCandleRepository.class);
+        private VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
 
-        service = new VolumeEngineService(
-                marketMinuteSnapshotRepository,
-                volumeTimeWindowBaselineRepository,
-                volumeDailyBaselineRepository,
-                dailyStockContextRepository,
-                marketCandleRepository);
-    }
+        private VolumeDailyBaselineRepository volumeDailyBaselineRepository;
 
-    @Test
-    void currentVolumeState_shouldReturnNullWhenSnapshotMissing() {
-        LocalDate tradingDate = LocalDate.of(2026, 7, 15);
+        private DailyStockContextRepository dailyStockContextRepository;
 
-        when(marketMinuteSnapshotRepository.findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
-                "ONGC", "NSE", tradingDate)).thenReturn(Optional.empty());
+        private MarketCandleRepository marketCandleRepository;
 
-        assertNull(service.currentVolumeState("ONGC", "NSE", tradingDate));
-    }
+        private VolumeEngineService service;
 
-    @Test
-    void currentVolumeState_shouldComputeVolXAndOpeningRangeParticipationAndDirection() {
-        LocalDate tradingDate = LocalDate.of(2026, 7, 15);
-        LocalDateTime minuteTime = LocalDateTime.of(2026, 7, 15, 9, 45);
+        @BeforeEach
+        void setUp() {
+                marketMinuteSnapshotRepository = mock(MarketMinuteSnapshotRepository.class);
 
-        when(marketMinuteSnapshotRepository.findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
-                "ONGC", "NSE", tradingDate))
-                .thenReturn(Optional.of(MarketMinuteSnapshot.builder()
-                        .symbol("ONGC")
-                        .exchange("NSE")
-                        .tradingDate(tradingDate)
-                        .minuteTime(minuteTime)
-                        .latestTickTime(LocalDateTime.of(2026, 7, 15, 9, 45, 58))
-                        .volumeTradedForDay(150000L)
-                        .build()));
+                volumeTimeWindowBaselineRepository = mock(VolumeTimeWindowBaselineRepository.class);
 
-        when(volumeTimeWindowBaselineRepository.findBySymbolAndExchangeAndTradingDateAndSessionMinute(
-                "ONGC", "NSE", tradingDate, 30))
-                .thenReturn(Optional.of(VolumeTimeWindowBaseline.builder()
-                        .symbol("ONGC")
-                        .exchange("NSE")
-                        .tradingDate(tradingDate)
-                        .sessionMinute(30)
-                        .avgCumulativeVolume20(100000L)
-                        .sampleDays(20)
-                        .build()));
+                volumeDailyBaselineRepository = mock(VolumeDailyBaselineRepository.class);
 
-        when(volumeDailyBaselineRepository.findBySymbolAndExchangeAndTradingDate(
-                "ONGC", "NSE", tradingDate))
-                .thenReturn(Optional.of(VolumeDailyBaseline.builder()
-                        .symbol("ONGC")
-                        .exchange("NSE")
-                        .tradingDate(tradingDate)
-                        .avgDailyVolume20(500000L)
-                        .sampleDays(20)
-                        .build()));
+                dailyStockContextRepository = mock(DailyStockContextRepository.class);
 
-        when(dailyStockContextRepository.findBySymbolAndExchangeAndTradingDate(
-                "ONGC", "NSE", tradingDate))
-                .thenReturn(Optional.of(DailyStockContext.builder()
-                        .symbol("ONGC")
-                        .exchange("NSE")
-                        .tradingDate(tradingDate)
-                        .openingRangeVolume(45000L)
-                        .build()));
+                marketCandleRepository = mock(MarketCandleRepository.class);
 
-        when(volumeTimeWindowBaselineRepository.findBySymbolAndExchangeAndTradingDateAndSessionMinute(
-                "ONGC", "NSE", tradingDate, 14))
-                .thenReturn(Optional.of(VolumeTimeWindowBaseline.builder()
-                        .symbol("ONGC")
-                        .exchange("NSE")
-                        .tradingDate(tradingDate)
-                        .sessionMinute(14)
-                        .avgCumulativeVolume20(60000L)
-                        .sampleDays(20)
-                        .build()));
+                service = new VolumeEngineService(
+                                marketMinuteSnapshotRepository,
+                                volumeTimeWindowBaselineRepository,
+                                volumeDailyBaselineRepository,
+                                dailyStockContextRepository,
+                                marketCandleRepository);
+        }
 
-        when(marketCandleRepository
-                .findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
-                        "ONGC", "NSE", CandleTimeframe.ONE_MINUTE, minuteTime))
-                .thenReturn(List.of(
-                        oneMinute(minuteTime, 120L),
-                        oneMinute(minuteTime.minusMinutes(1), 100L),
-                        oneMinute(minuteTime.minusMinutes(2), 80L)));
+        @Test
+        void currentVolumeState_shouldReturnNullWhenSnapshotMissing() {
+                LocalDate date = LocalDate.of(2026, 7, 15);
 
-        VolumeEngineService.VolumeState state = service.currentVolumeState("ONGC", "NSE", tradingDate);
+                when(marketMinuteSnapshotRepository
+                                .findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
+                                                "ONGC",
+                                                "NSE",
+                                                date))
+                                .thenReturn(Optional.empty());
 
-        assertEquals("ONGC", state.symbol());
-        assertEquals("NSE", state.exchange());
-        assertEquals(30, state.sessionMinute());
-        assertEquals(150000L, state.currentCumulativeVolume());
-        assertEquals(100000L, state.baselineCumulativeVolume());
-        assertEquals(1.5, state.volX(), 0.000001);
-        assertEquals(500000L, state.avgDailyVolume20());
-        assertEquals(45000L, state.openingRangeVolume());
-        assertEquals(60000L, state.openingRangeBaselineVolume());
-        assertEquals(0.75, state.openingRangeParticipationRatio(), 0.000001);
-        assertEquals("UP", state.recentVolumeDirection());
-    }
+                assertNull(
+                                service.currentVolumeState(
+                                                "ONGC",
+                                                "NSE",
+                                                date));
+        }
 
-    @Test
-    void currentVolumeState_shouldReturnFlatWhenRecentVolumesAreMixed() {
-        LocalDate tradingDate = LocalDate.of(2026, 7, 15);
-        LocalDateTime minuteTime = LocalDateTime.of(2026, 7, 15, 10, 0);
+        @Test
+        void currentVolumeState_shouldUseMinute14Baseline() {
+                LocalDate date = LocalDate.of(2026, 7, 15);
 
-        when(marketMinuteSnapshotRepository.findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
-                "ONGC", "NSE", tradingDate))
-                .thenReturn(Optional.of(MarketMinuteSnapshot.builder()
-                        .symbol("ONGC")
-                        .exchange("NSE")
-                        .tradingDate(tradingDate)
-                        .minuteTime(minuteTime)
-                        .latestTickTime(LocalDateTime.of(2026, 7, 15, 10, 0, 58))
-                        .volumeTradedForDay(200000L)
-                        .build()));
+                LocalDateTime minuteTime = date.atTime(9, 29);
 
-        when(volumeTimeWindowBaselineRepository.findBySymbolAndExchangeAndTradingDateAndSessionMinute(
-                anyString(), anyString(), any(LocalDate.class), anyInt()))
-                .thenReturn(Optional.empty());
-        when(volumeDailyBaselineRepository.findBySymbolAndExchangeAndTradingDate(
-                anyString(), anyString(), any(LocalDate.class)))
-                .thenReturn(Optional.empty());
-        when(dailyStockContextRepository.findBySymbolAndExchangeAndTradingDate(
-                anyString(), anyString(), any(LocalDate.class)))
-                .thenReturn(Optional.empty());
+                when(marketMinuteSnapshotRepository
+                                .findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
+                                                "ONGC",
+                                                "NSE",
+                                                date))
+                                .thenReturn(Optional.of(
+                                                MarketMinuteSnapshot.builder()
+                                                                .symbol("ONGC")
+                                                                .exchange("NSE")
+                                                                .tradingDate(date)
+                                                                .minuteTime(minuteTime)
+                                                                .latestTickTime(
+                                                                                date.atTime(
+                                                                                                9,
+                                                                                                29,
+                                                                                                58))
+                                                                .volumeTradedForDay(50_000L)
+                                                                .build()));
 
-        when(marketCandleRepository
-                .findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
-                        "ONGC", "NSE", CandleTimeframe.ONE_MINUTE, minuteTime))
-                .thenReturn(List.of(
-                        oneMinute(minuteTime, 100L),
-                        oneMinute(minuteTime.minusMinutes(1), 120L),
-                        oneMinute(minuteTime.minusMinutes(2), 80L)));
+                when(volumeTimeWindowBaselineRepository
+                                .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
+                                                "ONGC",
+                                                "NSE",
+                                                date,
+                                                14))
+                                .thenReturn(Optional.of(
+                                                VolumeTimeWindowBaseline.builder()
+                                                                .symbol("ONGC")
+                                                                .exchange("NSE")
+                                                                .tradingDate(date)
+                                                                .sessionMinute(14)
+                                                                .avgCumulativeVolume20(40_000L)
+                                                                .sampleDays(20)
+                                                                .build()));
 
-        VolumeEngineService.VolumeState state = service.currentVolumeState("ONGC", "NSE", tradingDate);
+                when(volumeDailyBaselineRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "ONGC",
+                                                "NSE",
+                                                date))
+                                .thenReturn(Optional.of(
+                                                VolumeDailyBaseline.builder()
+                                                                .symbol("ONGC")
+                                                                .exchange("NSE")
+                                                                .tradingDate(date)
+                                                                .avgDailyVolume20(500_000L)
+                                                                .sampleDays(20)
+                                                                .build()));
 
-        assertEquals("FLAT", state.recentVolumeDirection());
-        assertNull(state.volX());
-        assertNull(state.openingRangeParticipationRatio());
-    }
+                when(dailyStockContextRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "ONGC",
+                                                "NSE",
+                                                date))
+                                .thenReturn(Optional.of(
+                                                DailyStockContext.builder()
+                                                                .symbol("ONGC")
+                                                                .exchange("NSE")
+                                                                .tradingDate(date)
+                                                                .openingRangeVolume(45_000L)
+                                                                .build()));
 
-    private MarketCandle oneMinute(LocalDateTime candleTime, long volume) {
-        return MarketCandle.builder()
-                .symbol("ONGC")
-                .exchange("NSE")
-                .timeframe(CandleTimeframe.ONE_MINUTE)
-                .candleTime(candleTime)
-                .openPrice(100.0)
-                .highPrice(101.0)
-                .lowPrice(99.0)
-                .closePrice(100.5)
-                .volume(volume)
-                .isFinalized(true)
-                .build();
-    }
+                when(marketCandleRepository
+                                .findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
+                                                "ONGC",
+                                                "NSE",
+                                                CandleTimeframe.ONE_MINUTE,
+                                                minuteTime))
+                                .thenReturn(List.of(
+                                                oneMinute(
+                                                                minuteTime,
+                                                                120L),
+                                                oneMinute(
+                                                                minuteTime.minusMinutes(1),
+                                                                100L),
+                                                oneMinute(
+                                                                minuteTime.minusMinutes(2),
+                                                                80L)));
+
+                VolumeEngineService.VolumeState state = service.currentVolumeState(
+                                "ONGC",
+                                "NSE",
+                                date);
+
+                assertEquals(
+                                14,
+                                state.sessionMinute());
+
+                assertEquals(
+                                50_000L,
+                                state.currentCumulativeVolume());
+
+                assertEquals(
+                                40_000L,
+                                state.baselineCumulativeVolume());
+
+                assertEquals(
+                                1.25,
+                                state.volX(),
+                                0.000001);
+
+                assertEquals(
+                                45_000L,
+                                state.openingRangeVolume());
+
+                assertEquals(
+                                40_000L,
+                                state.openingRangeBaselineVolume());
+
+                assertEquals(
+                                1.125,
+                                state.openingRangeParticipationRatio(),
+                                0.000001);
+
+                assertEquals(
+                                "UP",
+                                state.recentVolumeDirection());
+        }
+
+        @Test
+        void currentVolumeState_shouldUseExactCurrentMinuteBaseline() {
+                LocalDate date = LocalDate.of(2026, 7, 15);
+
+                LocalDateTime minuteTime = date.atTime(9, 35);
+
+                when(marketMinuteSnapshotRepository
+                                .findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
+                                                "ONGC",
+                                                "NSE",
+                                                date))
+                                .thenReturn(Optional.of(
+                                                MarketMinuteSnapshot.builder()
+                                                                .symbol("ONGC")
+                                                                .exchange("NSE")
+                                                                .tradingDate(date)
+                                                                .minuteTime(minuteTime)
+                                                                .volumeTradedForDay(30_000L)
+                                                                .build()));
+
+                when(volumeTimeWindowBaselineRepository
+                                .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
+                                                "ONGC",
+                                                "NSE",
+                                                date,
+                                                20))
+                                .thenReturn(Optional.of(
+                                                VolumeTimeWindowBaseline.builder()
+                                                                .avgCumulativeVolume20(20_000L)
+                                                                .build()));
+
+                when(volumeDailyBaselineRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                anyString(),
+                                                anyString(),
+                                                any(LocalDate.class)))
+                                .thenReturn(Optional.empty());
+
+                when(dailyStockContextRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                anyString(),
+                                                anyString(),
+                                                any(LocalDate.class)))
+                                .thenReturn(Optional.empty());
+
+                when(marketCandleRepository
+                                .findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
+                                                anyString(),
+                                                anyString(),
+                                                eq(CandleTimeframe.ONE_MINUTE),
+                                                any(LocalDateTime.class)))
+                                .thenReturn(List.of());
+
+                VolumeEngineService.VolumeState state = service.currentVolumeState(
+                                "ONGC",
+                                "NSE",
+                                date);
+
+                assertEquals(
+                                20,
+                                state.sessionMinute());
+
+                assertEquals(
+                                1.5,
+                                state.volX(),
+                                0.000001);
+
+                assertEquals(
+                                "INSUFFICIENT_DATA",
+                                state.recentVolumeDirection());
+        }
+
+        @Test
+        void currentVolumeState_shouldReturnFlatForMixedVolumes() {
+                LocalDate date = LocalDate.of(2026, 7, 15);
+
+                LocalDateTime minuteTime = date.atTime(10, 0);
+
+                when(marketMinuteSnapshotRepository
+                                .findTopBySymbolAndExchangeAndTradingDateOrderByLatestTickTimeDesc(
+                                                "ONGC",
+                                                "NSE",
+                                                date))
+                                .thenReturn(Optional.of(
+                                                MarketMinuteSnapshot.builder()
+                                                                .symbol("ONGC")
+                                                                .exchange("NSE")
+                                                                .tradingDate(date)
+                                                                .minuteTime(minuteTime)
+                                                                .volumeTradedForDay(200_000L)
+                                                                .build()));
+
+                when(volumeTimeWindowBaselineRepository
+                                .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
+                                                anyString(),
+                                                anyString(),
+                                                any(LocalDate.class),
+                                                anyInt()))
+                                .thenReturn(Optional.empty());
+
+                when(volumeDailyBaselineRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                anyString(),
+                                                anyString(),
+                                                any(LocalDate.class)))
+                                .thenReturn(Optional.empty());
+
+                when(dailyStockContextRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                anyString(),
+                                                anyString(),
+                                                any(LocalDate.class)))
+                                .thenReturn(Optional.empty());
+
+                when(marketCandleRepository
+                                .findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
+                                                "ONGC",
+                                                "NSE",
+                                                CandleTimeframe.ONE_MINUTE,
+                                                minuteTime))
+                                .thenReturn(List.of(
+                                                oneMinute(
+                                                                minuteTime,
+                                                                100L),
+                                                oneMinute(
+                                                                minuteTime.minusMinutes(1),
+                                                                120L),
+                                                oneMinute(
+                                                                minuteTime.minusMinutes(2),
+                                                                80L)));
+
+                VolumeEngineService.VolumeState state = service.currentVolumeState(
+                                "ONGC",
+                                "NSE",
+                                date);
+
+                assertEquals(
+                                "FLAT",
+                                state.recentVolumeDirection());
+
+                assertNull(state.volX());
+                assertNull(
+                                state.openingRangeParticipationRatio());
+        }
+
+        private MarketCandle oneMinute(
+                        LocalDateTime candleTime,
+                        long volume) {
+
+                return MarketCandle.builder()
+                                .symbol("ONGC")
+                                .exchange("NSE")
+                                .timeframe(
+                                                CandleTimeframe.ONE_MINUTE)
+                                .candleTime(candleTime)
+                                .openPrice(100.0)
+                                .highPrice(101.0)
+                                .lowPrice(99.0)
+                                .closePrice(100.5)
+                                .volume(volume)
+                                .isFinalized(true)
+                                .qualityStatus(
+                                                CandleQualityStatus.LIVE)
+                                .processingStatus(
+                                                CandleProcessingStatus.RELEASED)
+                                .build();
+        }
 }

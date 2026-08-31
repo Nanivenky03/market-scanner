@@ -3,6 +3,8 @@ package com.trading.scanner.service.runtime;
 import com.trading.scanner.config.RuntimeAutomationProperties;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.CandleTimeframe;
+import com.trading.scanner.repository.DailyCandleSummaryRepository;
+import com.trading.scanner.repository.DailyDataStatusRepository;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.LiveSimulationSignalRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
@@ -31,6 +33,12 @@ class RuntimeHousekeepingServiceTest {
         private DailyStockContextRepository dailyStockContextRepository;
 
         @Mock
+        private DailyDataStatusRepository dailyDataStatusRepository;
+
+        @Mock
+        private DailyCandleSummaryRepository dailyCandleSummaryRepository;
+
+        @Mock
         private LiveSimulationSignalRepository liveSimulationSignalRepository;
 
         @Mock
@@ -52,35 +60,48 @@ class RuntimeHousekeepingServiceTest {
         private TimeProvider timeProvider;
 
         @InjectMocks
-        private RuntimeHousekeepingService runtimeHousekeepingService;
+        private RuntimeHousekeepingService service;
 
         @Test
         void runHousekeeping_shouldPurgeConfiguredData() {
-                when(timeProvider.today()).thenReturn(LocalDate.of(2026, 6, 24));
-                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 6, 24, 5, 30));
+                LocalDate today = LocalDate.of(2026, 6, 24);
+                LocalDate cutoff = LocalDate.of(2026, 5, 25);
+
+                when(timeProvider.today()).thenReturn(today);
+                when(timeProvider.nowDateTime())
+                                .thenReturn(LocalDateTime.of(2026, 6, 24, 5, 30));
                 when(runtimeSettingService.retentionCandlesDays()).thenReturn(30);
                 when(runtimeSettingService.retentionLiveSignalsDays()).thenReturn(30);
 
                 when(marketCandleRepository.deleteByTimeframeAndCandleTimeBefore(
                                 CandleTimeframe.ONE_MINUTE,
-                                LocalDate.of(2026, 5, 25).atStartOfDay())).thenReturn(100L);
+                                cutoff.atStartOfDay())).thenReturn(100L);
                 when(marketCandleRepository.deleteByTimeframeAndCandleTimeBefore(
                                 CandleTimeframe.FIVE_MINUTE,
-                                LocalDate.of(2026, 5, 25).atStartOfDay())).thenReturn(20L);
+                                cutoff.atStartOfDay())).thenReturn(20L);
                 when(marketCandleRepository.deleteByTimeframeAndCandleTimeBefore(
                                 CandleTimeframe.FIFTEEN_MINUTE,
-                                LocalDate.of(2026, 5, 25).atStartOfDay())).thenReturn(10L);
+                                cutoff.atStartOfDay())).thenReturn(10L);
 
-                when(dailyStockContextRepository.deleteByTradingDateBefore(LocalDate.of(2026, 5, 25))).thenReturn(15L);
-                when(liveSimulationSignalRepository.deleteBySignalDateBefore(LocalDate.of(2026, 5, 25))).thenReturn(7L);
-                when(volumeDailyBaselineRepository.deleteByTradingDateBefore(LocalDate.of(2026, 5, 25))).thenReturn(9L);
-                when(volumeTimeWindowBaselineRepository.deleteByTradingDateBefore(LocalDate.of(2026, 5, 25)))
+                when(dailyStockContextRepository.deleteByTradingDateBefore(cutoff))
+                                .thenReturn(15L);
+                when(dailyDataStatusRepository.deleteByTradingDateBefore(cutoff))
+                                .thenReturn(12L);
+                when(dailyCandleSummaryRepository.deleteByTradingDateBefore(cutoff))
+                                .thenReturn(11L);
+                when(liveSimulationSignalRepository.deleteBySignalDateBefore(cutoff))
+                                .thenReturn(7L);
+                when(volumeDailyBaselineRepository.deleteByTradingDateBefore(cutoff))
+                                .thenReturn(9L);
+                when(volumeTimeWindowBaselineRepository.deleteByTradingDateBefore(cutoff))
                                 .thenReturn(18L);
 
-                when(webSocketFrameCaptureService.clear()).thenReturn(
-                                new WebSocketFrameCaptureService.ClearResult(5, "Cleared captured websocket frames"));
+                when(webSocketFrameCaptureService.clear())
+                                .thenReturn(new WebSocketFrameCaptureService.ClearResult(
+                                                5,
+                                                "Cleared captured websocket frames"));
 
-                RuntimeHousekeepingService.HousekeepingResult result = runtimeHousekeepingService.runHousekeeping();
+                RuntimeHousekeepingService.HousekeepingResult result = service.runHousekeeping();
 
                 assertEquals(30, result.candleRetentionDays());
                 assertEquals(30, result.liveSignalRetentionDays());
@@ -88,6 +109,8 @@ class RuntimeHousekeepingServiceTest {
                 assertEquals(20L, result.deletedFiveMinuteCandles());
                 assertEquals(10L, result.deletedFifteenMinuteCandles());
                 assertEquals(15L, result.deletedDailyStockContexts());
+                assertEquals(12L, result.deletedDailyDataStatuses());
+                assertEquals(11L, result.deletedDailyCandleSummaries());
                 assertEquals(7L, result.deletedLiveSignals());
                 assertEquals(9L, result.deletedVolumeDailyBaselines());
                 assertEquals(18L, result.deletedVolumeTimeWindowBaselines());

@@ -2,10 +2,7 @@ package com.trading.scanner.model;
 
 import com.trading.scanner.config.LocalDateTimeConverter;
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.time.LocalDateTime;
 
@@ -53,7 +50,6 @@ public class MarketCandle {
         @Column(name = "open_interest")
         private Long openInterest;
 
-        @Column(name = "vwap")
         private Double vwap;
 
         @Column(name = "rsi_14")
@@ -75,13 +71,10 @@ public class MarketCandle {
         private Double rangePct;
 
         @Enumerated(EnumType.STRING)
-        @Column(name = "direction")
         private CandleDirection direction;
 
-        @Column(name = "strong_bullish")
         private Boolean strongBullish;
 
-        @Column(name = "strong_bearish")
         private Boolean strongBearish;
 
         @Column(nullable = false)
@@ -102,5 +95,10 @@ public class MarketCandle {
         @Enumerated(EnumType.STRING)
         @Column(name = "quality_status", nullable = false)
         @Builder.Default
-        private CandleQualityStatus qualityStatus = CandleQualityStatus.VALID;
+        private CandleQualityStatus qualityStatus = CandleQualityStatus.LIVE;
+
+        @Enumerated(EnumType.STRING)
+        @Column(name = "processing_status", nullable = false)
+        @Builder.Default
+        private CandleProcessingStatus processingStatus = CandleProcessingStatus.RELEASED;
 }

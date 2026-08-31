@@ -19,7 +19,7 @@ public class RuntimeAutomationProperties {
     @Data
     public static class Live {
         private boolean autoRun = false;
-        private int subscriptionMode = 1;
+        private int subscriptionMode = 3;
         private boolean autoRecover = true;
         private long recoveryIntervalMs = 60000L;
         private int reconnectBackoffSeconds = 30;
@@ -35,7 +35,7 @@ public class RuntimeAutomationProperties {
         private String angeloneLoginTime = "08:50";
         private String websocketConnectTime = "09:00";
         private String websocketDisconnectTime = "15:40";
-        private String angeloneDisconnectTime = "16:00";
+        private String angeloneDisconnectTime = "17:00";
         private String housekeepingTime = "05:30";
         private String marketOpenTime = "09:15";
         private String marketCloseTime = "15:30";
@@ -55,12 +55,12 @@ public class RuntimeAutomationProperties {
         private boolean webhookEnabled = false;
         private String webhookUrl = "";
         private long webhookTimeoutMs = 5000L;
-        private String webhookMinSeverity = "HIGH";
+        private String webhookMinSeverity = "MEDIUM";
 
         private boolean emailEnabled = false;
         private String emailTo = "";
         private String emailFrom = "";
-        private String emailMinSeverity = "HIGH";
+        private String emailMinSeverity = "MEDIUM";
         private String emailSubjectPrefix = "[Mithron]";
     }
 

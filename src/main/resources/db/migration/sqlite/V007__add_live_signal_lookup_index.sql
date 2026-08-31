@@ -1,2 +1,0 @@
-CREATE INDEX idx_live_signal_strategy_symbol_tf_status_time
-ON live_simulation_signal(strategy_id, symbol, timeframe, lifecycle_status, candle_time);

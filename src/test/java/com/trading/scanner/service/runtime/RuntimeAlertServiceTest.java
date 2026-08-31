@@ -3,11 +3,9 @@ package com.trading.scanner.service.runtime;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.config.RuntimeAutomationProperties;
 import com.trading.scanner.config.TimeProvider;
-import com.trading.scanner.model.RuntimeAlertState;
 import com.trading.scanner.repository.RuntimeAlertStateRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.mail.javamail.JavaMailSender;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -16,152 +14,214 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class RuntimeAlertServiceTest {
 
-    private RuntimeAlertStateRepository runtimeAlertStateRepository;
-    private RuntimeReadinessService runtimeReadinessService;
-    private RuntimeAutomationService runtimeAutomationService;
-    private RuntimeSettingService runtimeSettingService;
-    private RuntimeAutomationProperties runtimeAutomationProperties;
-    private TimeProvider timeProvider;
-    private JavaMailSender javaMailSender;
-    private RuntimeAlertService runtimeAlertService;
+        private RuntimeAlertStateRepository runtimeAlertStateRepository;
+        private RuntimeReadinessService runtimeReadinessService;
+        private RuntimeAutomationService runtimeAutomationService;
+        private RuntimeSettingService runtimeSettingService;
+        private RuntimeAutomationProperties runtimeAutomationProperties;
+        private TimeProvider timeProvider;
+        private ObjectMapper objectMapper;
+        private org.springframework.mail.javamail.JavaMailSender javaMailSender;
+        private RuntimeAlertService service;
 
-    @BeforeEach
-    void setUp() {
-        runtimeAlertStateRepository = mock(RuntimeAlertStateRepository.class);
-        runtimeReadinessService = mock(RuntimeReadinessService.class);
-        runtimeAutomationService = mock(RuntimeAutomationService.class);
-        runtimeSettingService = mock(RuntimeSettingService.class);
-        runtimeAutomationProperties = new RuntimeAutomationProperties();
-        timeProvider = mock(TimeProvider.class);
-        javaMailSender = mock(JavaMailSender.class);
+        @BeforeEach
+        void setUp() {
+                runtimeAlertStateRepository = mock(RuntimeAlertStateRepository.class);
 
-        runtimeAlertService = new RuntimeAlertService(
-                runtimeAlertStateRepository,
-                runtimeReadinessService,
-                runtimeAutomationService,
-                runtimeSettingService,
-                runtimeAutomationProperties,
-                timeProvider,
-                new ObjectMapper(),
-                javaMailSender);
-    }
+                runtimeReadinessService = mock(RuntimeReadinessService.class);
 
-    @Test
-    void evaluateNow_shouldOpenCalendarRefreshFailedAlert() {
-        LocalDateTime now = LocalDateTime.of(2026, 7, 26, 20, 5);
+                runtimeAutomationService = mock(RuntimeAutomationService.class);
 
-        when(timeProvider.nowDateTime()).thenReturn(now);
-        when(runtimeReadinessService.status()).thenReturn(healthyReadiness());
-        when(runtimeAutomationService.runtimeStatus()).thenReturn(healthyRuntimeStatus());
-        when(runtimeSettingService.parserFailuresThreshold()).thenReturn(10);
-        when(runtimeSettingService.getString("calendar.last.official.refresh.status", "")).thenReturn("FAILED");
-        when(runtimeSettingService.getString("calendar.last.official.refresh.message", ""))
-                .thenReturn("NSE source unavailable");
-        when(runtimeSettingService.getString("calendar.last.official.refresh.at", ""))
-                .thenReturn("2026-07-26T20:00:00");
-        when(runtimeAlertStateRepository.findByAlertKey(any())).thenReturn(Optional.empty());
-        when(runtimeAlertStateRepository.countByStatusAndSeverity("OPEN", "HIGH")).thenReturn(1L);
+                runtimeSettingService = mock(RuntimeSettingService.class);
 
-        RuntimeAlertService.AlertEvaluationResult result = runtimeAlertService.evaluateNow();
+                runtimeAutomationProperties = mock(
+                                RuntimeAutomationProperties.class,
+                                RETURNS_DEEP_STUBS);
 
-        assertEquals(1, result.openedAlerts());
+                timeProvider = mock(TimeProvider.class);
 
-        verify(runtimeAlertStateRepository, atLeastOnce())
-                .save(argThat(alert -> "calendar.official_refresh_failed".equals(alert.getAlertKey()) &&
-                        "OPEN".equals(alert.getStatus())));
-    }
+                objectMapper = mock(ObjectMapper.class);
 
-    @Test
-    void evaluateNow_shouldResolveCalendarRefreshFailedAlertWhenStatusIsNotFailed() {
-        LocalDateTime now = LocalDateTime.of(2026, 7, 27, 9, 0);
+                javaMailSender = mock(org.springframework.mail.javamail.JavaMailSender.class);
 
-        RuntimeAlertState existingAlert = RuntimeAlertState.builder()
-                .alertKey("calendar.official_refresh_failed")
-                .severity("HIGH")
-                .status("OPEN")
-                .message("Official NSE holiday refresh failed")
-                .createdAt(now.minusDays(1))
-                .firstTriggeredAt(now.minusDays(1))
-                .lastTriggeredAt(now.minusDays(1))
-                .updatedAt(now.minusDays(1))
-                .build();
+                service = new RuntimeAlertService(
+                                runtimeAlertStateRepository,
+                                runtimeReadinessService,
+                                runtimeAutomationService,
+                                runtimeSettingService,
+                                runtimeAutomationProperties,
+                                timeProvider,
+                                objectMapper,
+                                javaMailSender);
+        }
 
-        when(timeProvider.nowDateTime()).thenReturn(now);
-        when(runtimeReadinessService.status()).thenReturn(healthyReadiness());
-        when(runtimeAutomationService.runtimeStatus()).thenReturn(healthyRuntimeStatus());
-        when(runtimeSettingService.parserFailuresThreshold()).thenReturn(10);
-        when(runtimeSettingService.getString("calendar.last.official.refresh.status", "")).thenReturn("SUCCESS");
-        when(runtimeAlertStateRepository.findByAlertKey(any())).thenReturn(Optional.empty());
-        when(runtimeAlertStateRepository.findByAlertKey("calendar.official_refresh_failed"))
-                .thenReturn(Optional.of(existingAlert));
-        when(runtimeAlertStateRepository.countByStatusAndSeverity("OPEN", "HIGH")).thenReturn(0L);
+        @Test
+        void evaluateNow_shouldOpenAlertWhenRuntimeIsNotReady() {
+                LocalDate date = LocalDate.of(2026, 8, 27);
 
-        RuntimeAlertService.AlertEvaluationResult result = runtimeAlertService.evaluateNow();
+                LocalDateTime now = date.atTime(10, 0);
 
-        assertEquals(1, result.resolvedAlerts());
+                when(timeProvider.nowDateTime())
+                                .thenReturn(now);
 
-        verify(runtimeAlertStateRepository, atLeastOnce())
-                .save(argThat(alert -> "calendar.official_refresh_failed".equals(alert.getAlertKey()) &&
-                        "RESOLVED".equals(alert.getStatus())));
-    }
+                when(runtimeReadinessService.status())
+                                .thenReturn(readiness(
+                                                date,
+                                                false,
+                                                "COMPLETE",
+                                                true));
 
-    private RuntimeReadinessService.ReadinessStatus healthyReadiness() {
-        return new RuntimeReadinessService.ReadinessStatus(
-                LocalDate.of(2026, 7, 26),
-                false,
-                false,
-                10,
-                10L,
-                100L,
-                100L,
-                10L,
-                10L,
-                10L,
-                0L,
-                true,
-                1,
-                false,
-                0L,
-                0L,
-                0L,
-                0,
-                List.of(),
-                true,
-                true,
-                true);
-    }
+                when(runtimeAutomationService.runtimeStatus())
+                                .thenReturn(runtimeStatus());
 
-    private RuntimeAutomationService.RuntimeStatus healthyRuntimeStatus() {
-        return new RuntimeAutomationService.RuntimeStatus(
-                true,
-                true,
-                1,
-                false,
-                false,
-                null,
-                null,
-                null,
-                null,
-                0L,
-                0L,
-                0L,
-                0L,
-                0L,
-                true,
-                null,
-                0,
-                "RUNNING",
-                null,
-                null,
-                true,
-                null,
-                null,
-                null,
-                null,
-                null);
-    }
+                when(runtimeSettingService.parserFailuresThreshold())
+                                .thenReturn(10);
+
+                when(runtimeSettingService.staleTicksMinutes())
+                                .thenReturn(5);
+
+                when(runtimeSettingService.getString(
+                                anyString(),
+                                anyString()))
+                                .thenReturn("");
+
+                when(runtimeAlertStateRepository.findByAlertKey(
+                                anyString()))
+                                .thenReturn(Optional.empty());
+
+                when(runtimeAlertStateRepository.save(
+                                any()))
+                                .thenAnswer(invocation -> invocation.getArgument(0));
+
+                when(runtimeAlertStateRepository
+                                .countByStatusAndSeverity(
+                                                "OPEN",
+                                                "HIGH"))
+                                .thenReturn(1L);
+
+                RuntimeAlertService.AlertEvaluationResult result = service.evaluateNow();
+
+                assertEquals(1, result.openedAlerts());
+                assertEquals(now, result.evaluatedAt());
+
+                verify(runtimeAlertStateRepository, atLeastOnce())
+                                .save(any());
+        }
+
+        @Test
+        void evaluateNow_shouldNotOpenReadinessAlertWhenRuntimeIsReady() {
+                LocalDate date = LocalDate.of(2026, 8, 27);
+
+                LocalDateTime now = date.atTime(10, 0);
+
+                when(timeProvider.nowDateTime())
+                                .thenReturn(now);
+
+                when(runtimeReadinessService.status())
+                                .thenReturn(readiness(
+                                                date,
+                                                true,
+                                                "COMPLETE",
+                                                true));
+
+                when(runtimeAutomationService.runtimeStatus())
+                                .thenReturn(runtimeStatus());
+
+                when(runtimeSettingService.parserFailuresThreshold())
+                                .thenReturn(10);
+
+                when(runtimeSettingService.staleTicksMinutes())
+                                .thenReturn(5);
+
+                when(runtimeSettingService.getString(
+                                anyString(),
+                                anyString()))
+                                .thenReturn("");
+
+                when(runtimeAlertStateRepository.findByAlertKey(
+                                anyString()))
+                                .thenReturn(Optional.empty());
+
+                when(runtimeAlertStateRepository
+                                .countByStatusAndSeverity(
+                                                "OPEN",
+                                                "HIGH"))
+                                .thenReturn(0L);
+
+                RuntimeAlertService.AlertEvaluationResult result = service.evaluateNow();
+
+                assertEquals(0, result.openedAlerts());
+                assertEquals(0, result.currentlyOpenHighAlerts());
+
+                verify(runtimeAlertStateRepository, never())
+                                .save(any());
+        }
+
+        private RuntimeReadinessService.ReadinessStatus readiness(
+                        LocalDate date,
+                        boolean readyForLiveRuntime,
+                        String bootstrapStatus,
+                        boolean bootstrapReady) {
+
+                return new RuntimeReadinessService.ReadinessStatus(
+                                date,
+                                true,
+                                true,
+                                5,
+                                5L,
+                                150L,
+                                1500L,
+                                100L,
+                                100L,
+                                100L,
+                                0L,
+                                true,
+                                1,
+                                false,
+                                0L,
+                                0L,
+                                0L,
+                                0,
+                                List.<RuntimeReadinessService.MissingBrokerToken>of(),
+                                bootstrapStatus,
+                                bootstrapReady,
+                                bootstrapReady,
+                                readyForLiveRuntime,
+                                readyForLiveRuntime);
+        }
+
+        private RuntimeAutomationService.RuntimeStatus runtimeStatus() {
+                return new RuntimeAutomationService.RuntimeStatus(
+                                true,
+                                true,
+                                1,
+                                false,
+                                false,
+                                null,
+                                null,
+                                null,
+                                null,
+                                0L,
+                                0L,
+                                0L,
+                                0L,
+                                0L,
+                                true,
+                                null,
+                                0,
+                                "RUNNING",
+                                null,
+                                null,
+                                true,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null);
+        }
 }
