@@ -3,7 +3,8 @@ package com.trading.scanner.calendar;
 import java.time.LocalDate;
 
 /**
- * An interface for querying trading day information and performing calendar-aware date arithmetic.
+ * An interface for querying trading day information and performing
+ * calendar-aware date arithmetic.
  */
 public interface TradingCalendar {
 
@@ -16,7 +17,8 @@ public interface TradingCalendar {
     SessionType getSession(LocalDate date);
 
     /**
-     * Checks if a given date is a trading day (either a regular or special session).
+     * Checks if a given date is a trading day (either a regular or special
+     * session).
      *
      * @param date the date to check.
      * @return true if it is a trading day, false otherwise.
@@ -43,9 +45,11 @@ public interface TradingCalendar {
      * Adds or subtracts a number of trading days from a given date.
      *
      * @param date the starting date.
-     * @param days the number of trading days to add (if positive) or subtract (if negative).
+     * @param days the number of trading days to add (if positive) or subtract (if
+     *             negative).
      * @return the resulting date after the addition or subtraction.
-     * @throws IllegalArgumentException if days is zero and the given date is not a trading day.
+     * @throws IllegalArgumentException if days is zero and the given date is not a
+     *                                  trading day.
      */
     LocalDate addTradingDays(LocalDate date, int days);
 
@@ -54,8 +58,13 @@ public interface TradingCalendar {
      * The count is exclusive of the start date and inclusive of the end date.
      *
      * @param startExclusive the start date (exclusive).
-     * @param endInclusive the end date (inclusive).
-     * @return the number of trading days. Returns a negative number if the end date is before the start date.
+     * @param endInclusive   the end date (inclusive).
+     * @return the number of trading days. Returns a negative number if the end date
+     *         is before the start date.
      */
     int tradingDaysBetween(LocalDate startExclusive, LocalDate endInclusive);
+
+    default int expectedOneMinuteCandleCount(LocalDate date) {
+        return isTradingDay(date) ? 375 : 0;
+    }
 }

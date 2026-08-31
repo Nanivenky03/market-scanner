@@ -28,7 +28,7 @@ CREATE TABLE volume_time_window_baseline (
     avg_cumulative_volume_20 BIGINT NOT NULL,
     sample_days INTEGER NOT NULL,
     computed_at TEXT NOT NULL,
-    CONSTRAINT uq_volume_time_window_baseline_symbol_exchange_trading_date_minute
+    CONSTRAINT uq_vtw_baseline_symbol_exchange_trading_date_minute
         UNIQUE (symbol, exchange, trading_date, session_minute)
 );
 

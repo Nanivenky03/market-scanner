@@ -1,7 +1,9 @@
 package com.trading.scanner.service.engine;
 
+import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.config.TimeProvider;
-import com.trading.scanner.model.CandleDirection;
+import com.trading.scanner.model.CandleProcessingStatus;
+import com.trading.scanner.model.CandleQualityStatus;
 import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.DayType;
 import com.trading.scanner.model.ExpiryType;
@@ -16,13 +18,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.DayOfWeek;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 
 @Service
@@ -30,29 +30,55 @@ import java.util.Optional;
 @Slf4j
 public class MarketStateService {
 
+    private static final String NIFTY_SYMBOL = "NIFTY";
+    private static final String NIFTY_EXCHANGE = "NSE";
+
     private static final LocalTime MARKET_OPEN = LocalTime.of(9, 15);
-    private static final LocalTime OPENING_RANGE_END = LocalTime.of(9, 29);
+
     private static final LocalTime ACTIVE_START = LocalTime.of(9, 30);
+
     private static final LocalTime ACTIVE_END = LocalTime.of(12, 30);
-    private static final LocalTime ORB_CUTOFF_START = LocalTime.of(12, 30);
+
     private static final LocalTime FCHB_CUTOFF_START = LocalTime.of(13, 0);
+
     private static final LocalTime EXPIRY_WIND_DOWN_START = LocalTime.of(14, 15);
+
     private static final LocalTime WIND_DOWN_START = LocalTime.of(14, 45);
+
     private static final LocalTime HARD_CLOSE_TIME = LocalTime.of(15, 0);
 
-    private static final int OPENING_RANGE_MINUTES = 15; // 9:15–9:29 inclusive
+    private static final LocalTime CLOSED_AFTER = LocalTime.of(15, 1);
+
+    private static final LocalTime OPENING_RANGE_END = LocalTime.of(9, 29);
+
+    private static final int OPENING_RANGE_MINUTES = 15;
+
+    private static final double GAP_THRESHOLD_PERCENT = 0.75;
+    private static final double HIGH_VOLATILITY_THRESHOLD_PERCENT = 0.8;
+    private static final double VWAP_DIRECTION_THRESHOLD_PERCENT = 0.05;
+    private static final double COMPARISON_EPSILON = 1.0e-9;
 
     private final MarketCandleRepository marketCandleRepository;
     private final StockPriceRepository stockPriceRepository;
     private final TimeProvider timeProvider;
+    private final TradingCalendar tradingCalendar;
 
     private volatile MarketState lastState;
+
+    private LocalDate latchDate;
+    private DayType latchedDayType;
+    private Boolean latchedHighVolatilityDay;
+    private MarketSession latchedSession;
+    private int lastSessionRank = -1;
 
     public void scheduledUpdate() {
         try {
             updateState();
         } catch (Exception ex) {
-            log.warn("Market state update failed: {}", ex.getMessage(), ex);
+            log.warn(
+                    "Market state update failed: {}",
+                    ex.getMessage(),
+                    ex);
         }
     }
 
@@ -60,243 +86,498 @@ public class MarketStateService {
         return lastState;
     }
 
-    private void updateState() {
+    private synchronized void updateState() {
         LocalDateTime now = timeProvider.nowDateTime();
+
+        if (now == null) {
+            return;
+        }
+
         LocalDate tradingDate = now.toLocalDate();
+
         LocalTime currentTime = now.toLocalTime();
 
-        String niftySymbol = "NIFTY"; // can be made configurable later
-        String niftyExchange = "NSE";
+        resetLatchesForNewDate(tradingDate);
 
-        DayType dayType = computeDayType(niftySymbol, tradingDate);
+        DayType dayType = resolveDayType(
+                tradingDate,
+                currentTime);
+
         ExpiryType expiryType = computeExpiryType(tradingDate);
-        boolean highVolatilityDay = computeHighVolatilityDayFlag(niftySymbol, niftyExchange, tradingDate, currentTime);
 
-        NiftyVwapSnapshot vwapSnapshot = computeNiftyVwapSnapshot(niftySymbol, niftyExchange, tradingDate, now);
-        NiftyVwapDirection vwapDirection = vwapSnapshot.direction();
-        boolean niftyAboveVwap = vwapSnapshot.aboveVwap();
-        Double niftyVwapDistancePct = vwapSnapshot.distancePct();
+        boolean highVolatilityDay = resolveHighVolatilityDay(
+                tradingDate,
+                currentTime);
 
-        MarketSession marketSession = computeMarketSession(currentTime, expiryType);
+        NiftyVwapSnapshot vwapSnapshot = computeNiftyVwapSnapshot(
+                NIFTY_SYMBOL,
+                NIFTY_EXCHANGE,
+                tradingDate,
+                now);
 
-        MarketState state = new MarketState(
+        MarketSession candidateSession = computeMarketSession(
+                currentTime,
+                expiryType);
+
+        MarketSession effectiveSession = advanceMonotonicSession(
+                currentTime,
+                candidateSession);
+
+        lastState = new MarketState(
                 tradingDate,
                 now,
                 dayType,
                 expiryType,
                 highVolatilityDay,
-                marketSession,
-                niftyAboveVwap,
-                niftyVwapDistancePct,
-                vwapDirection);
-
-        lastState = state;
+                effectiveSession,
+                vwapSnapshot.aboveVwap(),
+                vwapSnapshot.distancePct(),
+                vwapSnapshot.direction());
     }
 
-    private DayType computeDayType(String symbol, LocalDate tradingDate) {
-        LocalDate prevDate = tradingDate.minusDays(1);
+    private void resetLatchesForNewDate(
+            LocalDate tradingDate) {
 
-        Optional<StockPrice> prevOpt = stockPriceRepository.findBySymbolAndDate(symbol, prevDate);
-        if (prevOpt.isEmpty()) {
+        if (tradingDate.equals(latchDate)) {
+            return;
+        }
+
+        latchDate = tradingDate;
+        latchedDayType = null;
+        latchedHighVolatilityDay = null;
+        latchedSession = null;
+        lastSessionRank = -1;
+    }
+
+    private DayType resolveDayType(
+            LocalDate tradingDate,
+            LocalTime currentTime) {
+
+        if (latchedDayType != null) {
+            return latchedDayType;
+        }
+
+        if (currentTime.isBefore(MARKET_OPEN)) {
             return DayType.NORMAL;
         }
 
-        Double prevClose = prevOpt.get().getClosePrice();
-        if (prevClose == null || prevClose == 0.0) {
-            return DayType.NORMAL;
+        DayType calculated = computeDayType(
+                tradingDate);
+
+        if (calculated != null) {
+            latchedDayType = calculated;
+            return calculated;
         }
 
-        List<MarketCandle> firstCandles = marketCandleRepository
-                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
-                        symbol,
-                        "NSE",
-                        CandleTimeframe.ONE_MINUTE,
-                        tradingDate.atTime(MARKET_OPEN),
-                        tradingDate.atTime(MARKET_OPEN.plusMinutes(1)));
+        return DayType.NORMAL;
+    }
 
-        if (firstCandles.isEmpty()) {
-            return DayType.NORMAL;
+    private DayType computeDayType(
+            LocalDate tradingDate) {
+
+        LocalDate previousTradingDay = tradingCalendar.previousTradingDay(
+                tradingDate);
+
+        if (previousTradingDay == null) {
+            return null;
         }
 
-        Double openPrice = firstCandles.get(0).getOpenPrice();
-        if (openPrice == null) {
-            return DayType.NORMAL;
+        Optional<StockPrice> previousPrice = stockPriceRepository.findBySymbolAndDate(
+                NIFTY_SYMBOL,
+                previousTradingDay);
+
+        if (previousPrice.isEmpty()) {
+            return null;
         }
 
-        double gapPct = (openPrice - prevClose) / prevClose * 100.0;
+        Double previousClose = previousPrice.get().getClosePrice();
 
-        if (gapPct > 0.75) {
+        if (!isFinite(previousClose)
+                || previousClose == 0.0) {
+            return null;
+        }
+
+        List<MarketCandle> openingCandles = safeList(
+                marketCandleRepository
+                        .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                                NIFTY_SYMBOL,
+                                NIFTY_EXCHANGE,
+                                CandleTimeframe.ONE_MINUTE,
+                                tradingDate.atTime(
+                                        MARKET_OPEN),
+                                tradingDate.atTime(
+                                        ACTIVE_START)));
+
+        Optional<MarketCandle> firstCandle = openingCandles.stream()
+                .filter(this::isUsable)
+                .filter(candle -> candle.getCandleTime()
+                        .equals(
+                                tradingDate.atTime(
+                                        MARKET_OPEN)))
+                .findFirst();
+
+        if (firstCandle.isEmpty()) {
+            return null;
+        }
+
+        Double openPrice = firstCandle.get().getOpenPrice();
+
+        if (!isFinite(openPrice)) {
+            return null;
+        }
+
+        double gapPercent = (openPrice - previousClose)
+                / previousClose
+                * 100.0;
+
+        if (gapPercent > GAP_THRESHOLD_PERCENT) {
             return DayType.GAP_UP;
         }
 
-        if (gapPct < -0.75) {
+        if (gapPercent < -GAP_THRESHOLD_PERCENT) {
             return DayType.GAP_DOWN;
         }
 
         return DayType.NORMAL;
     }
 
-    private ExpiryType computeExpiryType(LocalDate tradingDate) {
+    private ExpiryType computeExpiryType(
+            LocalDate tradingDate) {
+
         if (tradingDate.getDayOfWeek() != DayOfWeek.THURSDAY) {
             return ExpiryType.NONE;
         }
 
-        LocalDate lastThursday = lastThursdayOfMonth(tradingDate.getYear(), tradingDate.getMonthValue());
-        if (tradingDate.equals(lastThursday)) {
-            return ExpiryType.MONTHLY;
-        }
+        LocalDate lastThursday = lastThursdayOfMonth(
+                tradingDate.getYear(),
+                tradingDate.getMonthValue());
 
-        return ExpiryType.WEEKLY;
+        return tradingDate.equals(lastThursday)
+                ? ExpiryType.MONTHLY
+                : ExpiryType.WEEKLY;
     }
 
-    private LocalDate lastThursdayOfMonth(int year, int month) {
-        LocalDate date = LocalDate.of(year, month, 1).plusMonths(1).minusDays(1);
+    private LocalDate lastThursdayOfMonth(
+            int year,
+            int month) {
+
+        LocalDate date = LocalDate.of(year, month, 1)
+                .plusMonths(1)
+                .minusDays(1);
+
         while (date.getDayOfWeek() != DayOfWeek.THURSDAY) {
             date = date.minusDays(1);
         }
+
         return date;
     }
 
-    private boolean computeHighVolatilityDayFlag(String symbol, String exchange, LocalDate tradingDate,
+    private boolean resolveHighVolatilityDay(
+            LocalDate tradingDate,
             LocalTime currentTime) {
-        if (currentTime.isBefore(OPENING_RANGE_END.plusMinutes(1))) {
+
+        if (latchedHighVolatilityDay != null) {
+            return latchedHighVolatilityDay;
+        }
+
+        if (currentTime.isBefore(ACTIVE_START)) {
             return false;
         }
 
-        List<MarketCandle> openingRangeCandles = marketCandleRepository
-                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
-                        symbol,
-                        exchange,
-                        CandleTimeframe.ONE_MINUTE,
-                        tradingDate.atTime(MARKET_OPEN),
-                        tradingDate.atTime(OPENING_RANGE_END));
+        Boolean calculated = computeHighVolatilityDayFlag(
+                tradingDate);
 
-        if (openingRangeCandles.size() < OPENING_RANGE_MINUTES) {
-            return false;
+        if (calculated != null) {
+            latchedHighVolatilityDay = calculated;
+            return calculated;
         }
 
-        double high = openingRangeCandles.stream()
-                .map(MarketCandle::getHighPrice)
-                .filter(h -> h != null)
-                .max(Double::compareTo)
-                .orElse(0.0);
-
-        double low = openingRangeCandles.stream()
-                .map(MarketCandle::getLowPrice)
-                .filter(l -> l != null)
-                .min(Double::compareTo)
-                .orElse(0.0);
-
-        if (low <= 0.0 || high <= low) {
-            return false;
-        }
-
-        double orSizePct = (high - low) / low * 100.0;
-
-        return orSizePct > 0.8;
+        return false;
     }
 
-    private NiftyVwapSnapshot computeNiftyVwapSnapshot(String symbol, String exchange, LocalDate tradingDate,
-            LocalDateTime now) {
-        List<MarketCandle> recentDesc = marketCandleRepository
-                .findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
-                        symbol,
-                        exchange,
-                        CandleTimeframe.ONE_MINUTE,
-                        now);
+    private Boolean computeHighVolatilityDayFlag(
+            LocalDate tradingDate) {
 
-        List<MarketCandle> recent = recentDesc.stream()
-                .filter(c -> c.getVwap() != null)
-                .sorted(Comparator.comparing(MarketCandle::getCandleTime))
+        List<MarketCandle> openingRange = safeList(
+                marketCandleRepository
+                        .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                                NIFTY_SYMBOL,
+                                NIFTY_EXCHANGE,
+                                CandleTimeframe.ONE_MINUTE,
+                                tradingDate.atTime(
+                                        MARKET_OPEN),
+                                tradingDate.atTime(
+                                        OPENING_RANGE_END)));
+
+        if (!hasExactMinuteRange(
+                openingRange,
+                tradingDate.atTime(MARKET_OPEN),
+                tradingDate.atTime(OPENING_RANGE_END))) {
+            return null;
+        }
+
+        Optional<Double> high = openingRange.stream()
+                .map(MarketCandle::getHighPrice)
+                .filter(this::isFinite)
+                .max(Double::compareTo);
+
+        Optional<Double> low = openingRange.stream()
+                .map(MarketCandle::getLowPrice)
+                .filter(this::isFinite)
+                .min(Double::compareTo);
+
+        if (high.isEmpty()
+                || low.isEmpty()
+                || low.get() <= 0.0
+                || high.get() <= low.get()) {
+            return false;
+        }
+
+        double openingRangePercent = (high.get() - low.get())
+                / low.get()
+                * 100.0;
+
+        return openingRangePercent > HIGH_VOLATILITY_THRESHOLD_PERCENT;
+    }
+
+    private NiftyVwapSnapshot computeNiftyVwapSnapshot(
+            String symbol,
+            String exchange,
+            LocalDate tradingDate,
+            LocalDateTime now) {
+
+        List<MarketCandle> recent = safeList(
+                marketCandleRepository
+                        .findTop100BySymbolAndExchangeAndTimeframeAndCandleTimeLessThanEqualOrderByCandleTimeDesc(
+                                symbol,
+                                exchange,
+                                CandleTimeframe.ONE_MINUTE,
+                                now))
+                .stream()
+                .filter(this::isUsable)
+                .filter(candle -> candle.getCandleTime()
+                        .toLocalDate()
+                        .equals(tradingDate))
+                .filter(candle -> isFinite(candle.getVwap()))
+                .sorted(Comparator.comparing(
+                        MarketCandle::getCandleTime))
                 .toList();
 
         if (recent.isEmpty()) {
-            return new NiftyVwapSnapshot(false, null, NiftyVwapDirection.UNKNOWN);
+            return unknownVwap();
         }
 
         MarketCandle current = recent.get(recent.size() - 1);
+
         Double currentVwap = current.getVwap();
+
         Double currentClose = current.getClosePrice();
 
-        if (currentVwap == null || currentClose == null || currentVwap == 0.0) {
-            return new NiftyVwapSnapshot(false, null, NiftyVwapDirection.UNKNOWN);
+        if (!isFinite(currentVwap)
+                || currentVwap == 0.0
+                || !isFinite(currentClose)) {
+            return unknownVwap();
         }
 
         boolean aboveVwap = currentClose > currentVwap;
-        double distancePct = (currentClose - currentVwap) / currentVwap * 100.0;
+
+        double distancePercent = (currentClose - currentVwap)
+                / currentVwap
+                * 100.0;
 
         if (recent.size() < 4) {
-            return new NiftyVwapSnapshot(aboveVwap, distancePct, NiftyVwapDirection.UNKNOWN);
+            return new NiftyVwapSnapshot(
+                    aboveVwap,
+                    distancePercent,
+                    NiftyVwapDirection.UNKNOWN);
         }
 
-        MarketCandle threeAgo = recent.get(recent.size() - 4);
-        Double vwapThreeAgo = threeAgo.getVwap();
-        if (vwapThreeAgo == null) {
-            return new NiftyVwapSnapshot(aboveVwap, distancePct, NiftyVwapDirection.UNKNOWN);
+        LocalDateTime threeMinutesEarlier = current.getCandleTime()
+                .minusMinutes(3);
+
+        Optional<MarketCandle> previous = recent.stream()
+                .filter(candle -> candle.getCandleTime()
+                        .equals(
+                                threeMinutesEarlier))
+                .findFirst();
+
+        if (previous.isEmpty()
+                || !isFinite(
+                        previous.get().getVwap())
+                || previous.get().getVwap() == 0.0) {
+            return new NiftyVwapSnapshot(
+                    aboveVwap,
+                    distancePercent,
+                    NiftyVwapDirection.UNKNOWN);
         }
 
-        double diff = currentVwap - vwapThreeAgo;
-        double pct = diff / currentVwap * 100.0;
+        double vwapChangePercent = (currentVwap
+                - previous.get().getVwap())
+                / currentVwap
+                * 100.0;
 
         NiftyVwapDirection direction;
-        if (pct > 0.05) {
+
+        if (vwapChangePercent > VWAP_DIRECTION_THRESHOLD_PERCENT
+                + COMPARISON_EPSILON) {
             direction = NiftyVwapDirection.RISING;
-        } else if (pct < -0.05) {
+        } else if (vwapChangePercent < -VWAP_DIRECTION_THRESHOLD_PERCENT
+                - COMPARISON_EPSILON) {
             direction = NiftyVwapDirection.FALLING;
         } else {
             direction = NiftyVwapDirection.FLAT;
         }
 
-        return new NiftyVwapSnapshot(aboveVwap, distancePct, direction);
+        return new NiftyVwapSnapshot(
+                aboveVwap,
+                distancePercent,
+                direction);
     }
 
-    private MarketSession computeMarketSession(LocalTime now, ExpiryType expiryType) {
-        if (now.isBefore(MARKET_OPEN) || now.isAfter(HARD_CLOSE_TIME)) {
+    private NiftyVwapSnapshot unknownVwap() {
+        return new NiftyVwapSnapshot(
+                false,
+                null,
+                NiftyVwapDirection.UNKNOWN);
+    }
+
+    private MarketSession advanceMonotonicSession(
+            LocalTime currentTime,
+            MarketSession candidate) {
+
+        int candidateRank = sessionRank(
+                currentTime,
+                candidate);
+
+        if (latchedSession == null
+                || candidateRank > lastSessionRank) {
+            latchedSession = candidate;
+            lastSessionRank = candidateRank;
+        }
+
+        return latchedSession;
+    }
+
+    private int sessionRank(
+            LocalTime currentTime,
+            MarketSession session) {
+
+        if (session == MarketSession.CLOSED) {
+            return currentTime.isBefore(MARKET_OPEN)
+                    ? 0
+                    : 7;
+        }
+
+        return switch (session) {
+            case OPENING_RANGE -> 1;
+            case ACTIVE -> 2;
+            case ORB_CUTOFF -> 3;
+            case FCHB_CUTOFF -> 4;
+            case WIND_DOWN, EXPIRY_WIND_DOWN -> 5;
+            case HARD_CLOSE -> 6;
+            case CLOSED -> 7;
+        };
+    }
+
+    private MarketSession computeMarketSession(
+            LocalTime currentTime,
+            ExpiryType expiryType) {
+
+        if (currentTime.isBefore(MARKET_OPEN)) {
             return MarketSession.CLOSED;
         }
 
-        if (!now.isBefore(MARKET_OPEN) && now.isBefore(OPENING_RANGE_END.plusMinutes(1))) {
+        if (currentTime.isBefore(ACTIVE_START)) {
             return MarketSession.OPENING_RANGE;
         }
 
-        if (!now.isBefore(ACTIVE_START) && now.isBefore(ACTIVE_END)) {
+        if (currentTime.isBefore(ACTIVE_END)) {
             return MarketSession.ACTIVE;
         }
 
-        if (!now.isBefore(ORB_CUTOFF_START) && now.isBefore(FCHB_CUTOFF_START)) {
+        if (currentTime.isBefore(FCHB_CUTOFF_START)) {
             return MarketSession.ORB_CUTOFF;
         }
 
-        if (!now.isBefore(FCHB_CUTOFF_START) && now.isBefore(expiryWindDownStart(expiryType))) {
+        LocalTime windDownStart = expiryType == ExpiryType.NONE
+                ? WIND_DOWN_START
+                : EXPIRY_WIND_DOWN_START;
+
+        if (currentTime.isBefore(windDownStart)) {
             return MarketSession.FCHB_CUTOFF;
         }
 
-        LocalTime expiryWindDownStart = expiryWindDownStart(expiryType);
-        LocalTime windDownStart = windDownStart(expiryType);
-
-        if (!now.isBefore(expiryWindDownStart) && now.isBefore(HARD_CLOSE_TIME)) {
-            return expiryType == ExpiryType.NONE ? MarketSession.WIND_DOWN : MarketSession.EXPIRY_WIND_DOWN;
+        if (currentTime.isBefore(HARD_CLOSE_TIME)) {
+            return expiryType == ExpiryType.NONE
+                    ? MarketSession.WIND_DOWN
+                    : MarketSession.EXPIRY_WIND_DOWN;
         }
 
-        if (now.equals(HARD_CLOSE_TIME)) {
+        if (currentTime.isBefore(CLOSED_AFTER)) {
             return MarketSession.HARD_CLOSE;
         }
 
         return MarketSession.CLOSED;
     }
 
-    private LocalTime expiryWindDownStart(ExpiryType expiryType) {
-        return expiryType == ExpiryType.NONE ? WIND_DOWN_START : EXPIRY_WIND_DOWN_START;
+    private boolean hasExactMinuteRange(
+            List<MarketCandle> candles,
+            LocalDateTime from,
+            LocalDateTime to) {
+
+        if (candles == null
+                || candles.size() != OPENING_RANGE_MINUTES) {
+            return false;
+        }
+
+        for (int i = 0; i < OPENING_RANGE_MINUTES; i++) {
+
+            MarketCandle candle = candles.get(i);
+
+            if (candle == null
+                    || candle.getCandleTime() == null
+                    || !candle.getCandleTime().equals(
+                            from.plusMinutes(i))) {
+                return false;
+            }
+        }
+
+        return candles.get(
+                candles.size() - 1)
+                .getCandleTime()
+                .equals(to);
     }
 
-    private LocalTime windDownStart(ExpiryType expiryType) {
-        return expiryType == ExpiryType.NONE ? WIND_DOWN_START : EXPIRY_WIND_DOWN_START;
+    private boolean isUsable(
+            MarketCandle candle) {
+
+        if (candle == null
+                || candle.getCandleTime() == null
+                || !Boolean.TRUE.equals(
+                        candle.getIsFinalized())) {
+            return false;
+        }
+
+        if (candle.getQualityStatus() == CandleQualityStatus.SUSPECT) {
+            return false;
+        }
+
+        return candle.getProcessingStatus() == null
+                || candle.getProcessingStatus() == CandleProcessingStatus.RELEASED;
     }
 
-    private record NiftyVwapSnapshot(
-            boolean aboveVwap,
-            Double distancePct,
-            NiftyVwapDirection direction) {
+    private boolean isFinite(Double value) {
+        return value != null
+                && !value.isNaN()
+                && !value.isInfinite();
+    }
+
+    private <T> List<T> safeList(
+            List<T> values) {
+
+        return values == null
+                ? List.of()
+                : values;
     }
 
     public record MarketState(
@@ -311,7 +592,9 @@ public class MarketStateService {
             NiftyVwapDirection niftyVwapDirection) {
     }
 
-    private String normalize(String value) {
-        return value == null || value.isBlank() ? null : value.trim().toUpperCase(Locale.ROOT);
+    private record NiftyVwapSnapshot(
+            boolean aboveVwap,
+            Double distancePct,
+            NiftyVwapDirection direction) {
     }
 }

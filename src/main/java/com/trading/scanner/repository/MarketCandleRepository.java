@@ -10,13 +10,19 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface MarketCandleRepository extends JpaRepository<MarketCandle, Integer> {
+public interface MarketCandleRepository
+                extends JpaRepository<MarketCandle, Integer> {
 
         Optional<MarketCandle> findBySymbolAndExchangeAndTimeframeAndCandleTime(
                         String symbol,
                         String exchange,
                         CandleTimeframe timeframe,
                         LocalDateTime candleTime);
+
+        Optional<MarketCandle> findTopBySymbolAndExchangeAndTimeframeOrderByCandleTimeDesc(
+                        String symbol,
+                        String exchange,
+                        CandleTimeframe timeframe);
 
         List<MarketCandle> findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
                         String symbol,
@@ -40,9 +46,13 @@ public interface MarketCandleRepository extends JpaRepository<MarketCandle, Inte
 
         long countByTimeframe(CandleTimeframe timeframe);
 
-        long countByTimeframeAndSource(CandleTimeframe timeframe, String source);
+        long countByTimeframeAndSource(
+                        CandleTimeframe timeframe,
+                        String source);
 
         long countBySource(String source);
 
-        long deleteByTimeframeAndCandleTimeBefore(CandleTimeframe timeframe, LocalDateTime candleTime);
+        long deleteByTimeframeAndCandleTimeBefore(
+                        CandleTimeframe timeframe,
+                        LocalDateTime candleTime);
 }

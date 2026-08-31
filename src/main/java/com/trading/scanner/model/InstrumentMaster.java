@@ -1,16 +1,10 @@
 package com.trading.scanner.model;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 @Entity
-@Table(
-        name = "instrument_master",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"symbol", "exchange"})
-)
+@Table(name = "instrument_master", uniqueConstraints = @UniqueConstraint(columnNames = { "symbol", "exchange" }))
 @Data
 @Builder
 @NoArgsConstructor
@@ -45,6 +39,20 @@ public class InstrumentMaster {
     private String brokerToken;
 
     private String isin;
+
+    @Column(name = "tick_size")
+    private Double tickSize;
+
+    @Column(name = "lot_size")
+    private Integer lotSize;
+
+    private String expiry;
+
+    @Column(name = "strike_price")
+    private Double strikePrice;
+
+    @Column(name = "metadata_source")
+    private String metadataSource;
 
     @Column(name = "is_active", nullable = false)
     @Builder.Default

@@ -1,17 +1,20 @@
 package com.trading.scanner.service.engine;
 
+import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.config.TimeProvider;
+import com.trading.scanner.model.CandleProcessingStatus;
+import com.trading.scanner.model.CandleQualityStatus;
 import com.trading.scanner.model.CandleTimeframe;
+import com.trading.scanner.model.ContextStatus;
 import com.trading.scanner.model.DailyStockContext;
+import com.trading.scanner.model.DayType;
 import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.model.StockPrice;
+import com.trading.scanner.model.VolumeTimeWindowBaseline;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
-import com.trading.scanner.model.DayType;
-import com.trading.scanner.model.VolumeTimeWindowBaseline;
 import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
-
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,322 +24,686 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
 public class DailyStockContextService {
 
-    private static final LocalTime MARKET_OPEN = LocalTime.of(9, 15);
-    private static final LocalTime FIRST_CANDLE_END = LocalTime.of(9, 19);
-    private static final LocalTime OPENING_RANGE_END = LocalTime.of(9, 29);
+        private static final LocalTime MARKET_OPEN = LocalTime.of(9, 15);
 
-    private final DailyStockContextRepository dailyStockContextRepository;
-    private final MarketCandleRepository marketCandleRepository;
-    private final StockPriceRepository stockPriceRepository;
-    private final MarketStateService marketStateService;
-    private final VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
-    private final TimeProvider timeProvider;
+        private static final LocalTime FIRST_CANDLE_END = LocalTime.of(9, 19);
 
-    @Transactional
-    public void processFinalizedOneMinuteCandle(MarketCandle candle) {
-        if (candle == null || candle.getTimeframe() != CandleTimeframe.ONE_MINUTE
-                || !Boolean.TRUE.equals(candle.getIsFinalized())) {
-            return;
+        private static final LocalTime OPENING_RANGE_END = LocalTime.of(9, 29);
+
+        private static final int FIRST_CANDLE_MINUTES = 5;
+        private static final int OPENING_RANGE_MINUTES = 15;
+        private static final int OPENING_RANGE_SESSION_MINUTE = 14;
+        private static final int RESISTANCE_LOOKBACK_DAYS = 15;
+
+        private static final double FIRST_CANDLE_MIN_RANGE_PCT = 0.15;
+        private static final double FIRST_CANDLE_MAX_RANGE_PCT = 3.0;
+        private static final long FIRST_CANDLE_MIN_VOLUME = 50_000L;
+
+        private static final double OPENING_RANGE_MIN_SIZE_PCT = 0.15;
+        private static final double OPENING_RANGE_MAX_SIZE_PCT = 2.5;
+        private static final double OPENING_RANGE_MIN_PARTICIPATION = 0.50;
+
+        /*
+         * openingRangeSkew stores the strategist-defined
+         * skewPosition value:
+         *
+         * (averageTypicalPrice - openingRangeLow)
+         * / (openingRangeHigh - openingRangeLow)
+         */
+        private static final double OPENING_RANGE_MIN_SKEW = 0.25;
+        private static final double OPENING_RANGE_MAX_SKEW = 0.75;
+
+        private static final double PREVIOUS_DAY_MAX_RANGE_PCT = 4.0;
+
+        private final DailyStockContextRepository dailyStockContextRepository;
+
+        private final MarketCandleRepository marketCandleRepository;
+
+        private final StockPriceRepository stockPriceRepository;
+
+        private final VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
+
+        private final MarketStateService marketStateService;
+        private final TradingCalendar tradingCalendar;
+        private final TimeProvider timeProvider;
+
+        @Transactional
+        public void processFinalizedOneMinuteCandle(
+                        MarketCandle candle) {
+
+                if (!isUsableOneMinuteCandle(candle)) {
+                        return;
+                }
+
+                LocalDateTime candleTime = candle.getCandleTime();
+
+                LocalTime minute = candleTime.toLocalTime();
+
+                if (minute.isBefore(MARKET_OPEN)
+                                || minute.isAfter(OPENING_RANGE_END)) {
+                        return;
+                }
+
+                LocalDate tradingDate = candleTime.toLocalDate();
+
+                List<MarketCandle> sessionCandles = Optional.ofNullable(
+                                marketCandleRepository
+                                                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                                                                candle.getSymbol(),
+                                                                candle.getExchange(),
+                                                                CandleTimeframe.ONE_MINUTE,
+                                                                tradingDate.atTime(
+                                                                                MARKET_OPEN),
+                                                                candleTime))
+                                .orElseGet(List::of)
+                                .stream()
+                                .filter(this::isUsableOneMinuteCandle)
+                                .sorted(Comparator.comparing(
+                                                MarketCandle::getCandleTime))
+                                .toList();
+
+                List<MarketCandle> firstCandleWindow = sessionCandles.stream()
+                                .filter(item -> !item.getCandleTime()
+                                                .isBefore(
+                                                                tradingDate.atTime(
+                                                                                MARKET_OPEN)))
+                                .filter(item -> !item.getCandleTime()
+                                                .isAfter(
+                                                                tradingDate.atTime(
+                                                                                FIRST_CANDLE_END)))
+                                .toList();
+
+                List<MarketCandle> openingRangeWindow = sessionCandles.stream()
+                                .filter(item -> !item.getCandleTime()
+                                                .isBefore(
+                                                                tradingDate.atTime(
+                                                                                MARKET_OPEN)))
+                                .filter(item -> !item.getCandleTime()
+                                                .isAfter(
+                                                                tradingDate.atTime(
+                                                                                OPENING_RANGE_END)))
+                                .toList();
+
+                DailyStockContext context = dailyStockContextRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                candle.getSymbol(),
+                                                candle.getExchange(),
+                                                tradingDate)
+                                .orElseGet(() -> DailyStockContext.builder()
+                                                .symbol(candle.getSymbol())
+                                                .exchange(candle.getExchange())
+                                                .tradingDate(tradingDate)
+                                                .firstCandleReady(false)
+                                                .openingRangeReady(false)
+                                                .corporateActionFlag(false)
+                                                .foBanFlag(false)
+                                                .resultsLast3dFlag(false)
+                                                .skipToday(false)
+                                                .contextStatus(
+                                                                ContextStatus.PARTIAL)
+                                                .createdAt(
+                                                                timeProvider.nowDateTime())
+                                                .build());
+
+                MarketCandle firstTodayCandle = sessionCandles.isEmpty()
+                                ? candle
+                                : sessionCandles.get(0);
+
+                ensurePreviousDayFactsAndGap(
+                                context,
+                                firstTodayCandle);
+
+                applyFirstCandle(
+                                context,
+                                firstCandleWindow);
+
+                applyOpeningRange(
+                                context,
+                                openingRangeWindow);
+
+                resolveBreakoutReferencePrice(context);
+                refreshSkipToday(context);
+                refreshContextStatus(context);
+
+                context.setUpdatedAt(
+                                timeProvider.nowDateTime());
+
+                dailyStockContextRepository.save(context);
         }
 
-        LocalDateTime candleTime = candle.getCandleTime();
-        LocalTime minute = candleTime.toLocalTime();
+        @Transactional(readOnly = true)
+        public List<DailyStockContext> findByTradingDate(
+                        LocalDate tradingDate) {
 
-        if (minute.isBefore(MARKET_OPEN) || minute.isAfter(OPENING_RANGE_END)) {
-            return;
+                return dailyStockContextRepository
+                                .findByTradingDateOrderBySymbolAsc(
+                                                tradingDate);
         }
 
-        LocalDate tradingDate = candleTime.toLocalDate();
-        LocalDateTime dayStart = tradingDate.atTime(MARKET_OPEN);
-        LocalDateTime dayCurrent = tradingDate.atTime(minute);
+        private void ensurePreviousDayFactsAndGap(
+                        DailyStockContext context,
+                        MarketCandle firstTodayCandle) {
 
-        List<MarketCandle> sessionCandles = marketCandleRepository
-                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
-                        candle.getSymbol(),
-                        candle.getExchange(),
-                        CandleTimeframe.ONE_MINUTE,
-                        dayStart,
-                        dayCurrent);
+                LocalDate tradingDate = context.getTradingDate();
 
-        List<MarketCandle> firstCandleWindow = sessionCandles.stream()
-                .filter(c -> !c.getCandleTime().toLocalTime().isAfter(FIRST_CANDLE_END))
-                .toList();
+                LocalDate previousTradingDate = tradingCalendar.previousTradingDay(
+                                tradingDate);
 
-        List<MarketCandle> openingRangeWindow = sessionCandles.stream()
-                .filter(c -> !c.getCandleTime().toLocalTime().isAfter(OPENING_RANGE_END))
-                .toList();
+                List<StockPrice> history = Optional.ofNullable(
+                                stockPriceRepository
+                                                .findBySymbolAndDateLessThanEqualOrderByDateAsc(
+                                                                context.getSymbol(),
+                                                                tradingDate))
+                                .orElseGet(List::of)
+                                .stream()
+                                .filter(price -> price != null
+                                                && price.getDate() != null)
+                                .filter(price -> price.getDate()
+                                                .isBefore(tradingDate))
+                                .sorted(Comparator.comparing(
+                                                StockPrice::getDate))
+                                .toList();
 
-        DailyStockContext context = dailyStockContextRepository
-                .findBySymbolAndExchangeAndTradingDate(candle.getSymbol(), candle.getExchange(), tradingDate)
-                .orElseGet(() -> DailyStockContext.builder()
-                        .symbol(candle.getSymbol())
-                        .exchange(candle.getExchange())
-                        .tradingDate(tradingDate)
-                        .firstCandleReady(false)
-                        .openingRangeReady(false)
-                        .corporateActionFlag(false)
-                        .foBanFlag(false)
-                        .resultsLast3dFlag(false)
-                        .skipToday(false)
-                        .createdAt(timeProvider.nowDateTime())
-                        .build());
+                if (history.isEmpty()) {
+                        refreshSkipToday(context);
+                        return;
+                }
 
-        ensurePreviousDayFactsAndGap(context, candle);
-        applyFirstCandle(context, firstCandleWindow);
-        applyOpeningRange(context, openingRangeWindow);
-        resolveBreakoutReferencePrice(context);
+                StockPrice previousDay = history.stream()
+                                .filter(price -> previousTradingDate.equals(
+                                                price.getDate()))
+                                .findFirst()
+                                .orElseGet(() -> history.get(
+                                                history.size() - 1));
 
-        context.setUpdatedAt(timeProvider.nowDateTime());
-        dailyStockContextRepository.save(context);
-    }
+                context.setPrevDayOpen(
+                                previousDay.getOpenPrice());
 
-    @Transactional(readOnly = true)
-    public List<DailyStockContext> findByTradingDate(LocalDate tradingDate) {
-        return dailyStockContextRepository.findByTradingDateOrderBySymbolAsc(tradingDate);
-    }
+                context.setPrevDayHigh(
+                                previousDay.getHighPrice());
 
-    private void applyFirstCandle(DailyStockContext context, List<MarketCandle> candles) {
-        if (candles.isEmpty()) {
-            return;
+                context.setPrevDayLow(
+                                previousDay.getLowPrice());
+
+                context.setPrevDayClose(
+                                previousDay.getClosePrice());
+
+                if (previousDay.getLowPrice() != null
+                                && previousDay.getLowPrice() > 0.0
+                                && previousDay.getHighPrice() != null) {
+
+                        context.setPrevDayRangePct(
+                                        (previousDay.getHighPrice()
+                                                        - previousDay.getLowPrice())
+                                                        / previousDay.getLowPrice()
+                                                        * 100.0);
+                } else {
+                        context.setPrevDayRangePct(null);
+                }
+
+                int previousDayIndex = history.size() - 1;
+
+                context.setConsecutiveRedDays(
+                                consecutiveDownCloses(
+                                                history,
+                                                previousDayIndex));
+
+                context.setConsecutiveGreenDays(
+                                consecutiveUpCloses(
+                                                history,
+                                                previousDayIndex));
+
+                int fromIndex = Math.max(
+                                0,
+                                history.size()
+                                                - RESISTANCE_LOOKBACK_DAYS);
+
+                Double highestClose = history.subList(
+                                fromIndex,
+                                history.size())
+                                .stream()
+                                .map(StockPrice::getClosePrice)
+                                .filter(Objects::nonNull)
+                                .max(Double::compareTo)
+                                .orElse(null);
+
+                context.setHighestClose15d(highestClose);
+
+                if (highestClose != null
+                                && highestClose > 0.0
+                                && previousDay.getClosePrice() != null) {
+
+                        context.setDistFromResistancePct(
+                                        (highestClose
+                                                        - previousDay.getClosePrice())
+                                                        / highestClose
+                                                        * 100.0);
+                } else {
+                        context.setDistFromResistancePct(null);
+                }
+
+                if (firstTodayCandle != null
+                                && firstTodayCandle.getOpenPrice() != null
+                                && previousDay.getClosePrice() != null
+                                && previousDay.getClosePrice() != 0.0) {
+
+                        context.setGapPct(
+                                        (firstTodayCandle.getOpenPrice()
+                                                        - previousDay.getClosePrice())
+                                                        / previousDay.getClosePrice()
+                                                        * 100.0);
+                } else {
+                        context.setGapPct(null);
+                }
+
+                refreshSkipToday(context);
         }
 
-        MarketCandle first = candles.get(0);
-        MarketCandle last = candles.get(candles.size() - 1);
+        private void applyFirstCandle(
+                        DailyStockContext context,
+                        List<MarketCandle> candles) {
 
-        double high = candles.stream().mapToDouble(MarketCandle::getHighPrice).max().orElse(first.getHighPrice());
-        double low = candles.stream().mapToDouble(MarketCandle::getLowPrice).min().orElse(first.getLowPrice());
-        long volume = candles.stream()
-                .map(MarketCandle::getVolume)
-                .filter(v -> v != null)
-                .mapToLong(Long::longValue)
-                .sum();
+                if (!hasExactMinuteRange(
+                                candles,
+                                context.getTradingDate()
+                                                .atTime(MARKET_OPEN),
+                                context.getTradingDate()
+                                                .atTime(FIRST_CANDLE_END),
+                                FIRST_CANDLE_MINUTES)) {
 
-        context.setFirstCandleOpen(first.getOpenPrice());
-        context.setFirstCandleHigh(high);
-        context.setFirstCandleLow(low);
-        context.setFirstCandleClose(last.getClosePrice());
-        context.setFirstCandleVolume(volume);
-        context.setFirstCandleRange(high - low);
-        context.setFirstCandleRangePct(low > 0 ? ((high - low) / low) * 100.0 : null);
+                        context.setFirstCandleReady(false);
+                        context.setFirstCandleValid(false);
+                        return;
+                }
 
-        boolean ready = candles.size() >= 5;
-        context.setFirstCandleReady(ready);
+                MarketCandle first = candles.get(0);
 
-        if (!ready || low <= 0.0) {
-            context.setFirstCandleBullish(false);
-            context.setFirstCandleValid(false);
-            return;
+                MarketCandle last = candles.get(candles.size() - 1);
+
+                double high = highestHigh(candles);
+
+                double low = lowestLow(candles);
+
+                long volume = totalVolume(candles);
+
+                context.setFirstCandleOpen(
+                                first.getOpenPrice());
+
+                context.setFirstCandleHigh(high);
+                context.setFirstCandleLow(low);
+
+                context.setFirstCandleClose(
+                                last.getClosePrice());
+
+                context.setFirstCandleVolume(volume);
+                context.setFirstCandleRange(high - low);
+
+                context.setFirstCandleRangePct(
+                                low > 0.0
+                                                ? (high - low)
+                                                                / low
+                                                                * 100.0
+                                                : null);
+
+                context.setFirstCandleReady(true);
+
+                boolean bullish = first.getOpenPrice() != null
+                                && last.getClosePrice() != null
+                                && last.getClosePrice() > first.getOpenPrice();
+
+                context.setFirstCandleBullish(bullish);
+
+                Double rangePct = context.getFirstCandleRangePct();
+
+                context.setFirstCandleValid(
+                                bullish
+                                                && volume >= FIRST_CANDLE_MIN_VOLUME
+                                                && rangePct != null
+                                                && rangePct >= FIRST_CANDLE_MIN_RANGE_PCT
+                                                && rangePct <= FIRST_CANDLE_MAX_RANGE_PCT);
         }
 
-        Double open = context.getFirstCandleOpen();
-        Double close = context.getFirstCandleClose();
-        Double rangePct = context.getFirstCandleRangePct();
+        private void applyOpeningRange(
+                        DailyStockContext context,
+                        List<MarketCandle> candles) {
 
-        boolean bullish = close != null && open != null && close > open;
-        context.setFirstCandleBullish(bullish);
+                if (!hasExactMinuteRange(
+                                candles,
+                                context.getTradingDate()
+                                                .atTime(MARKET_OPEN),
+                                context.getTradingDate()
+                                                .atTime(OPENING_RANGE_END),
+                                OPENING_RANGE_MINUTES)) {
 
-        boolean valid = Boolean.TRUE.equals(bullish)
-                && rangePct != null
-                && rangePct >= 0.15
-                && rangePct <= 3.0
-                && volume >= 50_000L;
+                        context.setOpeningRangeReady(false);
+                        context.setOpeningRangeValid(false);
+                        return;
+                }
 
-        context.setFirstCandleValid(valid);
-    }
+                double high = highestHigh(candles);
 
-    private void applyOpeningRange(DailyStockContext context, List<MarketCandle> candles) {
-        if (candles.isEmpty()) {
-            return;
+                double low = lowestLow(candles);
+
+                long volume = totalVolume(candles);
+
+                context.setOpeningRangeHigh(high);
+                context.setOpeningRangeLow(low);
+                context.setOpeningRangeSize(high - low);
+
+                context.setOpeningRangeSizePct(
+                                low > 0.0
+                                                ? (high - low)
+                                                                / low
+                                                                * 100.0
+                                                : null);
+
+                context.setOpeningRangeVolume(volume);
+                context.setOpeningRangeReady(true);
+
+                if (low <= 0.0 || high <= low) {
+                        context.setOpeningRangeSkew(null);
+                        context.setOpeningRangeValid(false);
+                        return;
+                }
+
+                double range = high - low;
+
+                Double averageTypicalPrice = averageTypicalPrice(candles);
+
+                Double skewPosition = averageTypicalPrice != null
+                                && range > 0.0
+                                                ? (averageTypicalPrice - low)
+                                                                / range
+                                                : null;
+
+                context.setOpeningRangeSkew(
+                                skewPosition);
+
+                VolumeTimeWindowBaseline baseline = volumeTimeWindowBaselineRepository
+                                .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
+                                                context.getSymbol(),
+                                                context.getExchange(),
+                                                context.getTradingDate(),
+                                                OPENING_RANGE_SESSION_MINUTE)
+                                .orElse(null);
+
+                Long baselineVolume = baseline == null
+                                ? null
+                                : baseline.getAvgCumulativeVolume20();
+
+                Double participationRatio = baselineVolume != null
+                                && baselineVolume > 0L
+                                                ? volume / (double) baselineVolume
+                                                : null;
+
+                Double sizePct = context.getOpeningRangeSizePct();
+
+                context.setOpeningRangeValid(
+                                sizePct != null
+                                                && sizePct >= OPENING_RANGE_MIN_SIZE_PCT
+                                                && sizePct <= OPENING_RANGE_MAX_SIZE_PCT
+                                                && skewPosition != null
+                                                && skewPosition >= OPENING_RANGE_MIN_SKEW
+                                                && skewPosition <= OPENING_RANGE_MAX_SKEW
+                                                && participationRatio != null
+                                                && participationRatio >= OPENING_RANGE_MIN_PARTICIPATION);
         }
 
-        MarketCandle first = candles.stream()
-                .min(Comparator.comparing(MarketCandle::getCandleTime))
-                .orElse(candles.get(0));
+        private Double averageTypicalPrice(
+                        List<MarketCandle> candles) {
 
-        double high = candles.stream().mapToDouble(MarketCandle::getHighPrice).max().orElse(first.getHighPrice());
-        double low = candles.stream().mapToDouble(MarketCandle::getLowPrice).min().orElse(first.getLowPrice());
-        long volume = candles.stream()
-                .map(MarketCandle::getVolume)
-                .filter(v -> v != null)
-                .mapToLong(Long::longValue)
-                .sum();
+                if (candles == null
+                                || candles.isEmpty()) {
+                        return null;
+                }
 
-        context.setOpeningRangeHigh(high);
-        context.setOpeningRangeLow(low);
-        context.setOpeningRangeSize(high - low);
-        context.setOpeningRangeSizePct(low > 0 ? ((high - low) / low) * 100.0 : null);
-        context.setOpeningRangeVolume(volume);
+                double total = 0.0;
 
-        boolean ready = candles.size() >= 15;
-        context.setOpeningRangeReady(ready);
+                for (MarketCandle candle : candles) {
+                        if (candle == null
+                                        || !isFinite(candle.getHighPrice())
+                                        || !isFinite(candle.getLowPrice())
+                                        || !isFinite(candle.getClosePrice())
+                                        || candle.getHighPrice() < candle.getLowPrice()) {
+                                return null;
+                        }
 
-        if (!ready || low <= 0.0 || high <= low) {
-            context.setOpeningRangeSkew(null);
-            context.setOpeningRangeValid(false);
-            return;
+                        total += typicalPrice(candle);
+                }
+
+                return total / candles.size();
         }
 
-        double midpoint = (high + low) / 2.0;
-        double upperHalf = high - midpoint;
-        double lowerHalf = midpoint - low;
+        private double typicalPrice(
+                        MarketCandle candle) {
 
-        Double skew = (lowerHalf > 0.0) ? (upperHalf / lowerHalf) : null;
-        context.setOpeningRangeSkew(skew);
-
-        Double sizePct = context.getOpeningRangeSizePct();
-
-        // --- NEW: baseline participation check using V1.3.3 baselines ---
-        VolumeTimeWindowBaseline baseline = volumeTimeWindowBaselineRepository
-                .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
-                        context.getSymbol(),
-                        context.getExchange(),
-                        context.getTradingDate(),
-                        14 // session minute 14 = 9:29 AM
-                )
-                .orElse(null);
-
-        Long baselineVolume = baseline != null ? baseline.getAvgCumulativeVolume20() : null;
-        Double participationRatio = (baselineVolume != null && baselineVolume > 0L)
-                ? volume / (double) baselineVolume
-                : null;
-        // ---------------------------------------------------------------
-
-        boolean valid = sizePct != null
-                && sizePct >= 0.15
-                && sizePct <= 2.5
-                && skew != null
-                && skew >= 0.5
-                && skew <= 2.0
-                && participationRatio != null
-                && participationRatio >= 0.5;
-
-        context.setOpeningRangeValid(valid);
-    }
-
-    private void ensurePreviousDayFactsAndGap(DailyStockContext context, MarketCandle todayFirstCandle) {
-        if (context.getPrevDayClose() != null) {
-            return;
+                return (candle.getHighPrice()
+                                + candle.getLowPrice()
+                                + candle.getClosePrice())
+                                / 3.0;
         }
 
-        LocalDate tradingDate = context.getTradingDate();
-        LocalDate prevDate = tradingDate.minusDays(1);
+        private boolean isFinite(
+                        Double value) {
 
-        List<StockPrice> history = stockPriceRepository
-                .findBySymbolAndDateLessThanEqualOrderByDateAsc(context.getSymbol(), tradingDate);
-
-        if (history.isEmpty()) {
-            return;
+                return value != null
+                                && !value.isNaN()
+                                && !value.isInfinite();
         }
 
-        // Previous day row
-        StockPrice prev = history.stream()
-                .filter(p -> tradingDate.minusDays(1).equals(p.getDate()))
-                .reduce((first, second) -> second)
-                .orElse(null);
+        private void resolveBreakoutReferencePrice(
+                        DailyStockContext context) {
 
-        if (prev == null) {
-            return;
+                MarketStateService.MarketState state = marketStateService.currentState();
+
+                if (state == null
+                                || state.tradingDate() == null
+                                || !state.tradingDate().equals(
+                                                context.getTradingDate())
+                                || state.dayType() == null) {
+                        return;
+                }
+
+                if (state.dayType() == DayType.NORMAL) {
+                        context.setBreakoutReferencePrice(
+                                        context.getPrevDayHigh());
+                } else if (state.dayType() == DayType.GAP_UP) {
+                        context.setBreakoutReferencePrice(
+                                        context.getOpeningRangeHigh());
+                } else if (state.dayType() == DayType.GAP_DOWN) {
+                        context.setBreakoutReferencePrice(null);
+                }
         }
 
-        Double prevOpen = prev.getOpenPrice();
-        Double prevHigh = prev.getHighPrice();
-        Double prevLow = prev.getLowPrice();
-        Double prevClose = prev.getClosePrice();
+        private void refreshSkipToday(
+                        DailyStockContext context) {
 
-        context.setPrevDayOpen(prevOpen);
-        context.setPrevDayHigh(prevHigh);
-        context.setPrevDayLow(prevLow);
-        context.setPrevDayClose(prevClose);
+                boolean previousDayTooVolatile = context.getPrevDayRangePct() != null
+                                && context.getPrevDayRangePct() > PREVIOUS_DAY_MAX_RANGE_PCT;
 
-        if (prevOpen != null && prevClose != null && prevOpen != 0.0) {
-            double prevRangePct = Math.abs(prevClose - prevOpen) / prevOpen * 100.0;
-            context.setPrevDayRangePct(prevRangePct);
+                context.setSkipToday(
+                                Boolean.TRUE.equals(
+                                                context.getCorporateActionFlag())
+                                                || Boolean.TRUE.equals(
+                                                                context.getFoBanFlag())
+                                                || Boolean.TRUE.equals(
+                                                                context.getResultsLast3dFlag())
+                                                || previousDayTooVolatile);
         }
 
-        // consecutive red/green days ending yesterday
-        int consecutiveRed = 0;
-        int consecutiveGreen = 0;
+        private void refreshContextStatus(
+                        DailyStockContext context) {
 
-        StockPrice prevIter = prev;
-        for (int i = history.size() - 2; i >= 0; i--) {
-            StockPrice current = history.get(i);
-            if (current.getClosePrice() == null || prevIter.getClosePrice() == null) {
-                break;
-            }
+                boolean previousDayComplete = context.getPrevDayOpen() != null
+                                && context.getPrevDayHigh() != null
+                                && context.getPrevDayLow() != null
+                                && context.getPrevDayClose() != null
+                                && context.getGapPct() != null;
 
-            if (current.getClosePrice() < prevIter.getClosePrice()) {
-                if (consecutiveGreen > 0)
-                    break;
-                consecutiveRed++;
-            } else if (current.getClosePrice() > prevIter.getClosePrice()) {
-                if (consecutiveRed > 0)
-                    break;
-                consecutiveGreen++;
-            } else {
-                break;
-            }
+                boolean firstCandleComplete = Boolean.TRUE.equals(
+                                context.getFirstCandleReady());
 
-            prevIter = current;
+                boolean openingRangeComplete = Boolean.TRUE.equals(
+                                context.getOpeningRangeReady());
+
+                MarketStateService.MarketState state = marketStateService.currentState();
+
+                boolean dayTypeAvailable = state != null
+                                && context.getTradingDate().equals(
+                                                state.tradingDate())
+                                && state.dayType() != null;
+
+                boolean breakoutReferenceResolved = dayTypeAvailable
+                                && (state.dayType() == DayType.GAP_DOWN
+                                                || context.getBreakoutReferencePrice() != null);
+
+                if (previousDayComplete
+                                && firstCandleComplete
+                                && openingRangeComplete
+                                && breakoutReferenceResolved) {
+
+                        context.setContextStatus(
+                                        ContextStatus.COMPLETE);
+                } else {
+                        context.setContextStatus(
+                                        ContextStatus.PARTIAL);
+                }
         }
 
-        context.setConsecutiveRedDays(consecutiveRed);
-        context.setConsecutiveGreenDays(consecutiveGreen);
+        private int consecutiveDownCloses(
+                        List<StockPrice> history,
+                        int lastIndex) {
 
-        // highestClose15d and distFromResistancePct
-        int fromIndex = Math.max(0, history.size() - 15);
-        List<StockPrice> last15 = history.subList(fromIndex, history.size());
-        double highestClose = last15.stream()
-                .map(StockPrice::getClosePrice)
-                .filter(c -> c != null)
-                .max(Double::compareTo)
-                .orElse(prevClose != null ? prevClose : 0.0);
+                int count = 0;
 
-        context.setHighestClose15d(highestClose);
+                for (int index = lastIndex; index > 0; index--) {
 
-        if (prevClose != null && prevClose != 0.0) {
-            double distFromResistancePct = (highestClose - prevClose) / prevClose * 100.0;
-            context.setDistFromResistancePct(distFromResistancePct);
+                        Double currentClose = history.get(index)
+                                        .getClosePrice();
+
+                        Double previousClose = history.get(index - 1)
+                                        .getClosePrice();
+
+                        if (currentClose == null
+                                        || previousClose == null
+                                        || currentClose >= previousClose) {
+                                break;
+                        }
+
+                        count++;
+                }
+
+                return count;
         }
 
-        // gapPct using today's first candle open
-        Double todayOpen = todayFirstCandle.getOpenPrice();
-        if (todayOpen != null && prevClose != null && prevClose != 0.0) {
-            double gapPct = (todayOpen - prevClose) / prevClose * 100.0;
-            context.setGapPct(gapPct);
+        private int consecutiveUpCloses(
+                        List<StockPrice> history,
+                        int lastIndex) {
+
+                int count = 0;
+
+                for (int index = lastIndex; index > 0; index--) {
+
+                        Double currentClose = history.get(index)
+                                        .getClosePrice();
+
+                        Double previousClose = history.get(index - 1)
+                                        .getClosePrice();
+
+                        if (currentClose == null
+                                        || previousClose == null
+                                        || currentClose <= previousClose) {
+                                break;
+                        }
+
+                        count++;
+                }
+
+                return count;
         }
 
-        // exclusion flags already defaulted to false in builder; skipToday is OR of
-        // them
-        boolean skipToday = Boolean.TRUE.equals(context.getCorporateActionFlag())
-                || Boolean.TRUE.equals(context.getFoBanFlag())
-                || Boolean.TRUE.equals(context.getResultsLast3dFlag());
-        context.setSkipToday(skipToday);
-    }
+        private boolean hasExactMinuteRange(
+                        List<MarketCandle> candles,
+                        LocalDateTime from,
+                        LocalDateTime to,
+                        int expectedCount) {
 
-    private void resolveBreakoutReferencePrice(DailyStockContext context) {
-        if (context.getBreakoutReferencePrice() != null) {
-            return;
+                if (candles == null
+                                || candles.size() != expectedCount) {
+                        return false;
+                }
+
+                for (int i = 0; i < expectedCount; i++) {
+
+                        LocalDateTime expected = from.plusMinutes(i);
+
+                        if (!expected.isBefore(
+                                        to.plusMinutes(1))
+                                        || candles.get(i)
+                                                        .getCandleTime()
+                                                        .equals(expected) == false) {
+                                return false;
+                        }
+                }
+
+                return candles.get(
+                                candles.size() - 1)
+                                .getCandleTime()
+                                .equals(to);
         }
 
-        var state = marketStateService.currentState();
-        if (state == null || state.dayType() == null) {
-            return;
+        private boolean isUsableOneMinuteCandle(
+                        MarketCandle candle) {
+
+                if (candle == null
+                                || candle.getCandleTime() == null
+                                || !Boolean.TRUE.equals(
+                                                candle.getIsFinalized())) {
+                        return false;
+                }
+
+                if (candle.getQualityStatus() == CandleQualityStatus.SUSPECT) {
+                        return false;
+                }
+
+                return candle.getProcessingStatus() == null
+                                || candle.getProcessingStatus() == CandleProcessingStatus.RELEASED;
         }
 
-        DayType dayType = state.dayType();
+        private double highestHigh(
+                        List<MarketCandle> candles) {
 
-        if (dayType == DayType.NORMAL) {
-            context.setBreakoutReferencePrice(context.getPrevDayHigh());
-        } else if (dayType == DayType.GAP_UP) {
-            context.setBreakoutReferencePrice(context.getOpeningRangeHigh());
-        } else if (dayType == DayType.GAP_DOWN) {
-            context.setBreakoutReferencePrice(null);
+                return candles.stream()
+                                .map(MarketCandle::getHighPrice)
+                                .filter(Objects::nonNull)
+                                .max(Double::compareTo)
+                                .orElse(0.0);
         }
-    }
 
+        private double lowestLow(
+                        List<MarketCandle> candles) {
+
+                return candles.stream()
+                                .map(MarketCandle::getLowPrice)
+                                .filter(Objects::nonNull)
+                                .min(Double::compareTo)
+                                .orElse(0.0);
+        }
+
+        private long totalVolume(
+                        List<MarketCandle> candles) {
+
+                return candles.stream()
+                                .map(MarketCandle::getVolume)
+                                .filter(Objects::nonNull)
+                                .mapToLong(Long::longValue)
+                                .sum();
+        }
 }

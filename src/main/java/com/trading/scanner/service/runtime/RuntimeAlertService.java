@@ -18,9 +18,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -29,11 +31,14 @@ public class RuntimeAlertService {
 
     private static final String STATUS_OPEN = "OPEN";
     private static final String STATUS_RESOLVED = "RESOLVED";
+    private static final String STATUS_SUCCESS = "SUCCESS";
+    private static final String STATUS_FAILED = "FAILED";
 
     private static final String KEY_CALENDAR_REFRESH_STATUS = "calendar.last.official.refresh.status";
     private static final String KEY_CALENDAR_REFRESH_MESSAGE = "calendar.last.official.refresh.message";
     private static final String KEY_CALENDAR_REFRESH_AT = "calendar.last.official.refresh.at";
     private static final String ALERT_KEY_CALENDAR_REFRESH_FAILED = "calendar.official_refresh_failed";
+    private static final String ALERT_KEY_FEED_HEALTH = "runtime.feed_health";
 
     private final RuntimeAlertStateRepository runtimeAlertStateRepository;
     private final RuntimeReadinessService runtimeReadinessService;
@@ -146,6 +151,118 @@ public class RuntimeAlertService {
                 resolved,
                 openHighAlertCount(),
                 "Runtime alert evaluation completed");
+    }
+
+    @Transactional
+    public void evaluateFeedHealthAggregate(
+            List<String> staleSymbols,
+            List<String> recoveringSymbols) {
+
+        List<String> stale = staleSymbols == null
+                ? List.of()
+                : List.copyOf(staleSymbols);
+
+        List<String> recovering = recoveringSymbols == null
+                ? List.of()
+                : List.copyOf(recoveringSymbols);
+
+        if (stale.isEmpty() && recovering.isEmpty()) {
+            resolve(ALERT_KEY_FEED_HEALTH);
+            return;
+        }
+
+        upsertOpen(
+                ALERT_KEY_FEED_HEALTH,
+                "MEDIUM",
+                "Subscribed market-data feed health degraded",
+                Map.of(
+                        "staleSymbols", stale,
+                        "recoveringSymbols", recovering,
+                        "staleCount", stale.size(),
+                        "recoveringCount", recovering.size()));
+    }
+
+    @Transactional
+    public ScheduledJobAlertResult reportScheduledJobResult(
+            String jobName,
+            boolean success,
+            String message,
+            Object details) {
+
+        LocalDateTime now = timeProvider.nowDateTime();
+
+        String safeJobName = jobName == null || jobName.isBlank()
+                ? "unknown"
+                : jobName.trim()
+                        .toLowerCase(java.util.Locale.ROOT)
+                        .replaceAll("[^a-z0-9]+", "_");
+
+        String executionId = UUID.randomUUID().toString();
+
+        String alertKey = "runtime.scheduled_job."
+                + safeJobName
+                + "."
+                + now.toLocalDate()
+                + "."
+                + executionId;
+
+        String status = success
+                ? STATUS_SUCCESS
+                : STATUS_FAILED;
+
+        String safeMessage = message == null || message.isBlank()
+                ? success
+                        ? "Scheduled job completed"
+                        : "Scheduled job failed"
+                : message;
+
+        Map<String, Object> alertDetails = new LinkedHashMap<>();
+
+        alertDetails.put("jobName", jobName);
+        alertDetails.put("executionId", executionId);
+        alertDetails.put("success", success);
+        alertDetails.put("status", status);
+        alertDetails.put("executedAt", now.toString());
+        alertDetails.put("details", details);
+
+        RuntimeAlertState alert = RuntimeAlertState.builder()
+                .alertKey(alertKey)
+                .firstTriggeredAt(now)
+                .createdAt(now)
+                .build();
+
+        alert.setSeverity("MEDIUM");
+        alert.setStatus(status);
+        alert.setMessage(safeMessage);
+        alert.setDetails(toJson(alertDetails));
+        alert.setLastTriggeredAt(now);
+        alert.setUpdatedAt(now);
+
+        runtimeAlertStateRepository.save(alert);
+
+        boolean webhookDelivered = notifyWebhook(
+                alertKey,
+                "MEDIUM",
+                status,
+                safeMessage,
+                alert.getDetails());
+
+        boolean emailDelivered = notifyEmail(
+                alertKey,
+                "MEDIUM",
+                status,
+                safeMessage,
+                alert.getDetails());
+
+        return new ScheduledJobAlertResult(
+                alertKey,
+                executionId,
+                jobName,
+                success,
+                status,
+                now,
+                webhookDelivered || emailDelivered,
+                safeMessage);
     }
 
     public void scheduledEvaluate() {
@@ -403,4 +520,16 @@ public class RuntimeAlertService {
             boolean emailDelivered,
             String message) {
     }
+
+    public record ScheduledJobAlertResult(
+            String alertKey,
+            String executionId,
+            String jobName,
+            boolean success,
+            String status,
+            LocalDateTime reportedAt,
+            boolean notificationDelivered,
+            String message) {
+    }
+
 }
