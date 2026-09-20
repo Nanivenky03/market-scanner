@@ -16,17 +16,17 @@ import java.time.ZoneId;
  * Uses system time - standard production behavior
  */
 @Configuration
-@Profile({"production", "default"})
+@Profile({ "production", "default" })
 public class ProductionClockConfig {
-    
+
     @Value("${exchange.timezone:Asia/Kolkata}")
     private String timezoneId;
-    
+
     @Bean
     public ExchangeClock exchangeClock() {
         ZoneId exchangeZone = ZoneId.of(timezoneId);
         Clock systemClock = Clock.systemUTC();
-        
+
         return new ExchangeClock(systemClock, exchangeZone);
     }
 }

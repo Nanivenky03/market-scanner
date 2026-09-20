@@ -1,17 +1,12 @@
 package com.trading.scanner.service.instrument;
 
 import com.trading.scanner.model.InstrumentMaster;
-import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.repository.InstrumentMasterRepository;
-import com.trading.scanner.repository.StockUniverseRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
 import java.util.Optional;
 
 @Slf4j
@@ -19,92 +14,69 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class InstrumentMasterSyncService {
 
+    private static final String NIFTY_SYMBOL = "NIFTY";
+    private static final String NSE = "NSE";
+
     private final InstrumentMasterRepository instrumentMasterRepository;
-    private final StockUniverseRepository stockUniverseRepository;
 
     @Transactional
-    public int syncFromStockUniverseIfEmpty() {
-        if (instrumentMasterRepository.count() > 0) {
-            log.info("Instrument master already populated. Skipping initial sync.");
-            return 0;
+    public int ensureRequiredMarketReferences() {
+        Optional<InstrumentMaster> existing = instrumentMasterRepository
+                .findBySymbolAndExchange(NIFTY_SYMBOL, NSE);
+
+        if (existing.isEmpty()) {
+            InstrumentMaster nifty = InstrumentMaster.builder()
+                    .symbol(NIFTY_SYMBOL)
+                    .exchange(NSE)
+                    .companyName("NIFTY 50")
+                    .instrumentType("INDEX")
+                    .segment("INDEX")
+                    .brokerSymbol(null)
+                    .brokerToken(null)
+                    .isin(null)
+                    .metadataSource("REQUIRED_MARKET_REFERENCE")
+                    .isActive(true)
+                    .build();
+
+            instrumentMasterRepository.save(nifty);
+            log.info("Created required NIFTY instrument-master row");
+            return 1;
         }
 
-        List<StockUniverse> stocks = stockUniverseRepository.findAll().stream()
-                .sorted(Comparator.comparing(StockUniverse::getSymbol))
-                .toList();
+        InstrumentMaster nifty = existing.get();
+        boolean changed = false;
 
-        if (stocks.isEmpty()) {
-            log.warn("Stock universe is empty. Nothing to sync.");
-            return 0;
+        if (!"NIFTY 50".equals(nifty.getCompanyName())) {
+            nifty.setCompanyName("NIFTY 50");
+            changed = true;
         }
 
-        List<InstrumentMaster> instruments = stocks.stream()
-                .map(this::toInstrumentMaster)
-                .toList();
-
-        instrumentMasterRepository.saveAll(instruments);
-        log.info("Initial instrument master sync completed. inserted={}", instruments.size());
-        return instruments.size();
-    }
-
-    @Transactional
-    public int syncActiveUniverse() {
-        List<InstrumentMaster> changed = new ArrayList<>();
-
-        for (StockUniverse stock : stockUniverseRepository.findByIsActiveTrueOrderBySymbolAsc()) {
-            Optional<InstrumentMaster> existing = instrumentMasterRepository.findBySymbolAndExchange(
-                    stock.getSymbol(),
-                    stock.getExchange().name());
-
-            if (existing.isEmpty()) {
-                changed.add(toInstrumentMaster(stock));
-                continue;
-            }
-
-            InstrumentMaster instrument = existing.get();
-            boolean rowChanged = false;
-
-            if (!safeEquals(instrument.getCompanyName(), stock.getCompanyName())) {
-                instrument.setCompanyName(stock.getCompanyName());
-                rowChanged = true;
-            }
-
-            if (!Boolean.TRUE.equals(instrument.getIsActive())) {
-                instrument.setIsActive(true);
-                rowChanged = true;
-            }
-
-            if (rowChanged) {
-                changed.add(instrument);
-            }
+        if (!"INDEX".equalsIgnoreCase(nifty.getInstrumentType())) {
+            nifty.setInstrumentType("INDEX");
+            changed = true;
         }
 
-        if (!changed.isEmpty()) {
-            instrumentMasterRepository.saveAll(changed);
+        if (!"INDEX".equalsIgnoreCase(nifty.getSegment())) {
+            nifty.setSegment("INDEX");
+            changed = true;
         }
 
-        log.info("Active instrument universe synchronized. active={} changed={}",
-                stockUniverseRepository.findByIsActiveTrueOrderBySymbolAsc().size(),
-                changed.size());
+        if (!Boolean.TRUE.equals(nifty.getIsActive())) {
+            nifty.setIsActive(true);
+            changed = true;
+        }
 
-        return changed.size();
-    }
+        if (nifty.getMetadataSource() == null || nifty.getMetadataSource().isBlank()) {
+            nifty.setMetadataSource("REQUIRED_MARKET_REFERENCE");
+            changed = true;
+        }
 
-    private InstrumentMaster toInstrumentMaster(StockUniverse stock) {
-        return InstrumentMaster.builder()
-                .symbol(stock.getSymbol())
-                .exchange(stock.getExchange().name())
-                .companyName(stock.getCompanyName())
-                .instrumentType("EQUITY")
-                .segment("CASH")
-                .brokerSymbol(stock.getSymbol())
-                .brokerToken(null)
-                .isin(null)
-                .isActive(stock.getIsActive())
-                .build();
-    }
+        if (changed) {
+            instrumentMasterRepository.save(nifty);
+            log.info("Corrected required NIFTY instrument-master row");
+            return 1;
+        }
 
-    private boolean safeEquals(Object left, Object right) {
-        return left == null ? right == null : left.equals(right);
+        return 0;
     }
 }

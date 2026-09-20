@@ -26,6 +26,7 @@ public class BaseDataResetService {
     private static final String UPDATED_BY_SYSTEM = "system";
 
     private static final List<String> RESET_TABLES = List.of(
+             "workflow_status",
             "live_minute_resolution",
             "market_minute_snapshot",
             "eod_data_entry",

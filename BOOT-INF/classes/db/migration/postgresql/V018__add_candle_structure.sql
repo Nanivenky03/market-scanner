@@ -1,0 +1,8 @@
+ALTER TABLE market_candles
+ADD COLUMN body_ratio DOUBLE PRECISION,
+ADD COLUMN upper_wick_ratio DOUBLE PRECISION,
+ADD COLUMN lower_wick_ratio DOUBLE PRECISION,
+ADD COLUMN range_pct DOUBLE PRECISION,
+ADD COLUMN direction TEXT,
+ADD COLUMN strong_bullish BOOLEAN,
+ADD COLUMN strong_bearish BOOLEAN;

@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -224,4 +225,83 @@ class RuntimeAlertServiceTest {
                                 null,
                                 null);
         }
+
+        @Test
+        void evaluateNow_shouldHandleNullShutdownDetails() {
+                LocalDate date = LocalDate.of(2026, 8, 27);
+
+                LocalDateTime now = date.atTime(10, 0);
+
+                when(timeProvider.nowDateTime())
+                                .thenReturn(now);
+
+                when(runtimeReadinessService.status())
+                                .thenReturn(readiness(
+                                                date,
+                                                false,
+                                                "FAILED",
+                                                false));
+
+                RuntimeAutomationService.RuntimeStatus uncleanRuntimeStatus = mock(
+                                RuntimeAutomationService.RuntimeStatus.class);
+
+                when(uncleanRuntimeStatus.autoRunEnabled())
+                                .thenReturn(true);
+
+                when(uncleanRuntimeStatus.websocketConnected())
+                                .thenReturn(false);
+
+                when(uncleanRuntimeStatus.startupRecoveryWarning())
+                                .thenReturn(
+                                                "Previous runtime shutdown was not graceful");
+
+                /*
+                 * These two values intentionally remain null.
+                 * The alert must still be persisted without throwing.
+                 */
+                when(uncleanRuntimeStatus.lastShutdownAt())
+                                .thenReturn(null);
+
+                when(uncleanRuntimeStatus.lastShutdownGraceful())
+                                .thenReturn(false);
+
+                when(runtimeAutomationService.runtimeStatus())
+                                .thenReturn(uncleanRuntimeStatus);
+
+                when(runtimeSettingService.parserFailuresThreshold())
+                                .thenReturn(10);
+
+                when(runtimeSettingService.staleTicksMinutes())
+                                .thenReturn(5);
+
+                when(runtimeSettingService.getString(
+                                anyString(),
+                                anyString()))
+                                .thenReturn("");
+
+                when(runtimeAlertStateRepository.findByAlertKey(
+                                anyString()))
+                                .thenReturn(Optional.empty());
+
+                when(runtimeAlertStateRepository.save(
+                                any()))
+                                .thenAnswer(invocation -> invocation.getArgument(0));
+
+                when(runtimeAlertStateRepository
+                                .countByStatusAndSeverity(
+                                                "OPEN",
+                                                "HIGH"))
+                                .thenReturn(2L);
+
+                RuntimeAlertService.AlertEvaluationResult result = assertDoesNotThrow(
+                                () -> service.evaluateNow());
+
+                assertEquals(
+                                2,
+                                result.openedAlerts());
+
+                verify(runtimeAlertStateRepository, atLeast(2))
+                                .save(any());
+        }
+
 }

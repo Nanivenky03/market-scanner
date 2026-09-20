@@ -28,7 +28,8 @@ public class AngelOneApiExecutor {
     public enum ApiEndpoint {
         AUTH_LOGIN,
         SEARCH_SCRIP,
-        HISTORICAL_CANDLE
+        HISTORICAL_CANDLE,
+        INSTRUMENT_MASTER
     }
 
     private final ObjectMapper objectMapper;
@@ -51,6 +52,9 @@ public class AngelOneApiExecutor {
     @Value("${provider.angelone.rate.historical.ms:500}")
     private long historicalRateMs = 500L;
 
+    @Value("${provider.angelone.rate.instrument-master.ms:1000}")
+    private long instrumentMasterRateMs = 1000L;
+
     @Value("${provider.angelone.limit.auth.requests-per-second:1}")
     private int authRequestsPerSecond = 1;
 
@@ -59,6 +63,9 @@ public class AngelOneApiExecutor {
 
     @Value("${provider.angelone.limit.historical.requests-per-second:2}")
     private int historicalRequestsPerSecond = 2;
+
+    @Value("${provider.angelone.limit.instrument-master.requests-per-second:1}")
+    private int instrumentMasterRequestsPerSecond = 1;
 
     @Value("${provider.angelone.limit.auth.requests-per-minute:30}")
     private int authRequestsPerMinute = 30;
@@ -69,6 +76,9 @@ public class AngelOneApiExecutor {
     @Value("${provider.angelone.limit.historical.requests-per-minute:120}")
     private int historicalRequestsPerMinute = 120;
 
+    @Value("${provider.angelone.limit.instrument-master.requests-per-minute:30}")
+    private int instrumentMasterRequestsPerMinute = 30;
+
     @Value("${provider.angelone.retry.auth.max-attempts:2}")
     private int authMaxAttempts = 2;
 
@@ -78,12 +88,17 @@ public class AngelOneApiExecutor {
     @Value("${provider.angelone.retry.historical.max-attempts:3}")
     private int historicalMaxAttempts = 3;
 
+    @Value("${provider.angelone.retry.instrument-master.max-attempts:3}")
+    private int instrumentMasterMaxAttempts = 3;
+
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(20))
             .build();
 
     private final Object throttleLock = new Object();
+
     private final Map<ApiEndpoint, Deque<Long>> requestTimes = new EnumMap<>(ApiEndpoint.class);
+
     private final Map<ApiEndpoint, Long> lastRequestAt = new EnumMap<>(ApiEndpoint.class);
 
     public <T> T postJson(
@@ -93,22 +108,33 @@ public class AngelOneApiExecutor {
             Object requestBody,
             Class<T> responseType) {
 
-        String body = postJsonForBody(endpoint, url, headers, requestBody);
+        String body = postJsonForBody(
+                endpoint,
+                url,
+                headers,
+                requestBody);
+
         String trimmed = body == null ? "" : body.trim();
 
         if (trimmed.isBlank()) {
-            throw new ProviderException("Angel One API returned empty response");
+            throw new ProviderException(
+                    "Angel One API returned empty response");
         }
+
         if (!trimmed.startsWith("{")) {
             throw new ProviderException(
-                    "Unexpected non-JSON response: " + abbreviate(trimmed, 200));
+                    "Unexpected non-JSON response: "
+                            + abbreviate(trimmed, 200));
         }
 
         try {
-            return objectMapper.readValue(trimmed, responseType);
+            return objectMapper.readValue(
+                    trimmed,
+                    responseType);
         } catch (Exception ex) {
             throw new ProviderException(
-                    "Failed to parse Angel One API JSON response", ex);
+                    "Failed to parse Angel One API JSON response",
+                    ex);
         }
     }
 
@@ -119,60 +145,162 @@ public class AngelOneApiExecutor {
             Object requestBody) {
 
         Exception lastException = null;
-        int attempts = Math.max(1, maxAttemptsFor(endpoint));
+
+        int attempts = Math.max(
+                1,
+                maxAttemptsFor(endpoint));
 
         for (int attempt = 1; attempt <= attempts; attempt++) {
+
             try {
                 throttleBeforeRequest(endpoint);
-                return executeOnce(url, headers, requestBody);
+
+                return executePostOnce(
+                        url,
+                        headers,
+                        requestBody);
+
             } catch (RetryableProviderException ex) {
                 lastException = ex;
 
                 if (attempt < attempts) {
-                    sleepQuietly(Math.max(
-                            backoffForAttempt(attempt),
-                            ex.retryAfterMs()));
+                    sleepQuietly(
+                            Math.max(
+                                    backoffForAttempt(attempt),
+                                    ex.retryAfterMs()));
                 }
+
             } catch (ProviderException ex) {
                 throw ex;
+
             } catch (Exception ex) {
                 lastException = ex;
 
                 if (attempt < attempts) {
-                    sleepQuietly(backoffForAttempt(attempt));
+                    sleepQuietly(
+                            backoffForAttempt(attempt));
                 }
             }
         }
 
         throw new ProviderException(
-                "Angel One API request failed after retries for endpoint=" + endpoint,
+                "Angel One API request failed after retries for endpoint="
+                        + endpoint,
                 lastException);
     }
 
-    private String executeOnce(
+    public String getJsonForBody(
+            ApiEndpoint endpoint,
+            String url,
+            Map<String, String> headers) {
+
+        Exception lastException = null;
+
+        int attempts = Math.max(
+                1,
+                maxAttemptsFor(endpoint));
+
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+
+            try {
+                throttleBeforeRequest(endpoint);
+
+                return executeGetOnce(
+                        url,
+                        headers);
+
+            } catch (RetryableProviderException ex) {
+                lastException = ex;
+
+                if (attempt < attempts) {
+                    sleepQuietly(
+                            Math.max(
+                                    backoffForAttempt(attempt),
+                                    ex.retryAfterMs()));
+                }
+
+            } catch (ProviderException ex) {
+                throw ex;
+
+            } catch (Exception ex) {
+                lastException = ex;
+
+                if (attempt < attempts) {
+                    sleepQuietly(
+                            backoffForAttempt(attempt));
+                }
+            }
+        }
+
+        throw new ProviderException(
+                "Angel One API request failed after retries for endpoint="
+                        + endpoint,
+                lastException);
+    }
+
+    private String executePostOnce(
             String url,
             Map<String, String> headers,
             Object requestBody) throws Exception {
 
         HttpRequest.Builder request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .timeout(Duration.ofMillis(timeoutMs))
-                .POST(HttpRequest.BodyPublishers.ofString(
-                        objectMapper.writeValueAsString(requestBody)));
+                .timeout(
+                        Duration.ofMillis(timeoutMs))
+                .POST(
+                        HttpRequest.BodyPublishers
+                                .ofString(
+                                        objectMapper
+                                                .writeValueAsString(
+                                                        requestBody)));
 
         if (headers != null) {
             headers.forEach(request::header);
         }
 
-        HttpResponse<String> response = httpClient.send(request.build(), HttpResponse.BodyHandlers.ofString());
+        return executeRequest(request);
+    }
+
+    private String executeGetOnce(
+            String url,
+            Map<String, String> headers) throws Exception {
+
+        HttpRequest.Builder request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(
+                        Duration.ofMillis(timeoutMs))
+                .GET();
+
+        if (headers != null) {
+            headers.forEach(request::header);
+        }
+
+        return executeRequest(request);
+    }
+
+    private String executeRequest(
+            HttpRequest.Builder requestBuilder)
+            throws Exception {
+
+        HttpResponse<String> response = httpClient.send(
+                requestBuilder.build(),
+                HttpResponse.BodyHandlers.ofString());
 
         int status = response.statusCode();
-        String body = response.body() == null ? "" : response.body().trim();
+
+        String body = response.body() == null
+                ? ""
+                : response.body().trim();
+
         String lowerBody = body.toLowerCase(Locale.ROOT);
-        long retryAfterMs = retryAfterMillis(response.headers());
+
+        long retryAfterMs = retryAfterMillis(
+                response.headers());
 
         if (status == 429
-                || lowerBody.contains("exceeding access rate")) {
+                || lowerBody.contains(
+                        "exceeding access rate")) {
+
             throw new RetryableProviderException(
                     "Angel One rate limit exceeded",
                     retryAfterMs);
@@ -180,48 +308,74 @@ public class AngelOneApiExecutor {
 
         if (status >= 500) {
             throw new RetryableProviderException(
-                    "Angel One server error: HTTP " + status,
+                    "Angel One server error: HTTP "
+                            + status,
                     retryAfterMs);
         }
 
         if (status >= 400) {
             throw new ProviderException(
-                    "Angel One API request failed. status=" + status
-                            + ", body=" + abbreviate(body, 200));
+                    "Angel One API request failed. status="
+                            + status
+                            + ", body="
+                            + abbreviate(body, 200));
         }
 
         return body;
     }
 
-    private void throttleBeforeRequest(ApiEndpoint endpoint) {
+    private void throttleBeforeRequest(
+            ApiEndpoint endpoint) {
+
         while (true) {
             long waitMs;
 
             synchronized (throttleLock) {
                 long now = System.currentTimeMillis();
-                Deque<Long> times = requestTimes.computeIfAbsent(
-                        endpoint, ignored -> new ArrayDeque<>());
 
-                while (!times.isEmpty() && times.peekFirst() <= now - 60_000L) {
+                Deque<Long> times = requestTimes.computeIfAbsent(
+                        endpoint,
+                        ignored -> new ArrayDeque<>());
+
+                while (!times.isEmpty()
+                        && times.peekFirst() <= now - 60_000L) {
                     times.removeFirst();
                 }
 
                 long intervalWait = Math.max(
                         0L,
                         rateMsFor(endpoint)
-                                - (now - lastRequestAt.getOrDefault(endpoint, 0L)));
+                                - (now
+                                        - lastRequestAt
+                                                .getOrDefault(
+                                                        endpoint,
+                                                        0L)));
 
                 long secondWait = windowWait(
-                        times, now, 1_000L, requestsPerSecondFor(endpoint));
+                        times,
+                        now,
+                        1_000L,
+                        requestsPerSecondFor(
+                                endpoint));
 
                 long minuteWait = windowWait(
-                        times, now, 60_000L, requestsPerMinuteFor(endpoint));
+                        times,
+                        now,
+                        60_000L,
+                        requestsPerMinuteFor(
+                                endpoint));
 
-                waitMs = Math.max(intervalWait, Math.max(secondWait, minuteWait));
+                waitMs = Math.max(
+                        intervalWait,
+                        Math.max(
+                                secondWait,
+                                minuteWait));
 
                 if (waitMs <= 0L) {
                     times.addLast(now);
-                    lastRequestAt.put(endpoint, now);
+                    lastRequestAt.put(
+                            endpoint,
+                            now);
                     return;
                 }
             }
@@ -241,30 +395,43 @@ public class AngelOneApiExecutor {
         }
 
         long cutoff = now - windowMs;
+
         int count = 0;
         long first = Long.MAX_VALUE;
 
         for (Long time : times) {
             if (time > cutoff) {
                 count++;
-                first = Math.min(first, time);
+                first = Math.min(
+                        first,
+                        time);
             }
         }
 
         return count >= limit
-                ? Math.max(1L, first + windowMs - now)
+                ? Math.max(
+                        1L,
+                        first + windowMs - now)
                 : 0L;
     }
 
-    private long retryAfterMillis(HttpHeaders headers) {
-        String value = headers.firstValue("Retry-After").orElse(null);
+    private long retryAfterMillis(
+            HttpHeaders headers) {
 
-        if (value == null || value.isBlank()) {
+        String value = headers.firstValue("Retry-After")
+                .orElse(null);
+
+        if (value == null
+                || value.isBlank()) {
             return 0L;
         }
 
         try {
-            return Math.max(0L, Long.parseLong(value.trim()) * 1000L);
+            return Math.max(
+                    0L,
+                    Long.parseLong(
+                            value.trim())
+                            * 1000L);
         } catch (NumberFormatException ignored) {
         }
 
@@ -275,66 +442,113 @@ public class AngelOneApiExecutor {
                     .toInstant()
                     .toEpochMilli();
 
-            return Math.max(0L, target - System.currentTimeMillis());
+            return Math.max(
+                    0L,
+                    target
+                            - System.currentTimeMillis());
+
         } catch (Exception ignored) {
             return 0L;
         }
     }
 
-    private long rateMsFor(ApiEndpoint endpoint) {
+    private long rateMsFor(
+            ApiEndpoint endpoint) {
+
         return switch (endpoint) {
             case AUTH_LOGIN -> authRateMs;
             case SEARCH_SCRIP -> searchRateMs;
             case HISTORICAL_CANDLE -> historicalRateMs;
+            case INSTRUMENT_MASTER ->
+                instrumentMasterRateMs;
         };
     }
 
-    private int requestsPerSecondFor(ApiEndpoint endpoint) {
+    private int requestsPerSecondFor(
+            ApiEndpoint endpoint) {
+
         return switch (endpoint) {
-            case AUTH_LOGIN -> authRequestsPerSecond;
-            case SEARCH_SCRIP -> searchRequestsPerSecond;
-            case HISTORICAL_CANDLE -> historicalRequestsPerSecond;
+            case AUTH_LOGIN ->
+                authRequestsPerSecond;
+            case SEARCH_SCRIP ->
+                searchRequestsPerSecond;
+            case HISTORICAL_CANDLE ->
+                historicalRequestsPerSecond;
+            case INSTRUMENT_MASTER ->
+                instrumentMasterRequestsPerSecond;
         };
     }
 
-    private int requestsPerMinuteFor(ApiEndpoint endpoint) {
+    private int requestsPerMinuteFor(
+            ApiEndpoint endpoint) {
+
         return switch (endpoint) {
-            case AUTH_LOGIN -> authRequestsPerMinute;
-            case SEARCH_SCRIP -> searchRequestsPerMinute;
-            case HISTORICAL_CANDLE -> historicalRequestsPerMinute;
+            case AUTH_LOGIN ->
+                authRequestsPerMinute;
+            case SEARCH_SCRIP ->
+                searchRequestsPerMinute;
+            case HISTORICAL_CANDLE ->
+                historicalRequestsPerMinute;
+            case INSTRUMENT_MASTER ->
+                instrumentMasterRequestsPerMinute;
         };
     }
 
-    private int maxAttemptsFor(ApiEndpoint endpoint) {
+    private int maxAttemptsFor(
+            ApiEndpoint endpoint) {
+
         return switch (endpoint) {
-            case AUTH_LOGIN -> authMaxAttempts;
-            case SEARCH_SCRIP -> searchMaxAttempts;
-            case HISTORICAL_CANDLE -> historicalMaxAttempts;
+            case AUTH_LOGIN ->
+                authMaxAttempts;
+            case SEARCH_SCRIP ->
+                searchMaxAttempts;
+            case HISTORICAL_CANDLE ->
+                historicalMaxAttempts;
+            case INSTRUMENT_MASTER ->
+                instrumentMasterMaxAttempts;
         };
     }
 
-    private long backoffForAttempt(int attempt) {
-        long jitter = jitterMaxMs <= 0
+    private long backoffForAttempt(
+            int attempt) {
+
+        long jitter = jitterMaxMs <= 0L
                 ? 0L
-                : ThreadLocalRandom.current().nextLong(jitterMaxMs + 1);
+                : ThreadLocalRandom.current()
+                        .nextLong(
+                                jitterMaxMs + 1L);
 
-        return baseBackoffMs * attempt + jitter;
+        return baseBackoffMs * attempt
+                + jitter;
     }
 
-    private void sleepQuietly(long millis) {
+    private void sleepQuietly(
+            long millis) {
+
         try {
-            Thread.sleep(Math.max(1L, millis));
+            Thread.sleep(
+                    Math.max(
+                            1L,
+                            millis));
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+
             throw new ProviderException(
-                    "Interrupted during Angel One API throttling/retry", ex);
+                    "Interrupted during Angel One API throttling/retry",
+                    ex);
         }
     }
 
-    private String abbreviate(String value, int maxLength) {
-        return value == null || value.length() <= maxLength
-                ? value
-                : value.substring(0, maxLength);
+    private String abbreviate(
+            String value,
+            int maxLength) {
+
+        return value == null
+                || value.length() <= maxLength
+                        ? value
+                        : value.substring(
+                                0,
+                                maxLength);
     }
 
     private static final class RetryableProviderException

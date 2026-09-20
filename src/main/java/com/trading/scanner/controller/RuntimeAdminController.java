@@ -218,8 +218,8 @@ public class RuntimeAdminController {
     public ResponseEntity<Map<String, Object>> calendarSummary() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("holidayCount", marketCalendarService.holidayCount());
-        body.put("lastOfficialRefreshMonth",
-                runtimeSettingService.getString("calendar.last.official.refresh.month", null));
+        body.put("lastOfficialRefreshWeek",
+                runtimeSettingService.getString("calendar.last.official.refresh.week", null));
         body.put("lastOfficialRefreshAt", runtimeSettingService.getString("calendar.last.official.refresh.at", null));
         body.put("lastOfficialRefreshStatus",
                 runtimeSettingService.getString("calendar.last.official.refresh.status", null));

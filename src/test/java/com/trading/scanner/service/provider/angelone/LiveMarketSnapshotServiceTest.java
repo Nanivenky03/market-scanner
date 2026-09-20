@@ -2,9 +2,14 @@ package com.trading.scanner.service.provider.angelone;
 
 import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.config.TimeProvider;
+import com.trading.scanner.model.CandleProcessingStatus;
+import com.trading.scanner.model.CandleQualityStatus;
+import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.Exchange;
+import com.trading.scanner.model.FeedHealthStatus;
 import com.trading.scanner.model.LiveFeedState;
 import com.trading.scanner.model.LiveMinuteResolution;
+import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.model.MarketMinuteSnapshot;
 import com.trading.scanner.model.MinuteResolutionStatus;
 import com.trading.scanner.model.StockUniverse;
@@ -49,12 +54,19 @@ class LiveMarketSnapshotServiceTest {
         @BeforeEach
         void setUp() {
                 snapshotRepository = mock(MarketMinuteSnapshotRepository.class);
+
                 feedStateRepository = mock(LiveFeedStateRepository.class);
+
                 resolutionRepository = mock(LiveMinuteResolutionRepository.class);
+
                 stockUniverseRepository = mock(StockUniverseRepository.class);
+
                 tradingCalendar = mock(TradingCalendar.class);
+
                 dataStatusService = mock(DailyDataStatusService.class);
+
                 timeProvider = mock(TimeProvider.class);
+
                 eventPublisher = mock(ApplicationEventPublisher.class);
 
                 service = new LiveMarketSnapshotService(
@@ -70,45 +82,95 @@ class LiveMarketSnapshotServiceTest {
 
         @Test
         void update_shouldStoreLatestSnapshotAndPersistMinuteRow() {
-                LocalDateTime time = LocalDateTime.of(2026, 7, 14, 13, 59, 6);
+                LocalDateTime time = LocalDateTime.of(
+                                2026,
+                                7,
+                                14,
+                                13,
+                                59,
+                                6);
 
-                when(timeProvider.nowDateTime()).thenReturn(time);
-                when(feedStateRepository.findBySymbolAndExchangeAndTradingDate(
-                                "WIPRO", "NSE", time.toLocalDate()))
-                                .thenReturn(Optional.empty());
-                when(snapshotRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", time.withSecond(0)))
-                                .thenReturn(Optional.empty());
-                when(resolutionRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", time.withSecond(0)))
+                when(timeProvider.nowDateTime())
+                                .thenReturn(time);
+
+                when(feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.toLocalDate()))
+                                .thenReturn(Optional.of(
+                                                feedState(
+                                                                "WIPRO",
+                                                                "NSE",
+                                                                time.toLocalDate())));
+
+                when(snapshotRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.withSecond(0)))
                                 .thenReturn(Optional.empty());
 
-                service.update(tick(time, 1770.90, 25L, 1L, 100000L));
+                when(resolutionRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.withSecond(0)))
+                                .thenReturn(Optional.empty());
+
+                service.update(
+                                tick(
+                                                time,
+                                                1770.90,
+                                                25L,
+                                                1L,
+                                                100000L));
 
                 List<LiveMarketSnapshotService.SnapshotView> snapshots = service.latest(10);
 
                 assertEquals(1, snapshots.size());
+
                 assertEquals(
                                 Set.of("WIPRO"),
                                 snapshots.stream()
-                                                .map(LiveMarketSnapshotService.SnapshotView::symbol)
+                                                .map(
+                                                                LiveMarketSnapshotService.SnapshotView::symbol)
                                                 .collect(Collectors.toSet()));
 
-                ArgumentCaptor<MarketMinuteSnapshot> captor = ArgumentCaptor.forClass(MarketMinuteSnapshot.class);
+                ArgumentCaptor<MarketMinuteSnapshot> captor = ArgumentCaptor.forClass(
+                                MarketMinuteSnapshot.class);
 
-                verify(snapshotRepository).save(captor.capture());
+                verify(snapshotRepository)
+                                .save(captor.capture());
 
                 MarketMinuteSnapshot saved = captor.getValue();
 
                 assertEquals("WIPRO", saved.getSymbol());
                 assertEquals("NSE", saved.getExchange());
-                assertEquals(time.withSecond(0), saved.getMinuteTime());
-                assertEquals(time, saved.getLatestTickTime());
-                assertEquals(1770.90, saved.getLastPrice());
-                assertEquals(100000L, saved.getVolumeTradedForDay());
+                assertEquals(
+                                time.withSecond(0),
+                                saved.getMinuteTime());
+                assertEquals(
+                                time,
+                                saved.getLatestTickTime());
+                assertEquals(
+                                1770.90,
+                                saved.getLastPrice());
+                assertEquals(
+                                100000L,
+                                saved.getVolumeTradedForDay());
                 assertFalse(saved.getIsFinalized());
 
-                verify(feedStateRepository).save(any(LiveFeedState.class));
+                verify(feedStateRepository)
+                                .ensureExists(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.toLocalDate().toString(),
+                                                time.toString());
+
+                verify(feedStateRepository)
+                                .save(any(LiveFeedState.class));
+
                 verify(resolutionRepository)
                                 .save(argThat(row -> row.getStatus() == MinuteResolutionStatus.TICK_RECEIVED));
         }
@@ -116,27 +178,42 @@ class LiveMarketSnapshotServiceTest {
         @Test
         void update_shouldUpsertExistingMinuteRowForSameMinute() {
                 LocalDate date = LocalDate.of(2026, 7, 14);
+
                 LocalDateTime first = date.atTime(13, 59, 6);
+
                 LocalDateTime second = date.atTime(13, 59, 20);
 
-                when(timeProvider.nowDateTime()).thenReturn(first, second);
+                LiveFeedState firstState = feedState(
+                                "WIPRO",
+                                "NSE",
+                                date);
 
-                when(feedStateRepository.findBySymbolAndExchangeAndTradingDate(
-                                "WIPRO", "NSE", date))
-                                .thenReturn(Optional.empty())
-                                .thenReturn(Optional.of(LiveFeedState.builder()
-                                                .symbol("WIPRO")
-                                                .exchange("NSE")
-                                                .tradingDate(date)
-                                                .lastTickTime(first)
-                                                .lastTickMinute(date.atTime(13, 59))
-                                                .blocked(false)
-                                                .build()));
+                LiveFeedState secondState = feedState(
+                                "WIPRO",
+                                "NSE",
+                                date);
+
+                secondState.setLastTickTime(first);
+                secondState.setLastTickMinute(
+                                date.atTime(13, 59));
+
+                when(timeProvider.nowDateTime())
+                                .thenReturn(first, second);
+
+                when(feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "WIPRO",
+                                                "NSE",
+                                                date))
+                                .thenReturn(
+                                                Optional.of(firstState),
+                                                Optional.of(secondState));
 
                 MarketMinuteSnapshot existing = MarketMinuteSnapshot.builder()
                                 .symbol("WIPRO")
                                 .exchange("NSE")
-                                .minuteTime(date.atTime(13, 59))
+                                .minuteTime(
+                                                date.atTime(13, 59))
                                 .latestTickTime(first)
                                 .tradingDate(date)
                                 .createdAt(first)
@@ -144,63 +221,128 @@ class LiveMarketSnapshotServiceTest {
                                 .isFinalized(false)
                                 .build();
 
-                when(snapshotRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", date.atTime(13, 59)))
-                                .thenReturn(Optional.empty())
-                                .thenReturn(Optional.of(existing));
+                when(snapshotRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.atTime(13, 59)))
+                                .thenReturn(
+                                                Optional.empty(),
+                                                Optional.of(existing));
 
-                when(resolutionRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", date.atTime(13, 59)))
-                                .thenReturn(Optional.empty())
-                                .thenReturn(Optional.of(LiveMinuteResolution.builder()
-                                                .symbol("WIPRO")
-                                                .exchange("NSE")
-                                                .minuteTime(date.atTime(13, 59))
-                                                .tradingDate(date)
-                                                .status(MinuteResolutionStatus.TICK_RECEIVED)
-                                                .build()));
+                when(resolutionRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.atTime(13, 59)))
+                                .thenReturn(
+                                                Optional.empty(),
+                                                Optional.of(
+                                                                LiveMinuteResolution.builder()
+                                                                                .symbol("WIPRO")
+                                                                                .exchange("NSE")
+                                                                                .minuteTime(
+                                                                                                date.atTime(13, 59))
+                                                                                .tradingDate(date)
+                                                                                .status(
+                                                                                                MinuteResolutionStatus.TICK_RECEIVED)
+                                                                                .build()));
 
-                service.update(tick(first, 1770.90, 25L, 1L, 100000L));
-                service.update(tick(second, 1775.00, 30L, 2L, 120000L));
+                service.update(
+                                tick(
+                                                first,
+                                                1770.90,
+                                                25L,
+                                                1L,
+                                                100000L));
 
-                ArgumentCaptor<MarketMinuteSnapshot> captor = ArgumentCaptor.forClass(MarketMinuteSnapshot.class);
+                service.update(
+                                tick(
+                                                second,
+                                                1775.00,
+                                                30L,
+                                                2L,
+                                                120000L));
 
-                verify(snapshotRepository, times(2)).save(captor.capture());
+                ArgumentCaptor<MarketMinuteSnapshot> captor = ArgumentCaptor.forClass(
+                                MarketMinuteSnapshot.class);
+
+                verify(snapshotRepository, times(2))
+                                .save(captor.capture());
 
                 MarketMinuteSnapshot saved = captor.getAllValues().get(1);
 
-                assertEquals(date.atTime(13, 59), saved.getMinuteTime());
-                assertEquals(second, saved.getLatestTickTime());
-                assertEquals(1775.00, saved.getLastPrice());
-                assertEquals(30L, saved.getLastTradedQuantity());
-                assertEquals(120000L, saved.getVolumeTradedForDay());
+                assertEquals(
+                                date.atTime(13, 59),
+                                saved.getMinuteTime());
+                assertEquals(
+                                second,
+                                saved.getLatestTickTime());
+                assertEquals(
+                                1775.00,
+                                saved.getLastPrice());
+                assertEquals(
+                                30L,
+                                saved.getLastTradedQuantity());
+                assertEquals(
+                                120000L,
+                                saved.getVolumeTradedForDay());
+
+                verify(feedStateRepository)
+                                .ensureExists(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.toString(),
+                                                first.toString());
+
+                verify(feedStateRepository)
+                                .ensureExists(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.toString(),
+                                                second.toString());
+
         }
 
         @Test
         void update_shouldFinalizePreviousMinuteOnRollover() {
                 LocalDate date = LocalDate.of(2026, 7, 14);
+
                 LocalDateTime previousTime = date.atTime(13, 59, 58);
+
                 LocalDateTime currentTime = date.atTime(14, 0, 3);
+
+                LiveFeedState firstState = feedState(
+                                "WIPRO",
+                                "NSE",
+                                date);
+
+                LiveFeedState secondState = feedState(
+                                "WIPRO",
+                                "NSE",
+                                date);
+
+                secondState.setLastTickTime(previousTime);
+                secondState.setLastTickMinute(
+                                date.atTime(13, 59));
 
                 when(timeProvider.nowDateTime())
                                 .thenReturn(previousTime, currentTime);
 
-                when(feedStateRepository.findBySymbolAndExchangeAndTradingDate(
-                                "WIPRO", "NSE", date))
-                                .thenReturn(Optional.empty())
-                                .thenReturn(Optional.of(LiveFeedState.builder()
-                                                .symbol("WIPRO")
-                                                .exchange("NSE")
-                                                .tradingDate(date)
-                                                .lastTickTime(previousTime)
-                                                .lastTickMinute(date.atTime(13, 59))
-                                                .blocked(false)
-                                                .build()));
+                when(feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "WIPRO",
+                                                "NSE",
+                                                date))
+                                .thenReturn(
+                                                Optional.of(firstState),
+                                                Optional.of(secondState));
 
                 MarketMinuteSnapshot previousRow = MarketMinuteSnapshot.builder()
                                 .symbol("WIPRO")
                                 .exchange("NSE")
-                                .minuteTime(date.atTime(13, 59))
+                                .minuteTime(
+                                                date.atTime(13, 59))
                                 .latestTickTime(previousTime)
                                 .tradingDate(date)
                                 .createdAt(previousTime)
@@ -208,63 +350,112 @@ class LiveMarketSnapshotServiceTest {
                                 .isFinalized(false)
                                 .build();
 
-                when(snapshotRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", date.atTime(13, 59)))
-                                .thenReturn(Optional.empty())
-                                .thenReturn(Optional.of(previousRow));
+                when(snapshotRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.atTime(13, 59)))
+                                .thenReturn(
+                                                Optional.empty(),
+                                                Optional.of(previousRow));
 
-                when(snapshotRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", date.atTime(14, 0)))
+                when(snapshotRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.atTime(14, 0)))
                                 .thenReturn(Optional.empty());
 
-                when(resolutionRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", date.atTime(13, 59)))
+                when(resolutionRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.atTime(13, 59)))
                                 .thenReturn(Optional.empty());
 
-                when(resolutionRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", date.atTime(14, 0)))
+                when(resolutionRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.atTime(14, 0)))
                                 .thenReturn(Optional.empty());
 
-                service.update(tick(previousTime, 1770.90, 25L, 1L, 100000L));
-                service.update(tick(currentTime, 1775.00, 30L, 2L, 120000L));
+                service.update(
+                                tick(
+                                                previousTime,
+                                                1770.90,
+                                                25L,
+                                                1L,
+                                                100000L));
 
-                verify(snapshotRepository).save(argThat(row -> row.getMinuteTime().equals(date.atTime(13, 59))
-                                && Boolean.TRUE.equals(row.getIsFinalized())));
+                service.update(
+                                tick(
+                                                currentTime,
+                                                1775.00,
+                                                30L,
+                                                2L,
+                                                120000L));
 
-                verify(snapshotRepository).save(argThat(row -> row.getMinuteTime().equals(date.atTime(14, 0))
-                                && Boolean.FALSE.equals(row.getIsFinalized())));
+                verify(snapshotRepository)
+                                .save(argThat(row -> row.getMinuteTime()
+                                                .equals(date.atTime(13, 59))
+                                                && Boolean.TRUE.equals(
+                                                                row.getIsFinalized())));
+
+                verify(snapshotRepository)
+                                .save(argThat(row -> row.getMinuteTime()
+                                                .equals(date.atTime(14, 0))
+                                                && Boolean.FALSE.equals(
+                                                                row.getIsFinalized())));
         }
 
         @Test
         void checkForClosedMinuteGaps_shouldPublishMissingMinuteRange() {
                 LocalDate date = LocalDate.of(2026, 8, 17);
+
                 LocalDateTime now = date.atTime(11, 20);
 
                 StockUniverse stock = StockUniverse.builder()
                                 .symbol("ONGC")
                                 .exchange(Exchange.NSE)
-                                .companyName("Oil and Natural Gas Corporation")
+                                .companyName(
+                                                "Oil and Natural Gas Corporation")
                                 .isActive(true)
                                 .build();
 
-                LiveFeedState state = LiveFeedState.builder()
-                                .symbol("ONGC")
-                                .exchange("NSE")
-                                .tradingDate(date)
-                                .lastTickTime(date.atTime(11, 16, 20))
-                                .lastTickMinute(date.atTime(11, 16))
-                                .lastCheckedMinute(date.atTime(11, 16))
-                                .blocked(false)
-                                .build();
+                LiveFeedState state = feedState(
+                                "ONGC",
+                                "NSE",
+                                date);
 
-                when(timeProvider.nowDateTime()).thenReturn(now);
-                when(tradingCalendar.isTradingDay(date)).thenReturn(true);
-                when(stockUniverseRepository.findByIsActiveTrueOrderBySymbolAsc())
+                state.setLastTickTime(
+                                date.atTime(11, 16, 20));
+
+                state.setLastTickMinute(
+                                date.atTime(11, 16));
+
+                state.setLastCheckedMinute(
+                                date.atTime(11, 16));
+
+                when(timeProvider.nowDateTime())
+                                .thenReturn(now);
+
+                when(tradingCalendar.isTradingDay(date))
+                                .thenReturn(true);
+
+                when(stockUniverseRepository
+                                .findByIsActiveTrueOrderBySymbolAsc())
                                 .thenReturn(List.of(stock));
-                when(feedStateRepository.findBySymbolAndExchangeAndTradingDate(
-                                "ONGC", "NSE", date))
+
+                when(feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "ONGC",
+                                                "NSE",
+                                                date))
                                 .thenReturn(Optional.of(state));
-                when(feedStateRepository.save(any(LiveFeedState.class)))
+
+                when(feedStateRepository.save(
+                                any(LiveFeedState.class)))
                                 .thenAnswer(invocation -> invocation.getArgument(0));
 
                 when(snapshotRepository
@@ -283,11 +474,15 @@ class LiveMarketSnapshotServiceTest {
                                                 date.atTime(11, 19)))
                                 .thenReturn(List.of());
 
-                when(resolutionRepository.findBySymbolAndExchangeAndMinuteTime(
-                                anyString(), anyString(), any(LocalDateTime.class)))
+                when(resolutionRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                anyString(),
+                                                anyString(),
+                                                any(LocalDateTime.class)))
                                 .thenReturn(Optional.empty());
 
-                when(resolutionRepository.save(any(LiveMinuteResolution.class)))
+                when(resolutionRepository.save(
+                                any(LiveMinuteResolution.class)))
                                 .thenAnswer(invocation -> invocation.getArgument(0));
 
                 int detected = service.checkForClosedMinuteGaps();
@@ -296,56 +491,93 @@ class LiveMarketSnapshotServiceTest {
 
                 ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
 
-                verify(eventPublisher).publishEvent(eventCaptor.capture());
+                verify(eventPublisher)
+                                .publishEvent(eventCaptor.capture());
 
                 IntradayGapDetectedEvent event = (IntradayGapDetectedEvent) eventCaptor.getValue();
 
                 assertEquals("ONGC", event.symbol());
                 assertEquals("NSE", event.exchange());
-                assertEquals(date.atTime(11, 17), event.fromTime());
-                assertEquals(date.atTime(11, 19), event.toTime());
 
-                verify(dataStatusService).markPartial(
-                                "ONGC",
-                                "NSE",
-                                date,
-                                "Closed minute unresolved; provider validation required");
+                assertEquals(
+                                date.atTime(11, 17),
+                                event.fromTime());
 
-                verify(feedStateRepository).save(argThat(saved -> Boolean.TRUE.equals(saved.getBlocked())
-                                && date.atTime(11, 19).equals(saved.getLastCheckedMinute())
-                                && date.atTime(11, 17).equals(saved.getGapFrom())
-                                && date.atTime(11, 19).equals(saved.getGapTo())));
+                assertEquals(
+                                date.atTime(11, 19),
+                                event.toTime());
+
+                verify(dataStatusService)
+                                .markPartial(
+                                                "ONGC",
+                                                "NSE",
+                                                date,
+                                                "Closed minute unresolved; provider validation required");
+
+                verify(feedStateRepository)
+                                .ensureExists(
+                                                "ONGC",
+                                                "NSE",
+                                                date.toString(),
+                                                now.toString());
+
+                verify(feedStateRepository)
+                                .save(argThat(saved -> Boolean.TRUE.equals(
+                                                saved.getBlocked())
+                                                && date.atTime(11, 19)
+                                                                .equals(
+                                                                                saved.getLastCheckedMinute())
+                                                && date.atTime(11, 17)
+                                                                .equals(
+                                                                                saved.getGapFrom())
+                                                && date.atTime(11, 19)
+                                                                .equals(
+                                                                                saved.getGapTo())));
         }
 
         @Test
         void checkForClosedMinuteGaps_shouldIgnoreConfirmedNoTradeMinute() {
                 LocalDate date = LocalDate.of(2026, 8, 17);
+
                 LocalDateTime now = date.atTime(11, 18);
 
                 StockUniverse stock = StockUniverse.builder()
                                 .symbol("ONGC")
                                 .exchange(Exchange.NSE)
-                                .companyName("Oil and Natural Gas Corporation")
+                                .companyName(
+                                                "Oil and Natural Gas Corporation")
                                 .isActive(true)
                                 .build();
 
-                LiveFeedState state = LiveFeedState.builder()
-                                .symbol("ONGC")
-                                .exchange("NSE")
-                                .tradingDate(date)
-                                .lastCheckedMinute(date.atTime(11, 16))
-                                .blocked(false)
-                                .build();
+                LiveFeedState state = feedState(
+                                "ONGC",
+                                "NSE",
+                                date);
 
-                when(timeProvider.nowDateTime()).thenReturn(now);
-                when(tradingCalendar.isTradingDay(date)).thenReturn(true);
-                when(stockUniverseRepository.findByIsActiveTrueOrderBySymbolAsc())
+                state.setLastCheckedMinute(
+                                date.atTime(11, 16));
+
+                when(timeProvider.nowDateTime())
+                                .thenReturn(now);
+
+                when(tradingCalendar.isTradingDay(date))
+                                .thenReturn(true);
+
+                when(stockUniverseRepository
+                                .findByIsActiveTrueOrderBySymbolAsc())
                                 .thenReturn(List.of(stock));
-                when(feedStateRepository.findBySymbolAndExchangeAndTradingDate(
-                                "ONGC", "NSE", date))
+
+                when(feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "ONGC",
+                                                "NSE",
+                                                date))
                                 .thenReturn(Optional.of(state));
-                when(feedStateRepository.save(any(LiveFeedState.class)))
+
+                when(feedStateRepository.save(
+                                any(LiveFeedState.class)))
                                 .thenAnswer(invocation -> invocation.getArgument(0));
+
                 when(snapshotRepository
                                 .findBySymbolAndExchangeAndMinuteTimeBetweenOrderByMinuteTimeAsc(
                                                 "ONGC",
@@ -353,37 +585,61 @@ class LiveMarketSnapshotServiceTest {
                                                 date.atTime(11, 17),
                                                 date.atTime(11, 17)))
                                 .thenReturn(List.of());
+
                 when(resolutionRepository
                                 .findBySymbolAndExchangeAndMinuteTimeBetweenOrderByMinuteTimeAsc(
                                                 "ONGC",
                                                 "NSE",
                                                 date.atTime(11, 17),
                                                 date.atTime(11, 17)))
-                                .thenReturn(List.of(LiveMinuteResolution.builder()
-                                                .symbol("ONGC")
-                                                .exchange("NSE")
-                                                .minuteTime(date.atTime(11, 17))
-                                                .tradingDate(date)
-                                                .status(MinuteResolutionStatus.NO_TRADE_CONFIRMED)
-                                                .build()));
+                                .thenReturn(
+                                                List.of(
+                                                                LiveMinuteResolution.builder()
+                                                                                .symbol("ONGC")
+                                                                                .exchange("NSE")
+                                                                                .minuteTime(
+                                                                                                date.atTime(11, 17))
+                                                                                .tradingDate(date)
+                                                                                .status(
+                                                                                                MinuteResolutionStatus.NO_TRADE_CONFIRMED)
+                                                                                .build()));
 
                 int detected = service.checkForClosedMinuteGaps();
 
                 assertEquals(0, detected);
-                verify(eventPublisher, never()).publishEvent(any());
-                verify(dataStatusService, never()).markPartial(
-                                anyString(), anyString(), any(LocalDate.class), anyString());
+
+                verify(eventPublisher, never())
+                                .publishEvent(any());
+
+                verify(dataStatusService, never())
+                                .markPartial(
+                                                anyString(),
+                                                anyString(),
+                                                any(LocalDate.class),
+                                                anyString());
         }
 
         @Test
         void confirmNoTrade_shouldPersistExplicitResolution() {
-                LocalDateTime minute = LocalDateTime.of(2026, 8, 17, 11, 17);
+                LocalDateTime minute = LocalDateTime.of(
+                                2026,
+                                8,
+                                17,
+                                11,
+                                17);
 
-                when(timeProvider.nowDateTime()).thenReturn(minute);
-                when(resolutionRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "ONGC", "NSE", minute))
+                when(timeProvider.nowDateTime())
+                                .thenReturn(minute);
+
+                when(resolutionRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "ONGC",
+                                                "NSE",
+                                                minute))
                                 .thenReturn(Optional.empty());
-                when(resolutionRepository.save(any(LiveMinuteResolution.class)))
+
+                when(resolutionRepository.save(
+                                any(LiveMinuteResolution.class)))
                                 .thenAnswer(invocation -> invocation.getArgument(0));
 
                 service.confirmNoTrade(
@@ -400,26 +656,166 @@ class LiveMarketSnapshotServiceTest {
 
         @Test
         void clear_shouldRemoveOnlyInMemorySnapshots() {
-                LocalDateTime time = LocalDateTime.of(2026, 7, 14, 13, 59, 6);
+                LocalDateTime time = LocalDateTime.of(
+                                2026,
+                                7,
+                                14,
+                                13,
+                                59,
+                                6);
 
-                when(timeProvider.nowDateTime()).thenReturn(time);
-                when(feedStateRepository.findBySymbolAndExchangeAndTradingDate(
-                                "WIPRO", "NSE", time.toLocalDate()))
-                                .thenReturn(Optional.empty());
-                when(snapshotRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", time.withSecond(0)))
-                                .thenReturn(Optional.empty());
-                when(resolutionRepository.findBySymbolAndExchangeAndMinuteTime(
-                                "WIPRO", "NSE", time.withSecond(0)))
+                when(timeProvider.nowDateTime())
+                                .thenReturn(time);
+
+                when(feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.toLocalDate()))
+                                .thenReturn(Optional.of(
+                                                feedState(
+                                                                "WIPRO",
+                                                                "NSE",
+                                                                time.toLocalDate())));
+
+                when(snapshotRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.withSecond(0)))
                                 .thenReturn(Optional.empty());
 
-                service.update(tick(time, 1770.90, 25L, 1L, null));
+                when(resolutionRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.withSecond(0)))
+                                .thenReturn(Optional.empty());
+
+                service.update(
+                                tick(
+                                                time,
+                                                1770.90,
+                                                25L,
+                                                1L,
+                                                null));
 
                 LiveMarketSnapshotService.ClearResult result = service.clear();
 
                 assertEquals(1, result.removed());
                 assertEquals(0, service.latest(10).size());
-                verify(snapshotRepository, never()).deleteAll();
+
+                verify(snapshotRepository, never())
+                                .deleteAll();
+        }
+
+        @Test
+        void update_shouldPersistCumulativeVolumeTodayInFeedState() {
+                LocalDate date = LocalDate.of(2026, 7, 14);
+
+                LocalDateTime time = date.atTime(13, 59, 6);
+
+                when(timeProvider.nowDateTime())
+                                .thenReturn(time);
+
+                when(feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "WIPRO",
+                                                "NSE",
+                                                date))
+                                .thenReturn(Optional.of(
+                                                feedState(
+                                                                "WIPRO",
+                                                                "NSE",
+                                                                date)));
+
+                when(snapshotRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.withSecond(0)))
+                                .thenReturn(Optional.empty());
+
+                when(resolutionRepository
+                                .findBySymbolAndExchangeAndMinuteTime(
+                                                "WIPRO",
+                                                "NSE",
+                                                time.withSecond(0)))
+                                .thenReturn(Optional.empty());
+
+                service.update(
+                                tick(
+                                                time,
+                                                1770.90,
+                                                25L,
+                                                1L,
+                                                100000L));
+
+                verify(feedStateRepository)
+                                .ensureExists(
+                                                "WIPRO",
+                                                "NSE",
+                                                date.toString(),
+                                                time.toString());
+
+                verify(feedStateRepository)
+                                .save(argThat(state -> "WIPRO".equals(
+                                                state.getSymbol())
+                                                && "NSE".equals(
+                                                                state.getExchange())
+                                                && date.equals(
+                                                                state.getTradingDate())
+                                                && Long.valueOf(100000L)
+                                                                .equals(
+                                                                                state.getCumulativeVolumeToday())));
+        }
+
+        @Test
+        void currentCumulativeVolumeToday_shouldReadPersistedFeedState() {
+                LocalDate date = LocalDate.of(2026, 7, 14);
+
+                LiveFeedState state = feedState(
+                                "WIPRO",
+                                "NSE",
+                                date);
+
+                state.setCumulativeVolumeToday(
+                                120000L);
+
+                when(feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                "WIPRO",
+                                                "NSE",
+                                                date))
+                                .thenReturn(Optional.of(state));
+
+                Optional<Long> result = service.currentCumulativeVolumeToday(
+                                "WIPRO",
+                                "NSE",
+                                date);
+
+                assertEquals(
+                                Optional.of(120000L),
+                                result);
+
+                verifyNoInteractions(snapshotRepository);
+        }
+
+        private LiveFeedState feedState(
+                        String symbol,
+                        String exchange,
+                        LocalDate date) {
+
+                return LiveFeedState.builder()
+                                .symbol(symbol)
+                                .exchange(exchange)
+                                .tradingDate(date)
+                                .blocked(false)
+                                .healthStatus(
+                                                FeedHealthStatus.HEALTHY)
+                                .subscriptionActive(false)
+                                .consecutiveRecoveryTicks(0)
+                                .build();
         }
 
         private AngelOneTickParserService.NormalizedTick tick(
@@ -457,80 +853,4 @@ class LiveMarketSnapshotServiceTest {
                                 2000.0,
                                 1200.0);
         }
-
-        @Test
-        void update_shouldPersistCumulativeVolumeTodayInFeedState() {
-                LocalDate date = LocalDate.of(2026, 7, 14);
-
-                LocalDateTime time = date.atTime(13, 59, 6);
-
-                when(timeProvider.nowDateTime())
-                                .thenReturn(time);
-
-                when(feedStateRepository
-                                .findBySymbolAndExchangeAndTradingDate(
-                                                "WIPRO",
-                                                "NSE",
-                                                date))
-                                .thenReturn(Optional.empty());
-
-                when(snapshotRepository
-                                .findBySymbolAndExchangeAndMinuteTime(
-                                                "WIPRO",
-                                                "NSE",
-                                                time.withSecond(0)))
-                                .thenReturn(Optional.empty());
-
-                when(resolutionRepository
-                                .findBySymbolAndExchangeAndMinuteTime(
-                                                "WIPRO",
-                                                "NSE",
-                                                time.withSecond(0)))
-                                .thenReturn(Optional.empty());
-
-                service.update(
-                                tick(
-                                                time,
-                                                1770.90,
-                                                25L,
-                                                1L,
-                                                100000L));
-
-                verify(feedStateRepository).save(argThat(state -> "WIPRO".equals(state.getSymbol())
-                                && "NSE".equals(state.getExchange())
-                                && date.equals(state.getTradingDate())
-                                && Long.valueOf(100000L)
-                                                .equals(state.getCumulativeVolumeToday())));
-        }
-
-        @Test
-        void currentCumulativeVolumeToday_shouldReadPersistedFeedState() {
-                LocalDate date = LocalDate.of(2026, 7, 14);
-
-                LiveFeedState state = LiveFeedState.builder()
-                                .symbol("WIPRO")
-                                .exchange("NSE")
-                                .tradingDate(date)
-                                .cumulativeVolumeToday(120000L)
-                                .build();
-
-                when(feedStateRepository
-                                .findBySymbolAndExchangeAndTradingDate(
-                                                "WIPRO",
-                                                "NSE",
-                                                date))
-                                .thenReturn(Optional.of(state));
-
-                Optional<Long> result = service.currentCumulativeVolumeToday(
-                                "WIPRO",
-                                "NSE",
-                                date);
-
-                assertEquals(
-                                Optional.of(120000L),
-                                result);
-
-                verifyNoInteractions(snapshotRepository);
-        }
-
 }
