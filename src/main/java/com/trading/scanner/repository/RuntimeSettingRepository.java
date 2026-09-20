@@ -8,11 +8,11 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface RuntimeSettingRepository extends JpaRepository<RuntimeSetting, Integer> {
+public interface RuntimeSettingRepository extends JpaRepository<RuntimeSetting, Long> {
 
-    Optional<RuntimeSetting> findBySettingKeyAndScopeAndIsActiveTrue(String settingKey, String scope);
+    Optional<RuntimeSetting> findByNameAndIsActiveTrue(String name);
 
-    List<RuntimeSetting> findByIsActiveTrueOrderByScopeAscSettingKeyAsc();
+    List<RuntimeSetting> findByIsActiveTrueOrderByNameAsc();
 
-    Optional<RuntimeSetting> findBySettingKeyAndIsActiveTrue(String settingKey);
+    Optional<RuntimeSetting> findByName(String name);
 }

@@ -16,7 +16,6 @@ import java.util.List;
 @RequiredArgsConstructor
 public class RuntimeSettingService {
 
-    private static final String GLOBAL_SCOPE = "GLOBAL";
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
 
     private final RuntimeSettingRepository runtimeSettingRepository;
@@ -24,25 +23,25 @@ public class RuntimeSettingService {
     private final TimeProvider timeProvider;
 
     @Transactional(readOnly = true)
-    public LocalTime getTime(String key, LocalTime fallback) {
-        return runtimeSettingRepository.findBySettingKeyAndScopeAndIsActiveTrue(key, GLOBAL_SCOPE)
-                .map(RuntimeSetting::getSettingValue)
+    public LocalTime getTime(String name, LocalTime fallback) {
+        return runtimeSettingRepository.findByNameAndIsActiveTrue(name)
+                .map(RuntimeSetting::getValue)
                 .map(value -> LocalTime.parse(value, TIME_FORMAT))
                 .orElse(fallback);
     }
 
     @Transactional(readOnly = true)
-    public int getInt(String key, int fallback) {
-        return runtimeSettingRepository.findBySettingKeyAndScopeAndIsActiveTrue(key, GLOBAL_SCOPE)
-                .map(RuntimeSetting::getSettingValue)
+    public int getInt(String name, int fallback) {
+        return runtimeSettingRepository.findByNameAndIsActiveTrue(name)
+                .map(RuntimeSetting::getValue)
                 .map(Integer::parseInt)
                 .orElse(fallback);
     }
 
     @Transactional(readOnly = true)
-    public String getString(String key, String fallback) {
-        return runtimeSettingRepository.findBySettingKeyAndScopeAndIsActiveTrue(key, GLOBAL_SCOPE)
-                .map(RuntimeSetting::getSettingValue)
+    public String getString(String name, String fallback) {
+        return runtimeSettingRepository.findByNameAndIsActiveTrue(name)
+                .map(RuntimeSetting::getValue)
                 .orElse(fallback);
     }
 
@@ -132,26 +131,91 @@ public class RuntimeSettingService {
 
     @Transactional(readOnly = true)
     public List<RuntimeSetting> activeSettings() {
-        return runtimeSettingRepository.findByIsActiveTrueOrderByScopeAscSettingKeyAsc();
+        return runtimeSettingRepository.findByIsActiveTrueOrderByNameAsc();
+    }
+
+        @Transactional
+    public RuntimeSetting upsert(String name, String value, String valueType, String description) {
+        return upsert(name, value, valueType, description, "system");
     }
 
     @Transactional
-    public RuntimeSetting upsert(String key, String value, String valueType, String description, String updatedBy) {
-        RuntimeSetting setting = runtimeSettingRepository.findBySettingKeyAndScopeAndIsActiveTrue(key, GLOBAL_SCOPE)
+    public RuntimeSetting upsert(String name, String value, String valueType, String description, String updatedBy) {
+        RuntimeSetting setting = runtimeSettingRepository.findByName(name)
                 .orElseGet(() -> RuntimeSetting.builder()
-                        .settingKey(key)
-                        .scope(GLOBAL_SCOPE)
+                        .name(name)
                         .isActive(true)
-                        .version(0)
                         .build());
 
-        setting.setSettingValue(value);
+        setting.setValue(value);
         setting.setValueType(valueType);
         setting.setDescription(description);
-        setting.setUpdatedAt(timeProvider.nowDateTime());
-        setting.setUpdatedBy(updatedBy);
-        setting.setVersion(setting.getVersion() == null ? 0 : setting.getVersion() + 1);
+        setting.setIsActive(true);
+        setting.setUpdatedAt(timeProvider.nowDateTime().toString());
 
         return runtimeSettingRepository.save(setting);
+    }
+
+        @Transactional
+    public int ensureRequiredSettingsExist() {
+        int createdCount = 0;
+
+        createdCount += seedIfMissing("angelone.login.time",
+                runtimeAutomationProperties.getDefaults().getAngeloneLoginTime(),
+                "TIME", "Daily broker authentication trigger time");
+
+        createdCount += seedIfMissing("websocket.connect.time",
+                runtimeAutomationProperties.getDefaults().getWebsocketConnectTime(),
+                "TIME", "Daily market data websocket connection time");
+
+        createdCount += seedIfMissing("websocket.disconnect.time",
+                runtimeAutomationProperties.getDefaults().getWebsocketDisconnectTime(),
+                "TIME", "Daily market data websocket disconnect time");
+
+        createdCount += seedIfMissing("angelone.disconnect.time",
+                runtimeAutomationProperties.getDefaults().getAngeloneDisconnectTime(),
+                "TIME", "Daily broker session termination time");
+
+        createdCount += seedIfMissing("housekeeping.time",
+                runtimeAutomationProperties.getDefaults().getHousekeepingTime(),
+                "TIME", "Daily system maintenance and data cleanup time");
+
+        createdCount += seedIfMissing("websocket.subscribe.mode",
+                String.valueOf(runtimeAutomationProperties.getLive().getSubscriptionMode()),
+                "INTEGER", "Angel One websocket subscription mode (1=LTP, 2=Quote, 3=SnapQuote)");
+
+        createdCount += seedIfMissing("websocket.idle.close.minutes",
+                String.valueOf(runtimeAutomationProperties.getDefaults().getWebsocketIdleCloseMinutes()),
+                "INTEGER", "Inactivity timeout in minutes before idling websocket closes");
+
+        createdCount += seedIfMissing("websocket.close.recheck.minutes",
+                String.valueOf(runtimeAutomationProperties.getDefaults().getWebsocketCloseRecheckMinutes()),
+                "INTEGER", "Interval in minutes to recheck websocket closure");
+
+        createdCount += seedIfMissing("retention.candles.days",
+                String.valueOf(runtimeAutomationProperties.getDefaults().getRetentionCandlesDays()),
+                "INTEGER", "Historical retention period for candle records in days");
+
+        createdCount += seedIfMissing("retention.live.signals.days",
+                String.valueOf(runtimeAutomationProperties.getDefaults().getRetentionLiveSignalsDays()),
+                "INTEGER", "Historical retention period for simulation signals in days");
+
+        createdCount += seedIfMissing("alert.stale.ticks.minutes",
+                String.valueOf(runtimeAutomationProperties.getAlert().getStaleTicksMinutes()),
+                "INTEGER", "Alert threshold for tick arrival staleness in minutes");
+
+        createdCount += seedIfMissing("alert.parser.failures.threshold",
+                String.valueOf(runtimeAutomationProperties.getAlert().getParserFailuresThreshold()),
+                "INTEGER", "Alert threshold for consecutive websocket parse errors");
+
+        return createdCount;
+    }
+
+    private int seedIfMissing(String name, String defaultValue, String valueType, String description) {
+        if (runtimeSettingRepository.findByName(name).isEmpty()) {
+            upsert(name, defaultValue, valueType, description, "system");
+            return 1;
+        }
+        return 0;
     }
 }

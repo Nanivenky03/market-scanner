@@ -78,6 +78,6 @@ public class RuntimeAutomationProperties {
         private long refreshTimeoutMs = 10000L;
         private boolean autoRefresh = true;
         private String refreshDay = "SUNDAY";
-        private String refreshCheckTime = "17:00";
+        private String refreshCheckTime = "06:30";
     }
 }

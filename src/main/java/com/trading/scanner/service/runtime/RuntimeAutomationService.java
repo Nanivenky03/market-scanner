@@ -23,598 +23,952 @@ import java.time.LocalTime;
 @Slf4j
 public class RuntimeAutomationService {
 
-    private static final String UPDATED_BY_SYSTEM = "system";
+        private static final String UPDATED_BY_SYSTEM = "system";
 
-    private static final String KEY_LIFECYCLE_STATE = "runtime.lifecycle.state";
-    private static final String KEY_LAST_STARTUP_AT = "runtime.last.startup.at";
-    private static final String KEY_LAST_SHUTDOWN_AT = "runtime.last.shutdown.at";
-    private static final String KEY_LAST_SHUTDOWN_GRACEFUL = "runtime.last.shutdown.graceful";
-    private static final String KEY_LAST_SHUTDOWN_MESSAGE = "runtime.last.shutdown.message";
+        private static final String KEY_LIFECYCLE_STATE = "runtime.lifecycle.state";
 
-    private static final String STATE_STARTING = "STARTING";
-    private static final String STATE_RUNNING = "RUNNING";
-    private static final String STATE_STOPPING = "STOPPING";
-    private static final String STATE_STOPPED = "STOPPED";
+        private static final String KEY_LAST_STARTUP_AT = "runtime.last.startup.at";
 
-    private final AngelOneSessionService angelOneSessionService;
-    private final AngelOneWebSocketService angelOneWebSocketService;
-    private final UniverseWebSocketSubscriptionService universeWebSocketSubscriptionService;
-    private final LiveMarketCandleService liveMarketCandleService;
-    private final WebSocketFrameCaptureService webSocketFrameCaptureService;
-    private final RuntimeSettingService runtimeSettingService;
-    private final RuntimeAutomationProperties runtimeAutomationProperties;
-    private final RuntimeReadinessService runtimeReadinessService;
-    private final RuntimeBootstrapService runtimeBootstrapService;
-    private final TimeProvider timeProvider;
+        private static final String KEY_LAST_SHUTDOWN_AT = "runtime.last.shutdown.at";
 
-    private volatile LocalDateTime nextWebsocketCloseCheckAt;
-    private volatile String startupRecoveryWarning;
+        private static final String KEY_LAST_SHUTDOWN_GRACEFUL = "runtime.last.shutdown.graceful";
 
-    private volatile LocalDateTime lastRecoveryAttemptAt;
-    private volatile LocalDateTime lastRecoverySuccessAt;
-    private volatile LocalDateTime lastRecoveryFailureAt;
-    private volatile String lastRecoveryMessage;
+        private static final String KEY_LAST_SHUTDOWN_MESSAGE = "runtime.last.shutdown.message";
 
-    public RuntimeActionResult warmUpBrokerSession() {
-        AngelOneSessionService.SessionWarmupResult result = angelOneSessionService.warmUpSession();
-        return new RuntimeActionResult(
-                "BROKER_SESSION_WARMUP",
-                angelOneWebSocketService.status().connected(),
-                0,
-                liveMarketCandleService.openCandles().size(),
-                result.message());
-    }
+        private static final String STATE_STARTING = "STARTING";
 
-    public RuntimeActionResult connectAndSubscribe() {
-        webSocketFrameCaptureService.clear();
-        AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.connect();
-        UniverseWebSocketSubscriptionService.SubscriptionResult subscriptionResult = universeWebSocketSubscriptionService
-                .subscribeActiveUniverse(runtimeSettingService.subscriptionMode());
+        private static final String STATE_RUNNING = "RUNNING";
 
-        return new RuntimeActionResult(
-                "CONNECT_AND_SUBSCRIBE",
-                websocketStatus.connected(),
-                subscriptionResult.processedSubscriptions(),
-                liveMarketCandleService.openCandles().size(),
-                "Connected websocket and subscribed active universe");
-    }
+        private static final String STATE_STOPPING = "STOPPING";
 
-    public RuntimeActionResult flushAndDisconnect() {
-        LiveMarketCandleService.FlushResult flushResult = liveMarketCandleService.flushOpenCandles();
-        AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.disconnect();
-        nextWebsocketCloseCheckAt = null;
+        private static final String STATE_STOPPED = "STOPPED";
 
-        return new RuntimeActionResult(
-                "FLUSH_AND_DISCONNECT",
-                websocketStatus.connected(),
-                0,
-                flushResult.flushed(),
-                "Flushed live candles and disconnected websocket");
-    }
+        private final AngelOneSessionService angelOneSessionService;
 
-    public RuntimeActionResult clearBrokerSession() {
-        AngelOneSessionService.SessionClearResult result = angelOneSessionService.clearCachedSession();
-        return new RuntimeActionResult(
-                "BROKER_SESSION_CLEAR",
-                angelOneWebSocketService.status().connected(),
-                0,
-                liveMarketCandleService.openCandles().size(),
-                result.message());
-    }
+        private final AngelOneWebSocketService angelOneWebSocketService;
 
-    public RuntimeActionResult reconcileStartupState() {
-        LocalDateTime now = timeProvider.nowDateTime();
-        LocalTime currentTime = now.toLocalTime();
+        private final UniverseWebSocketSubscriptionService universeWebSocketSubscriptionService;
 
-        String previousLifecycleState = runtimeSettingService.getString(
-                KEY_LIFECYCLE_STATE,
-                STATE_STOPPED);
+        private final LiveMarketCandleService liveMarketCandleService;
 
-        String previousShutdownAt = runtimeSettingService.getString(
-                KEY_LAST_SHUTDOWN_AT,
-                "");
+        private final WebSocketFrameCaptureService webSocketFrameCaptureService;
 
-        String previousShutdownGraceful = runtimeSettingService.getString(
-                KEY_LAST_SHUTDOWN_GRACEFUL,
-                "true");
+        private final RuntimeSettingService runtimeSettingService;
 
-        markLifecycleState(STATE_STARTING);
-        recordStartup(now);
+        private final RuntimeAutomationProperties runtimeAutomationProperties;
 
-        if (!STATE_STOPPED.equals(previousLifecycleState)
-                || !"true".equalsIgnoreCase(
-                        previousShutdownGraceful)) {
+        private final RuntimeReadinessService runtimeReadinessService;
 
-            startupRecoveryWarning = "Previous runtime ended uncleanly. previousLifecycleState="
-                    + previousLifecycleState
-                    + ", previousShutdownAt="
-                    + previousShutdownAt;
+        private final RuntimeBootstrapService runtimeBootstrapService;
 
-            log.warn(startupRecoveryWarning);
-        } else {
-            startupRecoveryWarning = null;
+        private final TimeProvider timeProvider;
+
+        private volatile LocalDateTime nextWebsocketCloseCheckAt;
+
+        private volatile String startupRecoveryWarning;
+
+        private volatile LocalDateTime lastRecoveryAttemptAt;
+
+        private volatile LocalDateTime lastRecoverySuccessAt;
+
+        private volatile LocalDateTime lastRecoveryFailureAt;
+
+        private volatile String lastRecoveryMessage;
+
+        public RuntimeActionResult warmUpBrokerSession() {
+
+                AngelOneSessionService.SessionWarmupResult result = angelOneSessionService.warmUpSession();
+
+                return new RuntimeActionResult(
+                                "BROKER_SESSION_WARMUP",
+                                angelOneWebSocketService.status().connected(),
+                                0,
+                                liveMarketCandleService.openCandles().size(),
+                                result.message());
         }
 
-        if (!runtimeReadinessService.isTradingDay(
-                now.toLocalDate())) {
+        public RuntimeActionResult connectAndSubscribe() {
 
-            markLifecycleState(STATE_RUNNING);
+                RuntimeActionResult blocked = liveReadinessBlocked();
 
-            return new RuntimeActionResult(
-                    "STARTUP_RECONCILE",
-                    angelOneWebSocketService.status().connected(),
-                    0,
-                    liveMarketCandleService.openCandles().size(),
-                    "Startup reconcile completed. Non-trading day detected");
-        }
-
-        if (!runtimeReadinessService.bootstrapReady()) {
-            markLifecycleState(STATE_RUNNING);
-
-            return new RuntimeActionResult(
-                    "STARTUP_WAITING_FOR_BOOTSTRAP",
-                    angelOneWebSocketService.status().connected(),
-                    0,
-                    liveMarketCandleService.openCandles().size(),
-                    "Live runtime remains disabled until historical bootstrap completes");
-        }
-
-        LocalTime loginTime = runtimeSettingService.loginTime();
-
-        LocalTime websocketConnectTime = runtimeSettingService.websocketConnectTime();
-
-        LocalTime websocketDisconnectTime = runtimeSettingService.websocketDisconnectTime();
-
-        LocalTime brokerDisconnectTime = runtimeSettingService.angeloneDisconnectTime();
-
-        boolean warmed = false;
-        boolean connected = false;
-
-        if (!currentTime.isBefore(loginTime)
-                && currentTime.isBefore(brokerDisconnectTime)) {
-
-            if (!angelOneSessionService
-                    .sessionStatus()
-                    .cachedSessionPresent()) {
-
-                warmUpBrokerSession();
-                warmed = true;
-            }
-        }
-
-        if (!currentTime.isBefore(websocketConnectTime)
-                && currentTime.isBefore(websocketDisconnectTime)) {
-
-            if (!angelOneWebSocketService.status().connected()) {
-                if (!angelOneSessionService
-                        .sessionStatus()
-                        .cachedSessionPresent()) {
-                    warmUpBrokerSession();
-                    warmed = true;
+                if (blocked != null) {
+                        return blocked;
                 }
 
-                connectAndSubscribe();
-                connected = true;
-            }
+                webSocketFrameCaptureService.clear();
+
+                AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.connect();
+
+                UniverseWebSocketSubscriptionService.SubscriptionResult subscriptionResult = universeWebSocketSubscriptionService
+                                .subscribeActiveUniverse(
+                                                runtimeSettingService.subscriptionMode());
+
+                return new RuntimeActionResult(
+                                "CONNECT_AND_SUBSCRIBE",
+                                websocketStatus.connected(),
+                                subscriptionResult.processedSubscriptions(),
+                                liveMarketCandleService.openCandles().size(),
+                                "Connected websocket and subscribed active universe");
         }
 
-        markLifecycleState(STATE_RUNNING);
+        public RuntimeActionResult flushAndDisconnect() {
 
-        return new RuntimeActionResult(
-                "STARTUP_RECONCILE",
-                angelOneWebSocketService.status().connected(),
-                0,
-                liveMarketCandleService.openCandles().size(),
-                "Startup reconcile completed. warmedSession="
-                        + warmed
-                        + ", connectedWebsocket="
-                        + connected);
+                LiveMarketCandleService.FlushResult flushResult = liveMarketCandleService.flushOpenCandles();
+
+                AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.disconnect();
+
+                nextWebsocketCloseCheckAt = null;
+
+                return new RuntimeActionResult(
+                                "FLUSH_AND_DISCONNECT",
+                                websocketStatus.connected(),
+                                0,
+                                flushResult.flushed(),
+                                "Flushed live candles and disconnected websocket");
+        }
+
+        public RuntimeActionResult clearBrokerSession() {
+
+                AngelOneSessionService.SessionClearResult result = angelOneSessionService.clearCachedSession();
+
+                return new RuntimeActionResult(
+                                "BROKER_SESSION_CLEAR",
+                                angelOneWebSocketService.status().connected(),
+                                0,
+                                liveMarketCandleService.openCandles().size(),
+                                result.message());
+        }
+
+        public RuntimeActionResult reconcileStartupState() {
+
+                LocalDateTime now = timeProvider.nowDateTime();
+
+                LocalTime currentTime = now.toLocalTime();
+
+                String previousLifecycleState = runtimeSettingService.getString(
+                                KEY_LIFECYCLE_STATE,
+                                STATE_STOPPED);
+
+                String previousShutdownAt = runtimeSettingService.getString(
+                                KEY_LAST_SHUTDOWN_AT,
+                                "");
+
+                String previousShutdownGraceful = runtimeSettingService.getString(
+                                KEY_LAST_SHUTDOWN_GRACEFUL,
+                                "true");
+
+                markLifecycleState(
+                                STATE_STARTING);
+
+                recordStartup(now);
+
+                if (!STATE_STOPPED.equals(
+                                previousLifecycleState)
+                                || !"true".equalsIgnoreCase(
+                                                previousShutdownGraceful)) {
+
+                        startupRecoveryWarning = "Previous runtime ended uncleanly. previousLifecycleState="
+                                        + previousLifecycleState
+                                        + ", previousShutdownAt="
+                                        + previousShutdownAt;
+
+                        log.warn(startupRecoveryWarning);
+
+                } else {
+                        startupRecoveryWarning = null;
+                }
+
+                if (!runtimeReadinessService.isTradingDay(
+                                now.toLocalDate())) {
+
+                        markLifecycleState(
+                                        STATE_RUNNING);
+
+                        return new RuntimeActionResult(
+                                        "STARTUP_RECONCILE",
+                                        angelOneWebSocketService.status().connected(),
+                                        0,
+                                        liveMarketCandleService.openCandles().size(),
+                                        "Startup reconcile completed. Non-trading day detected");
+                }
+
+                RuntimeActionResult blocked = liveReadinessBlocked();
+
+                if (blocked != null) {
+
+                        markLifecycleState(
+                                        STATE_RUNNING);
+
+                        return new RuntimeActionResult(
+                                        "STARTUP_WAITING_FOR_BOOTSTRAP",
+                                        false,
+                                        0,
+                                        liveMarketCandleService.openCandles().size(),
+                                        blocked.message());
+                }
+
+                LocalTime loginTime = runtimeSettingService.loginTime();
+
+                LocalTime websocketConnectTime = runtimeSettingService.websocketConnectTime();
+
+                LocalTime websocketDisconnectTime = runtimeSettingService.websocketDisconnectTime();
+
+                LocalTime brokerDisconnectTime = runtimeSettingService.angeloneDisconnectTime();
+
+                boolean warmed = false;
+
+                boolean connected = false;
+
+                if (!currentTime.isBefore(loginTime)
+                                && currentTime.isBefore(brokerDisconnectTime)) {
+
+                        if (!angelOneSessionService
+                                        .sessionStatus()
+                                        .cachedSessionPresent()) {
+
+                                warmUpBrokerSession();
+
+                                warmed = true;
+                        }
+                }
+
+                if (!currentTime.isBefore(websocketConnectTime)
+                                && currentTime.isBefore(websocketDisconnectTime)) {
+
+                        if (!angelOneWebSocketService.status().connected()) {
+
+                                if (!angelOneSessionService
+                                                .sessionStatus()
+                                                .cachedSessionPresent()) {
+
+                                        warmUpBrokerSession();
+
+                                        warmed = true;
+                                }
+
+                                RuntimeActionResult result = connectAndSubscribe();
+
+                                connected = result.websocketConnected();
+                        }
+                }
+
+                markLifecycleState(
+                                STATE_RUNNING);
+
+                return new RuntimeActionResult(
+                                "STARTUP_RECONCILE",
+                                angelOneWebSocketService.status().connected(),
+                                0,
+                                liveMarketCandleService.openCandles().size(),
+                                "Startup reconcile completed. warmedSession="
+                                                + warmed
+                                                + ", connectedWebsocket="
+                                                + connected);
+        }
+
+        public RuntimeActionResult recoverLiveRuntimeIfNeeded() {
+
+                LocalDateTime now = timeProvider.nowDateTime();
+
+                if (!runtimeAutomationProperties
+                                .getLive()
+                                .isAutoRun()) {
+
+                        return noAction(
+                                        "Skipped live recovery because auto-run is disabled");
+                }
+
+                if (!runtimeAutomationProperties
+                                .getLive()
+                                .isAutoRecover()) {
+
+                        return noAction(
+                                        "Skipped live recovery because auto-recover is disabled");
+                }
+
+                if (!runtimeReadinessService.isTradingDay(
+                                now.toLocalDate())) {
+
+                        return noAction(
+                                        "Skipped live recovery because today is not a trading day");
+                }
+
+                RuntimeActionResult blocked = liveReadinessBlocked();
+
+                if (blocked != null) {
+                        return blocked;
+                }
+
+                LocalTime currentTime = now.toLocalTime();
+
+                LocalTime websocketConnectTime = runtimeSettingService.websocketConnectTime();
+
+                LocalTime websocketDisconnectTime = runtimeSettingService.websocketDisconnectTime();
+
+                if (currentTime.isBefore(websocketConnectTime)
+                                || !currentTime.isBefore(
+                                                websocketDisconnectTime)) {
+
+                        return noAction(
+                                        "Skipped live recovery because current time is outside the recovery window");
+                }
+
+                if (lastRecoveryAttemptAt != null) {
+
+                        long secondsSinceLastAttempt = Duration.between(
+                                        lastRecoveryAttemptAt,
+                                        now)
+                                        .getSeconds();
+
+                        if (secondsSinceLastAttempt < runtimeAutomationProperties
+                                        .getLive()
+                                        .getReconnectBackoffSeconds()) {
+
+                                return noAction(
+                                                "Skipped live recovery because reconnect backoff is active");
+                        }
+                }
+
+                AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.status();
+
+                boolean websocketHealthy = false;
+
+                if (websocketStatus.connected()
+                                && websocketStatus.lastMessageReceivedAt() != null) {
+
+                        long idleMinutes = Duration.between(
+                                        websocketStatus.lastMessageReceivedAt(),
+                                        now)
+                                        .toMinutes();
+
+                        websocketHealthy = idleMinutes < runtimeSettingService.staleTicksMinutes();
+                }
+
+                if (websocketHealthy) {
+
+                        return new RuntimeActionResult(
+                                        "NO_ACTION",
+                                        true,
+                                        0,
+                                        liveMarketCandleService.openCandles().size(),
+                                        "Skipped live recovery because websocket is healthy");
+                }
+
+                lastRecoveryAttemptAt = now;
+
+                try {
+
+                        if (websocketStatus.connected()) {
+                                angelOneWebSocketService.disconnect();
+                        }
+
+                        if (!angelOneSessionService
+                                        .sessionStatus()
+                                        .cachedSessionPresent()) {
+
+                                warmUpBrokerSession();
+                        }
+
+                        RuntimeActionResult result = connectAndSubscribe();
+
+                        if (!result.websocketConnected()) {
+
+                                lastRecoveryFailureAt = timeProvider.nowDateTime();
+
+                                lastRecoveryMessage = "Live runtime recovery did not connect: "
+                                                + result.message();
+
+                                return new RuntimeActionResult(
+                                                "LIVE_RUNTIME_RECOVERY_FAILED",
+                                                false,
+                                                result.processedSubscriptions(),
+                                                result.openCandlesOrFlushedCandles(),
+                                                lastRecoveryMessage);
+                        }
+
+                        lastRecoverySuccessAt = timeProvider.nowDateTime();
+
+                        lastRecoveryMessage = "Recovered live runtime successfully";
+
+                        return new RuntimeActionResult(
+                                        "LIVE_RUNTIME_RECOVERY",
+                                        result.websocketConnected(),
+                                        result.processedSubscriptions(),
+                                        result.openCandlesOrFlushedCandles(),
+                                        lastRecoveryMessage);
+
+                } catch (Exception ex) {
+
+                        lastRecoveryFailureAt = timeProvider.nowDateTime();
+
+                        lastRecoveryMessage = "Live runtime recovery failed: "
+                                        + ex.getMessage();
+
+                        throw ex;
+                }
+        }
+
+        public RuntimeStatus runtimeStatus() {
+
+                AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.status();
+
+                AngelOneSessionService.SessionStatus sessionStatus = angelOneSessionService.sessionStatus();
+
+                return new RuntimeStatus(
+                                runtimeAutomationProperties
+                                                .getLive()
+                                                .isAutoRun(),
+                                runtimeAutomationProperties
+                                                .getLive()
+                                                .isAutoRecover(),
+                                runtimeSettingService.subscriptionMode(),
+                                websocketStatus.connected(),
+                                websocketStatus.connecting(),
+                                websocketStatus.lastConnectedAt(),
+                                websocketStatus.lastDisconnectedAt(),
+                                websocketStatus.lastMessageReceivedAt(),
+                                websocketStatus.lastError(),
+                                websocketStatus.messagesReceived(),
+                                websocketStatus.messagesSent(),
+                                websocketStatus.subscriptionsSent(),
+                                websocketStatus.parsedTicksReceived(),
+                                websocketStatus.parserFailures(),
+                                sessionStatus.cachedSessionPresent(),
+                                sessionStatus.lastLoginAt(),
+                                liveMarketCandleService.openCandles().size(),
+                                runtimeSettingService.getString(
+                                                KEY_LIFECYCLE_STATE,
+                                                STATE_STOPPED),
+                                runtimeSettingService.getString(
+                                                KEY_LAST_STARTUP_AT,
+                                                null),
+                                runtimeSettingService.getString(
+                                                KEY_LAST_SHUTDOWN_AT,
+                                                null),
+                                parseBoolean(
+                                                runtimeSettingService.getString(
+                                                                KEY_LAST_SHUTDOWN_GRACEFUL,
+                                                                "true")),
+                                startupRecoveryWarning,
+                                lastRecoveryAttemptAt,
+                                lastRecoverySuccessAt,
+                                lastRecoveryFailureAt,
+                                lastRecoveryMessage);
+        }
+
+        @EventListener(ApplicationReadyEvent.class)
+public void onApplicationReady() {
+    RuntimeBootstrapService.BootstrapResult bootstrapResult =
+            runtimeBootstrapService.bootstrapIfNeeded();
+
+    log.info(
+            "Runtime bootstrap completed: {}",
+            bootstrapResult);
+
+    if (!runtimeAutomationProperties
+            .getLive()
+            .isAutoRun()) {
+        return;
     }
 
-    public RuntimeActionResult recoverLiveRuntimeIfNeeded() {
-        LocalDateTime now = timeProvider.nowDateTime();
+    try {
+        RuntimeActionResult result =
+                reconcileStartupState();
 
-        if (!runtimeAutomationProperties.getLive().isAutoRun()) {
-            return new RuntimeActionResult("NO_ACTION", false, 0, liveMarketCandleService.openCandles().size(),
-                    "Skipped live recovery because auto-run is disabled");
-        }
+        log.info(
+                "Runtime startup reconcile completed: {}",
+                result);
 
-        if (!runtimeAutomationProperties.getLive().isAutoRecover()) {
-            return new RuntimeActionResult("NO_ACTION", false, 0, liveMarketCandleService.openCandles().size(),
-                    "Skipped live recovery because auto-recover is disabled");
-        }
+    } catch (Exception ex) {
+        log.error(
+                "Runtime startup reconcile failed: {}",
+                ex.getMessage(),
+                ex);
 
-        if (!runtimeReadinessService.isTradingDay(now.toLocalDate())) {
-            return new RuntimeActionResult("NO_ACTION", false, 0, liveMarketCandleService.openCandles().size(),
-                    "Skipped live recovery because today is not a trading day");
-        }
-
-        LocalTime currentTime = now.toLocalTime();
-        LocalTime websocketConnectTime = runtimeSettingService.websocketConnectTime();
-        LocalTime websocketDisconnectTime = runtimeSettingService.websocketDisconnectTime();
-
-        if (currentTime.isBefore(websocketConnectTime) || !currentTime.isBefore(websocketDisconnectTime)) {
-            return new RuntimeActionResult("NO_ACTION", false, 0, liveMarketCandleService.openCandles().size(),
-                    "Skipped live recovery because current time is outside the recovery window");
-        }
-
-        if (lastRecoveryAttemptAt != null) {
-            long secondsSinceLastAttempt = Duration.between(lastRecoveryAttemptAt, now).getSeconds();
-            if (secondsSinceLastAttempt < runtimeAutomationProperties.getLive().getReconnectBackoffSeconds()) {
-                return new RuntimeActionResult("NO_ACTION", false, 0, liveMarketCandleService.openCandles().size(),
-                        "Skipped live recovery because reconnect backoff is active");
-            }
-        }
-
-        AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.status();
-        boolean websocketHealthy = false;
-
-        if (websocketStatus.connected() && websocketStatus.lastMessageReceivedAt() != null) {
-            long idleMinutes = Duration.between(websocketStatus.lastMessageReceivedAt(), now).toMinutes();
-            websocketHealthy = idleMinutes < runtimeSettingService.staleTicksMinutes();
-        }
-
-        if (websocketHealthy) {
-            return new RuntimeActionResult("NO_ACTION", true, 0, liveMarketCandleService.openCandles().size(),
-                    "Skipped live recovery because websocket is healthy");
-        }
-
-        lastRecoveryAttemptAt = now;
-
-        try {
-            if (websocketStatus.connected()) {
-                angelOneWebSocketService.disconnect();
-            }
-
-            if (!angelOneSessionService.sessionStatus().cachedSessionPresent()) {
-                warmUpBrokerSession();
-            }
-
-            RuntimeActionResult result = connectAndSubscribe();
-            lastRecoverySuccessAt = timeProvider.nowDateTime();
-            lastRecoveryMessage = "Recovered live runtime successfully";
-            return new RuntimeActionResult(
-                    "LIVE_RUNTIME_RECOVERY",
-                    result.websocketConnected(),
-                    result.processedSubscriptions(),
-                    result.openCandlesOrFlushedCandles(),
-                    lastRecoveryMessage);
-        } catch (Exception ex) {
-            lastRecoveryFailureAt = timeProvider.nowDateTime();
-            lastRecoveryMessage = "Live runtime recovery failed: " + ex.getMessage();
-            throw ex;
-        }
+        throw new IllegalStateException(
+                "Runtime startup reconcile failed",
+                ex);
     }
+}
 
-    public RuntimeStatus runtimeStatus() {
-        AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.status();
-        AngelOneSessionService.SessionStatus sessionStatus = angelOneSessionService.sessionStatus();
+        public void scheduledBrokerWarmup() {
 
-        return new RuntimeStatus(
-                runtimeAutomationProperties.getLive().isAutoRun(),
-                runtimeAutomationProperties.getLive().isAutoRecover(),
-                runtimeSettingService.subscriptionMode(),
-                angelOneWebSocketService.status().connected(),
-                websocketStatus.connecting(),
-                websocketStatus.lastConnectedAt(),
-                websocketStatus.lastDisconnectedAt(),
-                websocketStatus.lastMessageReceivedAt(),
-                websocketStatus.lastError(),
-                websocketStatus.messagesReceived(),
-                websocketStatus.messagesSent(),
-                websocketStatus.subscriptionsSent(),
-                websocketStatus.parsedTicksReceived(),
-                websocketStatus.parserFailures(),
-                sessionStatus.cachedSessionPresent(),
-                sessionStatus.lastLoginAt(),
-                liveMarketCandleService.openCandles().size(),
-                runtimeSettingService.getString(KEY_LIFECYCLE_STATE, STATE_STOPPED),
-                runtimeSettingService.getString(KEY_LAST_STARTUP_AT, null),
-                runtimeSettingService.getString(KEY_LAST_SHUTDOWN_AT, null),
-                parseBoolean(runtimeSettingService.getString(KEY_LAST_SHUTDOWN_GRACEFUL, "true")),
-                startupRecoveryWarning,
-                lastRecoveryAttemptAt,
-                lastRecoverySuccessAt,
-                lastRecoveryFailureAt,
-                lastRecoveryMessage);
-    }
+                if (!runtimeAutomationProperties
+                                .getLive()
+                                .isAutoRun()) {
+                        return;
+                }
 
-    @EventListener(ApplicationReadyEvent.class)
-    public void onApplicationReady() {
-        try {
-            RuntimeBootstrapService.BootstrapResult bootstrapResult = runtimeBootstrapService.bootstrapIfNeeded();
-            log.info("Runtime bootstrap completed: {}", bootstrapResult);
-        } catch (Exception ex) {
-            log.warn("Runtime bootstrap failed: {}", ex.getMessage(), ex);
+                LocalDateTime nowDateTime = timeProvider.nowDateTime();
+
+                if (!runtimeReadinessService
+                                .isTradingDay(
+                                                nowDateTime.toLocalDate())) {
+                        return;
+                }
+
+                LocalTime now = nowDateTime.toLocalTime();
+
+                LocalTime loginTime = runtimeSettingService.loginTime();
+
+                if (now.getHour() != loginTime.getHour()
+                                || now.getMinute() != loginTime.getMinute()) {
+                        return;
+                }
+
+                try {
+
+                        RuntimeActionResult result = warmUpBrokerSession();
+
+                        log.info(
+                                        "Scheduled broker session warmup completed: {}",
+                                        result);
+
+                } catch (Exception ex) {
+
+                        log.warn(
+                                        "Scheduled broker session warmup failed: {}",
+                                        ex.getMessage(),
+                                        ex);
+
+                        throw new IllegalStateException(
+                                        "Scheduled broker session warmup failed",
+                                        ex);
+                }
         }
 
-        if (!runtimeAutomationProperties.getLive().isAutoRun()) {
-            return;
+        public void scheduledBrokerSessionClear() {
+
+                if (!runtimeAutomationProperties
+                                .getLive()
+                                .isAutoRun()) {
+                        return;
+                }
+
+                LocalDateTime nowDateTime = timeProvider.nowDateTime();
+
+                if (!runtimeReadinessService
+                                .isTradingDay(
+                                                nowDateTime.toLocalDate())) {
+                        return;
+                }
+
+                LocalTime now = nowDateTime.toLocalTime();
+
+                LocalTime brokerDisconnectTime = runtimeSettingService
+                                .angeloneDisconnectTime();
+
+                if (now.isBefore(brokerDisconnectTime)) {
+                        return;
+                }
+
+                if (angelOneWebSocketService
+                                .status()
+                                .connected()) {
+                        return;
+                }
+
+                if (!angelOneSessionService
+                                .sessionStatus()
+                                .cachedSessionPresent()) {
+                        return;
+                }
+
+                try {
+
+                        RuntimeActionResult result = clearBrokerSession();
+
+                        log.info(
+                                        "Scheduled broker session clear completed: {}",
+                                        result);
+
+                } catch (Exception ex) {
+
+                        log.warn(
+                                        "Scheduled broker session clear failed: {}",
+                                        ex.getMessage(),
+                                        ex);
+
+                        throw new IllegalStateException(
+                                        "Scheduled broker session clear failed",
+                                        ex);
+                }
         }
 
-        try {
-            RuntimeActionResult result = reconcileStartupState();
-            log.info("Runtime startup reconcile completed: {}", result);
-        } catch (Exception ex) {
-            log.warn("Runtime startup reconcile failed: {}", ex.getMessage(), ex);
-        }
-    }
+        public void scheduledConnectAndSubscribe() {
 
-    public void scheduledBrokerWarmup() {
-        if (!runtimeAutomationProperties
-                .getLive()
-                .isAutoRun()) {
-            return;
-        }
+                if (!runtimeAutomationProperties
+                                .getLive()
+                                .isAutoRun()) {
+                        return;
+                }
 
-        LocalDateTime nowDateTime = timeProvider.nowDateTime();
+                LocalDateTime nowDateTime = timeProvider.nowDateTime();
 
-        if (!runtimeReadinessService
-                .isTradingDay(nowDateTime.toLocalDate())) {
-            return;
-        }
+                if (!runtimeReadinessService
+                                .isTradingDay(
+                                                nowDateTime.toLocalDate())) {
+                        return;
+                }
 
-        LocalTime now = nowDateTime.toLocalTime();
+                LocalTime now = nowDateTime.toLocalTime();
 
-        LocalTime loginTime = runtimeSettingService.loginTime();
+                LocalTime connectTime = runtimeSettingService.websocketConnectTime();
 
-        if (now.getHour() != loginTime.getHour()
-                || now.getMinute() != loginTime.getMinute()) {
-            return;
-        }
+                if (now.getHour() != connectTime.getHour()
+                                || now.getMinute() != connectTime.getMinute()) {
+                        return;
+                }
 
-        try {
-            RuntimeActionResult result = warmUpBrokerSession();
+                try {
 
-            log.info(
-                    "Scheduled broker session warmup completed: {}",
-                    result);
-        } catch (Exception ex) {
-            log.warn(
-                    "Scheduled broker session warmup failed: {}",
-                    ex.getMessage(),
-                    ex);
+                        RuntimeActionResult result = connectAndSubscribe();
 
-            throw new IllegalStateException(
-                    "Scheduled broker session warmup failed",
-                    ex);
-        }
-    }
+                        log.info(
+                                        "Scheduled runtime connect/subscription completed: {}",
+                                        result);
 
-    public void scheduledBrokerSessionClear() {
-        if (!runtimeAutomationProperties
-                .getLive()
-                .isAutoRun()) {
-            return;
+                } catch (Exception ex) {
+
+                        log.warn(
+                                        "Scheduled runtime connect/subscription failed: {}",
+                                        ex.getMessage(),
+                                        ex);
+                }
         }
 
-        LocalDateTime nowDateTime = timeProvider.nowDateTime();
+        public void scheduledRecoverLiveRuntime() {
 
-        if (!runtimeReadinessService
-                .isTradingDay(nowDateTime.toLocalDate())) {
-            return;
+                if (!runtimeAutomationProperties
+                                .getLive()
+                                .isAutoRun()) {
+                        return;
+                }
+
+                if (!runtimeAutomationProperties
+                                .getLive()
+                                .isAutoRecover()) {
+                        return;
+                }
+
+                try {
+
+                        RuntimeActionResult result = recoverLiveRuntimeIfNeeded();
+
+                        if (!"NO_ACTION".equals(
+                                        result.action())) {
+
+                                log.info(
+                                                "Scheduled live runtime recovery completed: {}",
+                                                result);
+                        }
+
+                } catch (Exception ex) {
+
+                        log.warn(
+                                        "Scheduled live runtime recovery failed: {}",
+                                        ex.getMessage(),
+                                        ex);
+                }
         }
 
-        LocalTime now = nowDateTime.toLocalTime();
+        public void scheduledConditionalFlushAndDisconnect() {
 
-        LocalTime brokerDisconnectTime = runtimeSettingService
-                .angeloneDisconnectTime();
+                if (!runtimeAutomationProperties
+                                .getLive()
+                                .isAutoRun()) {
+                        return;
+                }
 
-        if (now.isBefore(brokerDisconnectTime)) {
-            return;
+                LocalDateTime now = timeProvider.nowDateTime();
+
+                if (!runtimeReadinessService
+                                .isTradingDay(
+                                                now.toLocalDate())) {
+                        return;
+                }
+
+                LocalTime disconnectCheckTime = runtimeSettingService
+                                .websocketDisconnectTime();
+
+                if (now.toLocalTime()
+                                .isBefore(disconnectCheckTime)) {
+                        return;
+                }
+
+                if (nextWebsocketCloseCheckAt != null
+                                && now.isBefore(
+                                                nextWebsocketCloseCheckAt)) {
+                        return;
+                }
+
+                AngelOneWebSocketService.Status status = angelOneWebSocketService.status();
+
+                if (!status.connected()) {
+
+                        nextWebsocketCloseCheckAt = null;
+
+                        return;
+                }
+
+                LocalDateTime lastMessageTime = status.lastMessageReceivedAt();
+
+                if (lastMessageTime == null) {
+
+                        try {
+
+                                RuntimeActionResult result = flushAndDisconnect();
+
+                                log.info(
+                                                "Websocket disconnected because no message timestamp was available: {}",
+                                                result);
+
+                        } catch (Exception ex) {
+
+                                log.warn(
+                                                "Websocket disconnect after missing timestamp failed: {}",
+                                                ex.getMessage(),
+                                                ex);
+                        }
+
+                        return;
+                }
+
+                long idleForMinutes = Duration.between(
+                                lastMessageTime,
+                                now)
+                                .toMinutes();
+
+                if (idleForMinutes >= runtimeSettingService
+                                .websocketIdleCloseMinutes()) {
+
+                        try {
+
+                                RuntimeActionResult result = flushAndDisconnect();
+
+                                log.info(
+                                                "Websocket disconnected after {} idle minutes: {}",
+                                                idleForMinutes,
+                                                result);
+
+                        } catch (Exception ex) {
+
+                                log.warn(
+                                                "Scheduled conditional websocket disconnect failed: {}",
+                                                ex.getMessage(),
+                                                ex);
+                        }
+
+                } else {
+
+                        nextWebsocketCloseCheckAt = now.plusMinutes(
+                                        runtimeSettingService
+                                                        .websocketCloseRecheckMinutes());
+
+                        log.info(
+                                        "Websocket still active after close-check time. idleMinutes={}, nextCheckAt={}",
+                                        idleForMinutes,
+                                        nextWebsocketCloseCheckAt);
+                }
         }
 
-        if (angelOneWebSocketService
-                .status()
-                .connected()) {
-            return;
+        @PreDestroy
+        public void onShutdown() {
+
+                LocalDateTime now = timeProvider.nowDateTime();
+
+                markLifecycleState(
+                                STATE_STOPPING);
+
+                recordShutdown(
+                                now,
+                                false,
+                                "Shutdown started");
+
+                try {
+
+                        if (!liveMarketCandleService
+                                        .openCandles()
+                                        .isEmpty()) {
+
+                                liveMarketCandleService
+                                                .flushOpenCandles();
+                        }
+
+                        if (angelOneWebSocketService
+                                        .status()
+                                        .connected()) {
+
+                                angelOneWebSocketService
+                                                .disconnect();
+                        }
+
+                        if (angelOneSessionService
+                                        .sessionStatus()
+                                        .cachedSessionPresent()) {
+
+                                angelOneSessionService
+                                                .clearCachedSession();
+                        }
+
+                        recordShutdown(
+                                        timeProvider.nowDateTime(),
+                                        true,
+                                        "Shutdown completed gracefully");
+
+                        markLifecycleState(
+                                        STATE_STOPPED);
+
+                } catch (Exception ex) {
+
+                        recordShutdown(
+                                        timeProvider.nowDateTime(),
+                                        false,
+                                        "Shutdown error: "
+                                                        + ex.getMessage());
+
+                        log.warn(
+                                        "Runtime shutdown hook failed: {}",
+                                        ex.getMessage(),
+                                        ex);
+                }
         }
 
-        if (!angelOneSessionService
-                .sessionStatus()
-                .cachedSessionPresent()) {
-            return;
+        private RuntimeActionResult liveReadinessBlocked() {
+
+                RuntimeReadinessService.ReadinessStatus readiness = runtimeReadinessService.status();
+
+                if (readiness == null) {
+
+                        return new RuntimeActionResult(
+                                        "NO_ACTION",
+                                        false,
+                                        0,
+                                        liveMarketCandleService.openCandles().size(),
+                                        "Live runtime blocked because readiness status is unavailable");
+                }
+
+                if (!readiness.bootstrapReady()
+                                || !readiness.readyForLiveRuntime()) {
+
+                        return new RuntimeActionResult(
+                                        "NO_ACTION",
+                                        false,
+                                        0,
+                                        liveMarketCandleService.openCandles().size(),
+                                        "Live runtime blocked because bootstrap/readiness is incomplete. "
+                                                        + "bootstrapStatus="
+                                                        + readiness.bootstrapStatus()
+                                                        + ", bootstrapReady="
+                                                        + readiness.bootstrapReady()
+                                                        + ", readyForLiveRuntime="
+                                                        + readiness.readyForLiveRuntime());
+                }
+
+                return null;
         }
 
-        try {
-            RuntimeActionResult result = clearBrokerSession();
+        private RuntimeActionResult noAction(
+                        String message) {
 
-            log.info(
-                    "Scheduled broker session clear completed: {}",
-                    result);
-        } catch (Exception ex) {
-            log.warn(
-                    "Scheduled broker session clear failed: {}",
-                    ex.getMessage(),
-                    ex);
-
-            throw new IllegalStateException(
-                    "Scheduled broker session clear failed",
-                    ex);
-        }
-    }
-
-    public void scheduledConnectAndSubscribe() {
-        if (!runtimeAutomationProperties.getLive().isAutoRun()) {
-            return;
+                return new RuntimeActionResult(
+                                "NO_ACTION",
+                                false,
+                                0,
+                                liveMarketCandleService.openCandles().size(),
+                                message);
         }
 
-        LocalDateTime nowDateTime = timeProvider.nowDateTime();
-        if (!runtimeReadinessService.isTradingDay(nowDateTime.toLocalDate())) {
-            return;
+        private void markLifecycleState(
+                        String state) {
+
+                runtimeSettingService.upsert(
+                                KEY_LIFECYCLE_STATE,
+                                state,
+                                "STRING",
+                                "Runtime lifecycle state",
+                                UPDATED_BY_SYSTEM);
         }
 
-        LocalTime now = nowDateTime.toLocalTime();
-        LocalTime connectTime = runtimeSettingService.websocketConnectTime();
+        private void recordStartup(
+                        LocalDateTime startupAt) {
 
-        if (now.getHour() != connectTime.getHour() || now.getMinute() != connectTime.getMinute()) {
-            return;
+                runtimeSettingService.upsert(
+                                KEY_LAST_STARTUP_AT,
+                                startupAt.toString(),
+                                "DATETIME",
+                                "Last startup timestamp",
+                                UPDATED_BY_SYSTEM);
         }
 
-        try {
-            RuntimeActionResult result = connectAndSubscribe();
-            log.info("Scheduled runtime connect/subscription completed: {}", result);
-        } catch (Exception ex) {
-            log.warn("Scheduled runtime connect/subscription failed: {}", ex.getMessage(), ex);
-        }
-    }
+        private void recordShutdown(
+                        LocalDateTime shutdownAt,
+                        boolean graceful,
+                        String message) {
 
-    public void scheduledRecoverLiveRuntime() {
-        if (!runtimeAutomationProperties.getLive().isAutoRun()) {
-            return;
-        }
+                runtimeSettingService.upsert(
+                                KEY_LAST_SHUTDOWN_AT,
+                                shutdownAt.toString(),
+                                "DATETIME",
+                                "Last shutdown timestamp",
+                                UPDATED_BY_SYSTEM);
 
-        if (!runtimeAutomationProperties.getLive().isAutoRecover()) {
-            return;
-        }
+                runtimeSettingService.upsert(
+                                KEY_LAST_SHUTDOWN_GRACEFUL,
+                                Boolean.toString(graceful),
+                                "BOOLEAN",
+                                "Whether previous shutdown was graceful",
+                                UPDATED_BY_SYSTEM);
 
-        try {
-            RuntimeActionResult result = recoverLiveRuntimeIfNeeded();
-            if (!"NO_ACTION".equals(result.action())) {
-                log.info("Scheduled live runtime recovery completed: {}", result);
-            }
-        } catch (Exception ex) {
-            log.warn("Scheduled live runtime recovery failed: {}", ex.getMessage(), ex);
-        }
-    }
-
-    public void scheduledConditionalFlushAndDisconnect() {
-        if (!runtimeAutomationProperties.getLive().isAutoRun()) {
-            return;
+                runtimeSettingService.upsert(
+                                KEY_LAST_SHUTDOWN_MESSAGE,
+                                message,
+                                "STRING",
+                                "Last shutdown message",
+                                UPDATED_BY_SYSTEM);
         }
 
-        LocalDateTime now = timeProvider.nowDateTime();
-        if (!runtimeReadinessService.isTradingDay(now.toLocalDate())) {
-            return;
+        private boolean parseBoolean(
+                        String value) {
+
+                return value != null
+                                && Boolean.parseBoolean(value);
         }
 
-        LocalTime disconnectCheckTime = runtimeSettingService.websocketDisconnectTime();
-
-        if (now.toLocalTime().isBefore(disconnectCheckTime)) {
-            return;
+        public record RuntimeActionResult(
+                        String action,
+                        boolean websocketConnected,
+                        int processedSubscriptions,
+                        int openCandlesOrFlushedCandles,
+                        String message) {
         }
 
-        if (nextWebsocketCloseCheckAt != null && now.isBefore(nextWebsocketCloseCheckAt)) {
-            return;
+        public record RuntimeStatus(
+                        boolean autoRunEnabled,
+                        boolean autoRecoverEnabled,
+                        int subscriptionMode,
+                        boolean websocketConnected,
+                        boolean websocketConnecting,
+                        LocalDateTime lastConnectedAt,
+                        LocalDateTime lastDisconnectedAt,
+                        LocalDateTime lastMessageReceivedAt,
+                        String lastError,
+                        long messagesReceived,
+                        long messagesSent,
+                        long subscriptionsSent,
+                        long parsedTicksReceived,
+                        long parserFailures,
+                        boolean cachedBrokerSessionPresent,
+                        LocalDateTime lastBrokerLoginAt,
+                        int openLiveCandles,
+                        String lifecycleState,
+                        String lastStartupAt,
+                        String lastShutdownAt,
+                        boolean lastShutdownGraceful,
+                        String startupRecoveryWarning,
+                        LocalDateTime lastRecoveryAttemptAt,
+                        LocalDateTime lastRecoverySuccessAt,
+                        LocalDateTime lastRecoveryFailureAt,
+                        String lastRecoveryMessage) {
         }
-
-        AngelOneWebSocketService.Status status = angelOneWebSocketService.status();
-        if (!status.connected()) {
-            nextWebsocketCloseCheckAt = null;
-            return;
-        }
-
-        LocalDateTime lastMessageTime = status.lastMessageReceivedAt();
-        if (lastMessageTime == null) {
-            try {
-                RuntimeActionResult result = flushAndDisconnect();
-                log.info("Websocket disconnected because no message timestamp was available: {}", result);
-            } catch (Exception ex) {
-                log.warn("Websocket disconnect after missing timestamp failed: {}", ex.getMessage(), ex);
-            }
-            return;
-        }
-
-        long idleForMinutes = Duration.between(lastMessageTime, now).toMinutes();
-
-        if (idleForMinutes >= runtimeSettingService.websocketIdleCloseMinutes()) {
-            try {
-                RuntimeActionResult result = flushAndDisconnect();
-                log.info("Websocket disconnected after {} idle minutes: {}", idleForMinutes, result);
-            } catch (Exception ex) {
-                log.warn("Scheduled conditional websocket disconnect failed: {}", ex.getMessage(), ex);
-            }
-        } else {
-            nextWebsocketCloseCheckAt = now.plusMinutes(runtimeSettingService.websocketCloseRecheckMinutes());
-            log.info("Websocket still active after close-check time. idleMinutes={}, nextCheckAt={}",
-                    idleForMinutes, nextWebsocketCloseCheckAt);
-        }
-    }
-
-    @PreDestroy
-    public void onShutdown() {
-        LocalDateTime now = timeProvider.nowDateTime();
-        markLifecycleState(STATE_STOPPING);
-        recordShutdown(now, false, "Shutdown started");
-
-        try {
-            if (!liveMarketCandleService.openCandles().isEmpty()) {
-                liveMarketCandleService.flushOpenCandles();
-            }
-
-            if (angelOneWebSocketService.status().connected()) {
-                angelOneWebSocketService.disconnect();
-            }
-
-            if (angelOneSessionService.sessionStatus().cachedSessionPresent()) {
-                angelOneSessionService.clearCachedSession();
-            }
-
-            recordShutdown(timeProvider.nowDateTime(), true, "Shutdown completed gracefully");
-            markLifecycleState(STATE_STOPPED);
-        } catch (Exception ex) {
-            recordShutdown(timeProvider.nowDateTime(), false, "Shutdown error: " + ex.getMessage());
-            log.warn("Runtime shutdown hook failed: {}", ex.getMessage(), ex);
-        }
-    }
-
-    private void markLifecycleState(String state) {
-        runtimeSettingService.upsert(KEY_LIFECYCLE_STATE, state, "STRING", "Runtime lifecycle state",
-                UPDATED_BY_SYSTEM);
-    }
-
-    private void recordStartup(LocalDateTime startupAt) {
-        runtimeSettingService.upsert(KEY_LAST_STARTUP_AT, startupAt.toString(), "DATETIME", "Last startup timestamp",
-                UPDATED_BY_SYSTEM);
-    }
-
-    private void recordShutdown(LocalDateTime shutdownAt, boolean graceful, String message) {
-        runtimeSettingService.upsert(KEY_LAST_SHUTDOWN_AT, shutdownAt.toString(), "DATETIME", "Last shutdown timestamp",
-                UPDATED_BY_SYSTEM);
-        runtimeSettingService.upsert(KEY_LAST_SHUTDOWN_GRACEFUL, Boolean.toString(graceful), "BOOLEAN",
-                "Whether previous shutdown was graceful", UPDATED_BY_SYSTEM);
-        runtimeSettingService.upsert(KEY_LAST_SHUTDOWN_MESSAGE, message, "STRING", "Last shutdown message",
-                UPDATED_BY_SYSTEM);
-    }
-
-    private boolean parseBoolean(String value) {
-        return value != null && Boolean.parseBoolean(value);
-    }
-
-    public record RuntimeActionResult(
-            String action,
-            boolean websocketConnected,
-            int processedSubscriptions,
-            int openCandlesOrFlushedCandles,
-            String message) {
-    }
-
-    public record RuntimeStatus(
-            boolean autoRunEnabled,
-            boolean autoRecoverEnabled,
-            int subscriptionMode,
-            boolean websocketConnected,
-            boolean websocketConnecting,
-            LocalDateTime lastConnectedAt,
-            LocalDateTime lastDisconnectedAt,
-            LocalDateTime lastMessageReceivedAt,
-            String lastError,
-            long messagesReceived,
-            long messagesSent,
-            long subscriptionsSent,
-            long parsedTicksReceived,
-            long parserFailures,
-            boolean cachedBrokerSessionPresent,
-            LocalDateTime lastBrokerLoginAt,
-            int openLiveCandles,
-            String lifecycleState,
-            String lastStartupAt,
-            String lastShutdownAt,
-            boolean lastShutdownGraceful,
-            String startupRecoveryWarning,
-            LocalDateTime lastRecoveryAttemptAt,
-            LocalDateTime lastRecoverySuccessAt,
-            LocalDateTime lastRecoveryFailureAt,
-            String lastRecoveryMessage) {
-    }
 }

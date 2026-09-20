@@ -1,7 +1,6 @@
 package com.trading.scanner.service.runtime;
 
 import com.trading.scanner.service.data.EodReconciliationService;
-import com.trading.scanner.service.data.HistoricalBootstrapService;
 import com.trading.scanner.service.instrument.InstrumentTokenSyncService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -91,30 +90,6 @@ public class ScheduledJobAlertService {
                             safeValue(workflow.workflowDate()),
                             "message",
                             safeValue(workflow.message())));
-        }
-
-        if (result instanceof HistoricalBootstrapService.BootstrapResult bootstrap) {
-            boolean success = bootstrap.processedSymbols() > 0
-                    && bootstrap.failedSymbols() == 0;
-
-            return new Assessment(
-                    success,
-                    safeMessage(
-                            bootstrap.message(),
-                            "Historical bootstrap completed"),
-                    Map.of(
-                            "targetDate",
-                            safeValue(bootstrap.targetDate()),
-                            "processedSymbols",
-                            bootstrap.processedSymbols(),
-                            "successfulSymbols",
-                            bootstrap.successfulSymbols(),
-                            "failedSymbols",
-                            bootstrap.failedSymbols(),
-                            "skippedSymbols",
-                            bootstrap.skippedSymbols(),
-                            "result",
-                            bootstrap.toString()));
         }
 
         if (result instanceof EodReconciliationService.ReconciliationBatchResult eod) {

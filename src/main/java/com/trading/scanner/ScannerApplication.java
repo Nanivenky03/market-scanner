@@ -9,7 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 @ConfigurationPropertiesScan
 public class ScannerApplication {
-    
+
     public static void main(String[] args) {
         SpringApplication.run(ScannerApplication.class, args);
     }

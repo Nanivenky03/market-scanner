@@ -7,12 +7,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(
-    name = "stock_universe",
-    uniqueConstraints = {
-        @UniqueConstraint(columnNames = {"symbol", "exchange"})
-    }
-)
+@Table(name = "stock_universe", uniqueConstraints = {
+        @UniqueConstraint(columnNames = { "symbol", "exchange" })
+})
 @Data
 @Builder
 @NoArgsConstructor
@@ -38,4 +35,8 @@ public class StockUniverse {
     @Column(name = "is_active", nullable = false)
     @Builder.Default
     private Boolean isActive = true;
+
+    @Column(name = "is_tradable", nullable = false)
+    @Builder.Default
+    private Boolean isTradable = Boolean.FALSE;
 }

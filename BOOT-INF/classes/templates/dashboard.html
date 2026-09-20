@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="|${appName} ${appVersion}|">Market Scanner</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f6fa;
+            padding: 20px;
+        }
+        
+        .container { max-width: 1400px; margin: 0 auto; }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 { margin-bottom: 10px; }
+        .header p { opacity: 0.9; font-size: 14px; }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
+        }
+        
+        .stat-card h3 {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .actions {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        .actions h2 {
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+        
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+        
+        .btn {
+            padding: 15px 25px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        .signals {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .signals h2 {
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+        
+        .signal-list {
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        tr:hover {
+            background: #f9fafb;
+        }
+        
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+        }
+        
+        .message.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+        }
+        
+        .message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #ef4444;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 th:text="|${appName} ${appVersion}|">Market Scanner</h1>
+            <p>Production-Grade Market Data Infrastructure | Provider-Driven Truth | Zero Silent Failures</p>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Trading Date</h3>
+                <div class="value" th:text="${todayDate}">2026-02-12</div>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Universe Size</h3>
+                <div class="value" th:text="${universeCount}">50</div>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Total Prices</h3>
+                <div class="value" th:text="${priceCount}">0</div>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Total Signals</h3>
+                <div class="value" th:text="${signalCount}">0</div>
+            </div>
+        </div>
+        
+        <div class="actions">
+            <h2>System Actions</h2>
+            
+            <div class="button-grid">
+                <button class="btn btn-warning" onclick="loadHistorical()">
+                    Load Historical Data (5 Years)
+                </button>
+                
+                <button class="btn btn-primary" 
+                        th:disabled="${!canIngest}" 
+                        onclick="ingestDaily()">
+                    Ingest Daily Data
+                </button>
+                
+                <button class="btn btn-success" 
+                        th:disabled="${!canScan}" 
+                        onclick="executeScan()">
+                    Execute Scanner
+                </button>
+            </div>
+            
+            <div id="message" class="message"></div>
+        </div>
+        
+        <div class="signals">
+            <h2>Recent Signals</h2>
+            
+            <div class="signal-list">
+                <table th:if="${!recentSignals.isEmpty()}">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Symbol</th>
+                            <th>Rule</th>
+                            <th>Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr th:each="signal : ${recentSignals}">
+                            <td th:text="${signal.scanDate}">2026-02-12</td>
+                            <td><strong th:text="${signal.symbol}">RELIANCE</strong></td>
+                            <td th:text="${signal.ruleName}">Breakout Confirmed</td>
+                            <td>
+                                <span class="badge badge-success" 
+                                      th:text="${#numbers.formatDecimal(signal.confidence, 1, 2)}">
+                                    0.75
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                
+                <p th:if="${recentSignals.isEmpty()}" style="color: #666; text-align: center; padding: 40px;">
+                    No signals yet. Run ingestion and scanner to generate signals.
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showMessage(text, isSuccess) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = 'message ' + (isSuccess ? 'success' : 'error');
+            msg.style.display = 'block';
+            
+            setTimeout(() => {
+                msg.style.display = 'none';
+            }, 5000);
+        }
+        
+        function loadHistorical() {
+            if (!confirm('Load 5 years of historical data? This may take 20-30 minutes.')) {
+                return;
+            }
+            
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Loading...';
+            
+            fetch('/ingest/historical?years=5', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    btn.disabled = false;
+                    btn.textContent = 'Load Historical Data (5 Years)';
+                    
+                    if (data.success) {
+                        showMessage(data.message, true);
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showMessage(data.message, false);
+                    }
+                })
+                .catch(err => {
+                    btn.disabled = false;
+                    btn.textContent = 'Load Historical Data (5 Years)';
+                    showMessage('Error: ' + err.message, false);
+                });
+        }
+        
+        function ingestDaily() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Ingesting...';
+            
+            fetch('/ingest/daily', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    btn.disabled = false;
+                    btn.textContent = 'Ingest Daily Data';
+                    
+                    if (data.success) {
+                        showMessage(data.message, true);
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showMessage(data.message, false);
+                    }
+                })
+                .catch(err => {
+                    btn.disabled = false;
+                    btn.textContent = 'Ingest Daily Data';
+                    showMessage('Error: ' + err.message, false);
+                });
+        }
+        
+        function executeScan() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Scanning...';
+            
+            fetch('/scan/execute', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    btn.disabled = false;
+                    btn.textContent = 'Execute Scanner';
+                    
+                    if (data.success) {
+                        showMessage(data.message, true);
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showMessage(data.message, false);
+                    }
+                })
+                .catch(err => {
+                    btn.disabled = false;
+                    btn.textContent = 'Execute Scanner';
+                    showMessage('Error: ' + err.message, false);
+                });
+        }
+    </script>
+</body>
+</html>

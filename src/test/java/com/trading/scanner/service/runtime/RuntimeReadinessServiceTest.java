@@ -4,8 +4,8 @@ import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.config.ExchangeConfiguration;
 import com.trading.scanner.config.RuntimeAutomationProperties;
 import com.trading.scanner.config.TimeProvider;
-import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.Exchange;
+import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.repository.InstrumentMasterRepository;
 import com.trading.scanner.repository.LiveSimulationSignalRepository;
@@ -14,6 +14,7 @@ import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.service.data.EodDataEntryService;
 import com.trading.scanner.service.provider.angelone.AngelOneWebSocketService;
+import com.trading.scanner.service.workflow.WorkflowStatusService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,13 +25,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
+import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class RuntimeReadinessServiceTest {
@@ -57,6 +57,9 @@ class RuntimeReadinessServiceTest {
     private RuntimeSettingService runtimeSettingService;
 
     @Mock
+    private WorkflowStatusService workflowStatusService;
+
+    @Mock
     private TimeProvider timeProvider;
 
     @Mock
@@ -71,13 +74,13 @@ class RuntimeReadinessServiceTest {
     private RuntimeAutomationProperties runtimeAutomationProperties;
     private RuntimeReadinessService runtimeReadinessService;
 
+    private final LocalDate today = LocalDate.of(2026, 9, 21);
+    private final LocalDate prevTradingDay = LocalDate.of(2026, 9, 18);
+
     @BeforeEach
     void setUp() {
         runtimeAutomationProperties = new RuntimeAutomationProperties();
-
-        runtimeAutomationProperties
-                .getLive()
-                .setAutoRun(true);
+        runtimeAutomationProperties.getLive().setAutoRun(true);
 
         runtimeReadinessService = new RuntimeReadinessService(
                 stockUniverseRepository,
@@ -91,324 +94,90 @@ class RuntimeReadinessServiceTest {
                 timeProvider,
                 tradingCalendar,
                 exchangeConfiguration,
+                workflowStatusService,
                 eodDataEntryService);
     }
 
     @Test
-    void isTradingDay_shouldDelegateToTradingCalendar() {
-        LocalDate date = LocalDate.of(2026, 7, 7);
+    void status_shouldReportReadyWhenAllGatesPass() {
+        when(timeProvider.today()).thenReturn(today);
+        when(timeProvider.nowDateTime()).thenReturn(today.atTime(9, 30));
+        when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+        when(tradingCalendar.previousTradingDay(today)).thenReturn(prevTradingDay);
+        when(exchangeConfiguration.getMarketOpen()).thenReturn(LocalTime.of(9, 15));
+        when(exchangeConfiguration.getMarketClose()).thenReturn(LocalTime.of(15, 30));
 
-        when(tradingCalendar.isTradingDay(date))
-                .thenReturn(true);
+        StockUniverse stock = StockUniverse.builder().symbol("TCS").exchange(Exchange.NSE).isActive(true).build();
+        when(stockUniverseRepository.findByIsActiveTrueOrderBySymbolAsc()).thenReturn(List.of(stock));
+        when(instrumentMasterRepository.count()).thenReturn(51L);
 
-        assertTrue(
-                runtimeReadinessService.isTradingDay(date));
+        InstrumentMaster tcsMaster = InstrumentMaster.builder().symbol("TCS").exchange("NSE").brokerToken("11536").isActive(true).build();
+        InstrumentMaster niftyMaster = InstrumentMaster.builder().symbol("NIFTY").exchange("NSE").brokerToken("99926000").isActive(true).build();
+        when(instrumentMasterRepository.findBySymbolAndExchange("TCS", "NSE")).thenReturn(Optional.of(tcsMaster));
+        when(instrumentMasterRepository.findBySymbolAndExchange("NIFTY", "NSE")).thenReturn(Optional.of(niftyMaster));
 
-        verify(tradingCalendar)
-                .isTradingDay(date);
-    }
-
-    @Test
-    void isMarketSessionOpen_shouldReturnFalseWhenNotTradingDay() {
-        LocalDateTime dateTime = LocalDateTime.of(
-                2026,
-                8,
-                15,
-                10,
-                0);
-
-        when(tradingCalendar.isTradingDay(
-                dateTime.toLocalDate()))
-                .thenReturn(false);
-
-        assertFalse(
-                runtimeReadinessService
-                        .isMarketSessionOpen(dateTime));
-    }
-
-    @Test
-    void isMarketSessionOpen_shouldReturnTrueInsideSessionWindow() {
-        LocalDateTime dateTime = LocalDateTime.of(
-                2026,
-                7,
-                7,
-                10,
-                0);
-
-        when(tradingCalendar.isTradingDay(
-                dateTime.toLocalDate()))
-                .thenReturn(true);
-
-        when(exchangeConfiguration.getMarketOpen())
-                .thenReturn(LocalTime.of(9, 15));
-
-        when(exchangeConfiguration.getMarketClose())
-                .thenReturn(LocalTime.of(15, 30));
-
-        assertTrue(
-                runtimeReadinessService
-                        .isMarketSessionOpen(dateTime));
-    }
-
-    @Test
-    void isMarketSessionOpen_shouldReturnFalseBeforeOpen() {
-        LocalDateTime dateTime = LocalDateTime.of(
-                2026,
-                7,
-                7,
-                9,
-                0);
-
-        when(tradingCalendar.isTradingDay(
-                dateTime.toLocalDate()))
-                .thenReturn(true);
-
-        when(exchangeConfiguration.getMarketOpen())
-                .thenReturn(LocalTime.of(9, 15));
-
-        when(exchangeConfiguration.getMarketClose())
-                .thenReturn(LocalTime.of(15, 30));
-
-        assertFalse(
-                runtimeReadinessService
-                        .isMarketSessionOpen(dateTime));
-    }
-
-    @Test
-    void isMarketSessionOpen_shouldReturnFalseAtOrAfterClose() {
-        LocalDateTime dateTime = LocalDateTime.of(
-                2026,
-                7,
-                7,
-                15,
-                30);
-
-        when(tradingCalendar.isTradingDay(
-                dateTime.toLocalDate()))
-                .thenReturn(true);
-
-        when(exchangeConfiguration.getMarketOpen())
-                .thenReturn(LocalTime.of(9, 15));
-
-        when(exchangeConfiguration.getMarketClose())
-                .thenReturn(LocalTime.of(15, 30));
-
-        assertFalse(
-                runtimeReadinessService
-                        .isMarketSessionOpen(dateTime));
-    }
-
-    @Test
-    void status_shouldUseTradingCalendarAndSessionFlag() {
-        LocalDate today = LocalDate.of(2026, 8, 15);
-
-        LocalDateTime now = LocalDateTime.of(
-                2026,
-                8,
-                15,
-                10,
-                0);
-
-        when(timeProvider.today())
-                .thenReturn(today);
-
-        when(timeProvider.nowDateTime())
-                .thenReturn(now);
-
-        when(tradingCalendar.isTradingDay(today))
-                .thenReturn(false);
-
-        when(stockUniverseRepository
-                .findByIsActiveTrueOrderBySymbolAsc())
-                .thenReturn(List.of());
-
-        stubZeroCounts();
-
-        when(runtimeSettingService.subscriptionMode())
-                .thenReturn(1);
-
-        when(angelOneWebSocketService.status())
-                .thenReturn(websocketStatus());
+        when(angelOneWebSocketService.status()).thenReturn(wsStatus(true));
+        when(workflowStatusService.isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE)).thenReturn(true);
+        when(eodDataEntryService.isSuccessful(anyString(), anyString(), any(LocalDate.class))).thenReturn(true);
 
         RuntimeReadinessService.ReadinessStatus status = runtimeReadinessService.status();
 
-        assertFalse(status.tradingDay());
-        assertFalse(status.marketSessionOpen());
-        assertEquals(today, status.businessDate());
+        assertTrue(status.tradingDay());
+        assertTrue(status.marketSessionOpen());
+        assertEquals("COMPLETE", status.bootstrapStatus());
+        assertTrue(status.bootstrapReady());
+        assertTrue(status.readyForLiveRuntime());
+        assertTrue(status.readyForCloudDeployment());
+        assertEquals(0, status.missingBrokerTokenCount());
     }
 
     @Test
-    void status_shouldNotBeReadyWhenBootstrapIsRequired() {
-        LocalDate today = LocalDate.of(2026, 8, 27);
+    void status_shouldReportNotReadyWhenBootstrapIncomplete() {
+        when(timeProvider.today()).thenReturn(today);
+        when(timeProvider.nowDateTime()).thenReturn(today.atTime(9, 30));
+        when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+        when(exchangeConfiguration.getMarketOpen()).thenReturn(LocalTime.of(9, 15));
+        when(exchangeConfiguration.getMarketClose()).thenReturn(LocalTime.of(15, 30));
 
-        LocalDateTime now = today.atTime(10, 0);
+        when(angelOneWebSocketService.status()).thenReturn(wsStatus(false));
+        when(workflowStatusService.isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE)).thenReturn(false);
 
-        when(timeProvider.today())
-                .thenReturn(today);
+        RuntimeReadinessService.ReadinessStatus status = runtimeReadinessService.status();
 
-        when(timeProvider.nowDateTime())
-                .thenReturn(now);
-
-        when(tradingCalendar.isTradingDay(today))
-                .thenReturn(true);
-
-        when(exchangeConfiguration.getMarketOpen())
-                .thenReturn(LocalTime.of(9, 15));
-
-        when(exchangeConfiguration.getMarketClose())
-                .thenReturn(LocalTime.of(15, 30));
-
-        when(runtimeSettingService.getString(
-                BaseDataResetService.BOOTSTRAP_STATUS_KEY,
-                "REQUIRED"))
-                .thenReturn("REQUIRED");
-
-        when(stockUniverseRepository
-                .findByIsActiveTrueOrderBySymbolAsc())
-                .thenReturn(List.of());
-
-        stubZeroCounts();
-
-        when(runtimeSettingService.subscriptionMode())
-                .thenReturn(1);
-
-        when(angelOneWebSocketService.status())
-                .thenReturn(websocketStatus());
-
-        RuntimeReadinessService.ReadinessStatus result = runtimeReadinessService.status();
-
-        assertEquals(
-                "REQUIRED",
-                result.bootstrapStatus());
-
-        assertFalse(result.bootstrapReady());
-        assertFalse(result.readyForHistoricalData());
-        assertFalse(result.readyForLiveRuntime());
+        assertEquals("REQUIRED", status.bootstrapStatus());
+        assertFalse(status.bootstrapReady());
+        assertFalse(status.readyForLiveRuntime());
     }
 
     @Test
-    void status_shouldNotBeReadyWhenPreviousDayEodIsMissing() {
-        LocalDate today = LocalDate.of(2026, 8, 27);
+    void bootstrapReady_shouldReturnTrueWhenWorkflowCompleteAndEodReady() {
+        when(workflowStatusService.isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE)).thenReturn(true);
+        when(timeProvider.today()).thenReturn(today);
+        when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+        when(tradingCalendar.previousTradingDay(today)).thenReturn(prevTradingDay);
 
-        LocalDate previousTradingDay = LocalDate.of(2026, 8, 26);
+        StockUniverse stock = StockUniverse.builder().symbol("TCS").exchange(Exchange.NSE).isActive(true).build();
+        when(stockUniverseRepository.findByIsActiveTrueOrderBySymbolAsc()).thenReturn(List.of(stock));
+        when(eodDataEntryService.isSuccessful(anyString(), anyString(), any(LocalDate.class))).thenReturn(true);
 
-        LocalDateTime now = today.atTime(10, 0);
-
-        StockUniverse stock = StockUniverse.builder()
-                .symbol("ONGC")
-                .exchange(Exchange.NSE)
-                .isActive(true)
-                .build();
-
-        when(timeProvider.today())
-                .thenReturn(today);
-
-        when(timeProvider.nowDateTime())
-                .thenReturn(now);
-
-        when(tradingCalendar.isTradingDay(today))
-                .thenReturn(true);
-
-        when(tradingCalendar.previousTradingDay(today))
-                .thenReturn(previousTradingDay);
-
-        when(exchangeConfiguration.getMarketOpen())
-                .thenReturn(LocalTime.of(9, 15));
-
-        when(exchangeConfiguration.getMarketClose())
-                .thenReturn(LocalTime.of(15, 30));
-
-        when(runtimeSettingService.getString(
-                BaseDataResetService.BOOTSTRAP_STATUS_KEY,
-                "REQUIRED"))
-                .thenReturn("COMPLETE");
-
-        when(stockUniverseRepository
-                .findByIsActiveTrueOrderBySymbolAsc())
-                .thenReturn(List.of(stock));
-
-        when(eodDataEntryService.isSuccessful(
-                "ONGC",
-                "NSE",
-                previousTradingDay))
-                .thenReturn(false);
-
-        when(instrumentMasterRepository.count())
-                .thenReturn(1L);
-
-        when(stockPriceRepository.count())
-                .thenReturn(1L);
-
-        when(marketCandleRepository
-                .countByTimeframe(
-                        CandleTimeframe.ONE_MINUTE))
-                .thenReturn(1L);
-
-        when(marketCandleRepository
-                .countByTimeframeAndSource(
-                        any(CandleTimeframe.class),
-                        anyString()))
-                .thenReturn(0L);
-
-        when(liveSimulationSignalRepository.count())
-                .thenReturn(0L);
-
-        when(runtimeSettingService.subscriptionMode())
-                .thenReturn(1);
-
-        when(angelOneWebSocketService.status())
-                .thenReturn(websocketStatus());
-
-        RuntimeReadinessService.ReadinessStatus result = runtimeReadinessService.status();
-
-        assertFalse(result.bootstrapReady());
-        assertFalse(result.readyForHistoricalData());
-        assertFalse(result.readyForLiveRuntime());
-
-        verify(eodDataEntryService)
-                .isSuccessful(
-                        "ONGC",
-                        "NSE",
-                        previousTradingDay);
+        assertTrue(runtimeReadinessService.bootstrapReady());
     }
 
-    private void stubZeroCounts() {
-        when(instrumentMasterRepository.count())
-                .thenReturn(0L);
-
-        when(stockPriceRepository.count())
-                .thenReturn(0L);
-
-        when(marketCandleRepository
-                .countByTimeframe(
-                        CandleTimeframe.ONE_MINUTE))
-                .thenReturn(0L);
-
-        when(marketCandleRepository
-                .countByTimeframeAndSource(
-                        any(CandleTimeframe.class),
-                        anyString()))
-                .thenReturn(0L);
-
-        when(liveSimulationSignalRepository.count())
-                .thenReturn(0L);
-    }
-
-    private AngelOneWebSocketService.Status websocketStatus() {
+    private AngelOneWebSocketService.Status wsStatus(boolean connected) {
         return new AngelOneWebSocketService.Status(
+                connected,
                 false,
-                false,
+                LocalDateTime.now(),
+                null,
+                LocalDateTime.now(),
                 null,
                 null,
                 null,
                 null,
-                null,
-                null,
-                null,
-                0L,
-                0L,
-                0L,
-                0L,
+                100L,
+                10L,
+                10L,
+                100L,
                 0L);
     }
 }

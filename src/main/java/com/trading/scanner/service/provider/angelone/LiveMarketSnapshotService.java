@@ -27,7 +27,6 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -45,9 +44,13 @@ public class LiveMarketSnapshotService {
         private static final LocalTime MARKET_CLOSE = LocalTime.of(15, 29);
 
         private final MarketMinuteSnapshotRepository snapshotRepository;
+
         private final LiveFeedStateRepository feedStateRepository;
+
         private final LiveMinuteResolutionRepository resolutionRepository;
+
         private final StockUniverseRepository stockUniverseRepository;
+
         private final TradingCalendar tradingCalendar;
         private final DailyDataStatusService dataStatusService;
         private final TimeProvider timeProvider;
@@ -70,7 +73,9 @@ public class LiveMarketSnapshotService {
                 }
 
                 String symbol = normalize(tick.symbol());
+
                 String exchange = normalize(tick.exchange());
+
                 LocalDateTime now = timeProvider.nowDateTime();
 
                 SnapshotView snapshot = new SnapshotView(
@@ -102,7 +107,9 @@ public class LiveMarketSnapshotService {
                                 tick.fiftyTwoWeekLowPrice(),
                                 now);
 
-                updateFeedState(snapshot, now);
+                updateFeedState(
+                                snapshot,
+                                now);
 
                 String key = snapshotKey(
                                 snapshot.symbol(),
@@ -113,13 +120,15 @@ public class LiveMarketSnapshotService {
 
                 if (previous != null
                                 && !minuteBucket(previous.tickTime())
-                                                .equals(minuteBucket(snapshot.tickTime()))) {
+                                                .equals(
+                                                                minuteBucket(snapshot.tickTime()))) {
 
                         snapshotRepository
                                         .findBySymbolAndExchangeAndMinuteTime(
                                                         symbol,
                                                         exchange,
-                                                        minuteBucket(previous.tickTime()))
+                                                        minuteBucket(
+                                                                        previous.tickTime()))
                                         .ifPresent(row -> {
                                                 row.setIsFinalized(true);
                                                 row.setUpdatedAt(now);
@@ -128,8 +137,14 @@ public class LiveMarketSnapshotService {
                 }
 
                 latestSnapshots.put(key, snapshot);
-                upsertMinuteSnapshot(snapshot, now);
-                markTickReceived(snapshot, now);
+
+                upsertMinuteSnapshot(
+                                snapshot,
+                                now);
+
+                markTickReceived(
+                                snapshot,
+                                now);
         }
 
         @Transactional
@@ -158,27 +173,31 @@ public class LiveMarketSnapshotService {
 
                 int detected = 0;
 
-                for (StockUniverse stock : stockUniverseRepository
-                                .findByIsActiveTrueOrderBySymbolAsc()) {
+                List<StockUniverse> activeUniverse = stockUniverseRepository
+                                .findByIsActiveTrueOrderBySymbolAsc();
 
-                        String symbol = stock.getSymbol();
-                        String exchange = stock.getExchange().name();
+                for (StockUniverse stock : activeUniverse) {
+                        if (stock == null
+                                        || stock.getSymbol() == null
+                                        || stock.getExchange() == null) {
+                                continue;
+                        }
 
-                        LiveFeedState feedState = feedStateRepository
-                                        .findBySymbolAndExchangeAndTradingDate(
-                                                        symbol,
-                                                        exchange,
-                                                        date)
-                                        .orElseGet(() -> LiveFeedState.builder()
-                                                        .symbol(symbol)
-                                                        .exchange(exchange)
-                                                        .tradingDate(date)
-                                                        .blocked(false)
-                                                        .build());
+                        String symbol = normalize(stock.getSymbol());
+
+                        String exchange = normalize(
+                                        stock.getExchange().name());
+
+                        LiveFeedState feedState = getOrCreateFeedState(
+                                        symbol,
+                                        exchange,
+                                        date,
+                                        now);
 
                         LocalDateTime from = feedState.getLastCheckedMinute() == null
                                         ? date.atTime(MARKET_OPEN)
-                                        : feedState.getLastCheckedMinute()
+                                        : feedState
+                                                        .getLastCheckedMinute()
                                                         .plusMinutes(1);
 
                         if (from.isBefore(
@@ -186,7 +205,8 @@ public class LiveMarketSnapshotService {
                                 from = date.atTime(MARKET_OPEN);
                         }
 
-                        if (from.isAfter(latestClosedMinute)) {
+                        if (from.isAfter(
+                                        latestClosedMinute)) {
                                 continue;
                         }
 
@@ -218,8 +238,8 @@ public class LiveMarketSnapshotService {
 
                         List<LocalDateTime> newlyUnresolved = new ArrayList<>();
 
-                        for (LocalDateTime minute = from; !minute.isAfter(latestClosedMinute); minute = minute
-                                        .plusMinutes(1)) {
+                        for (LocalDateTime minute = from; !minute.isAfter(
+                                        latestClosedMinute); minute = minute.plusMinutes(1)) {
 
                                 if (tickMinutes.contains(minute)) {
                                         continue;
@@ -247,13 +267,15 @@ public class LiveMarketSnapshotService {
 
                         if (!unresolved.isEmpty()) {
                                 feedState.setBlocked(true);
-                                feedState.setGapFrom(min(
-                                                feedState.getGapFrom(),
-                                                unresolved.get(0)));
-                                feedState.setGapTo(max(
-                                                feedState.getGapTo(),
-                                                unresolved.get(
-                                                                unresolved.size() - 1)));
+                                feedState.setGapFrom(
+                                                min(
+                                                                feedState.getGapFrom(),
+                                                                unresolved.get(0)));
+                                feedState.setGapTo(
+                                                max(
+                                                                feedState.getGapTo(),
+                                                                unresolved.get(
+                                                                                unresolved.size() - 1)));
 
                                 dataStatusService.markPartial(
                                                 symbol,
@@ -270,6 +292,7 @@ public class LiveMarketSnapshotService {
                                 detected += newlyUnresolved.isEmpty()
                                                 ? 0
                                                 : 1;
+
                         } else if (Boolean.TRUE.equals(
                                         feedState.getBlocked())) {
 
@@ -280,7 +303,9 @@ public class LiveMarketSnapshotService {
 
                         feedState.setLastCheckedMinute(
                                         latestClosedMinute);
+
                         feedState.setUpdatedAt(now);
+
                         feedStateRepository.save(feedState);
                 }
 
@@ -295,8 +320,11 @@ public class LiveMarketSnapshotService {
                         String reason) {
 
                 String normalizedSymbol = normalize(symbol);
+
                 String normalizedExchange = normalize(exchange);
+
                 LocalDateTime minute = minuteBucket(minuteTime);
+
                 LocalDateTime now = timeProvider.nowDateTime();
 
                 LiveMinuteResolution resolution = resolutionRepository
@@ -317,6 +345,7 @@ public class LiveMarketSnapshotService {
 
                         resolution.setStatus(
                                         MinuteResolutionStatus.NO_TRADE_CONFIRMED);
+
                         resolution.setReason(reason);
                         resolution.setResolvedAt(now);
                         resolution.setUpdatedAt(now);
@@ -332,6 +361,7 @@ public class LiveMarketSnapshotService {
                         LocalDate tradingDate) {
 
                 String normalizedSymbol = normalize(symbol);
+
                 String normalizedExchange = normalize(exchange);
 
                 Optional<LiveFeedState> state = feedStateRepository
@@ -341,9 +371,12 @@ public class LiveMarketSnapshotService {
                                                 tradingDate);
 
                 if (state.isPresent()
-                                && state.get().getCumulativeVolumeToday() != null) {
+                                && state.get()
+                                                .getCumulativeVolumeToday() != null) {
+
                         return Optional.of(
-                                        state.get().getCumulativeVolumeToday());
+                                        state.get()
+                                                        .getCumulativeVolumeToday());
                 }
 
                 return cumulativeVolumeFromSnapshots(
@@ -368,11 +401,14 @@ public class LiveMarketSnapshotService {
                 }
 
                 String normalizedSymbol = normalize(symbol);
+
                 String normalizedExchange = normalize(exchange);
 
-                LocalDateTime calculatedEnd = asOf.toLocalDate().equals(tradingDate)
-                                ? asOf
-                                : tradingDate.atTime(MARKET_CLOSE);
+                LocalDateTime calculatedEnd = asOf.toLocalDate()
+                                .equals(tradingDate)
+                                                ? asOf
+                                                : tradingDate.atTime(
+                                                                MARKET_CLOSE);
 
                 if (calculatedEnd.isBefore(
                                 tradingDate.atTime(MARKET_OPEN))) {
@@ -381,7 +417,8 @@ public class LiveMarketSnapshotService {
 
                 if (calculatedEnd.toLocalTime()
                                 .isAfter(MARKET_CLOSE)) {
-                        calculatedEnd = tradingDate.atTime(MARKET_CLOSE);
+                        calculatedEnd = tradingDate.atTime(
+                                        MARKET_CLOSE);
                 }
 
                 final LocalDateTime effectiveEnd = calculatedEnd;
@@ -411,8 +448,10 @@ public class LiveMarketSnapshotService {
         public List<SnapshotView> latest(int limit) {
                 return latestSnapshots.values()
                                 .stream()
-                                .sorted(Comparator.comparing(
-                                                SnapshotView::updatedAt).reversed())
+                                .sorted(
+                                                Comparator.comparing(
+                                                                SnapshotView::updatedAt)
+                                                                .reversed())
                                 .limit(limit)
                                 .toList();
         }
@@ -428,11 +467,38 @@ public class LiveMarketSnapshotService {
 
         public ClearResult clear() {
                 int removed = latestSnapshots.size();
+
                 latestSnapshots.clear();
 
                 return new ClearResult(
                                 removed,
                                 "Cleared latest live market snapshots");
+        }
+
+        private LiveFeedState getOrCreateFeedState(
+                        String symbol,
+                        String exchange,
+                        LocalDate date,
+                        LocalDateTime now) {
+
+                feedStateRepository.ensureExists(
+                                symbol,
+                                exchange,
+                                date.toString(),
+                                now.toString());
+
+                return feedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                symbol,
+                                                exchange,
+                                                date)
+                                .orElseThrow(() -> new IllegalStateException(
+                                                "Live feed state was not available after atomic creation: "
+                                                                + symbol
+                                                                + "|"
+                                                                + exchange
+                                                                + "|"
+                                                                + date));
         }
 
         private Optional<Long> cumulativeVolumeFromSnapshots(
@@ -445,13 +511,17 @@ public class LiveMarketSnapshotService {
                                 .findBySymbolAndExchangeAndMinuteTimeBetweenOrderByMinuteTimeAsc(
                                                 symbol,
                                                 exchange,
-                                                tradingDate.atTime(MARKET_OPEN),
+                                                tradingDate.atTime(
+                                                                MARKET_OPEN),
                                                 end);
 
                 for (int i = rows.size() - 1; i >= 0; i--) {
-                        Long volume = rows.get(i).getVolumeTradedForDay();
 
-                        if (volume != null && volume >= 0L) {
+                        Long volume = rows.get(i)
+                                        .getVolumeTradedForDay();
+
+                        if (volume != null
+                                        && volume >= 0L) {
                                 return Optional.of(volume);
                         }
                 }
@@ -463,24 +533,17 @@ public class LiveMarketSnapshotService {
                         SnapshotView snapshot,
                         LocalDateTime now) {
 
-                LocalDate date = snapshot.tickTime().toLocalDate();
+                LocalDate date = snapshot.tickTime()
+                                .toLocalDate();
 
-                LocalDateTime minute = minuteBucket(snapshot.tickTime());
+                LocalDateTime minute = minuteBucket(
+                                snapshot.tickTime());
 
-                LiveFeedState state = feedStateRepository
-                                .findBySymbolAndExchangeAndTradingDate(
-                                                snapshot.symbol(),
-                                                snapshot.exchange(),
-                                                date)
-                                .orElseGet(() -> LiveFeedState.builder()
-                                                .symbol(snapshot.symbol())
-                                                .exchange(snapshot.exchange())
-                                                .tradingDate(date)
-                                                .healthStatus(
-                                                                FeedHealthStatus.HEALTHY)
-                                                .subscriptionActive(false)
-                                                .consecutiveRecoveryTicks(0)
-                                                .build());
+                LiveFeedState state = getOrCreateFeedState(
+                                snapshot.symbol(),
+                                snapshot.exchange(),
+                                date,
+                                now);
 
                 FeedHealthStatus currentStatus = state.getHealthStatus() == null
                                 ? FeedHealthStatus.HEALTHY
@@ -488,7 +551,8 @@ public class LiveMarketSnapshotService {
 
                 boolean newerTick = state.getLastTickTime() == null
                                 || snapshot.tickTime()
-                                                .isAfter(state.getLastTickTime());
+                                                .isAfter(
+                                                                state.getLastTickTime());
 
                 if (Boolean.TRUE.equals(
                                 state.getSubscriptionActive())) {
@@ -498,6 +562,7 @@ public class LiveMarketSnapshotService {
 
                                 state.setHealthStatus(
                                                 FeedHealthStatus.RECOVERING);
+
                                 state.setConsecutiveRecoveryTicks(1);
                                 state.setRecoveredAt(null);
                                 state.setLastHealthTransitionAt(now);
@@ -509,7 +574,9 @@ public class LiveMarketSnapshotService {
                                                 : state.getConsecutiveRecoveryTicks();
 
                                 count++;
-                                state.setConsecutiveRecoveryTicks(count);
+
+                                state.setConsecutiveRecoveryTicks(
+                                                count);
 
                                 if (count >= Math.max(
                                                 1,
@@ -517,15 +584,18 @@ public class LiveMarketSnapshotService {
 
                                         state.setHealthStatus(
                                                         FeedHealthStatus.HEALTHY);
+
                                         state.setRecoveredAt(now);
                                         state.setStaleSince(null);
                                         state.setStaleAlertedAt(null);
                                         state.setLastHealthTransitionAt(now);
                                         state.setConsecutiveRecoveryTicks(0);
                                 }
+
                         } else {
                                 state.setHealthStatus(
                                                 FeedHealthStatus.HEALTHY);
+
                                 state.setConsecutiveRecoveryTicks(0);
                         }
                 }
@@ -533,6 +603,7 @@ public class LiveMarketSnapshotService {
                 if (newerTick) {
                         state.setLastTickTime(
                                         snapshot.tickTime());
+
                         state.setLastTickMinute(minute);
                 }
 
@@ -543,10 +614,12 @@ public class LiveMarketSnapshotService {
                                 && (newerTick
                                                 || state.getCumulativeVolumeToday() == null)) {
 
-                        state.setCumulativeVolumeToday(volume);
+                        state.setCumulativeVolumeToday(
+                                        volume);
                 }
 
                 state.setUpdatedAt(now);
+
                 feedStateRepository.save(state);
         }
 
@@ -554,7 +627,8 @@ public class LiveMarketSnapshotService {
                         SnapshotView snapshot,
                         LocalDateTime now) {
 
-                LocalDateTime minute = minuteBucket(snapshot.tickTime());
+                LocalDateTime minute = minuteBucket(
+                                snapshot.tickTime());
 
                 LiveMinuteResolution resolution = resolutionRepository
                                 .findBySymbolAndExchangeAndMinuteTime(
@@ -562,8 +636,10 @@ public class LiveMarketSnapshotService {
                                                 snapshot.exchange(),
                                                 minute)
                                 .orElseGet(() -> LiveMinuteResolution.builder()
-                                                .symbol(snapshot.symbol())
-                                                .exchange(snapshot.exchange())
+                                                .symbol(
+                                                                snapshot.symbol())
+                                                .exchange(
+                                                                snapshot.exchange())
                                                 .minuteTime(minute)
                                                 .tradingDate(
                                                                 minute.toLocalDate())
@@ -574,11 +650,14 @@ public class LiveMarketSnapshotService {
 
                         resolution.setStatus(
                                         MinuteResolutionStatus.TICK_RECEIVED);
+
                         resolution.setReason(
                                         "WebSocket tick received");
+
                         resolution.setUpdatedAt(now);
 
-                        resolutionRepository.save(resolution);
+                        resolutionRepository.save(
+                                        resolution);
                 }
         }
 
@@ -586,7 +665,8 @@ public class LiveMarketSnapshotService {
                         SnapshotView snapshot,
                         LocalDateTime now) {
 
-                LocalDateTime minuteTime = minuteBucket(snapshot.tickTime());
+                LocalDateTime minuteTime = minuteBucket(
+                                snapshot.tickTime());
 
                 MarketMinuteSnapshot row = snapshotRepository
                                 .findBySymbolAndExchangeAndMinuteTime(
@@ -594,49 +674,74 @@ public class LiveMarketSnapshotService {
                                                 snapshot.exchange(),
                                                 minuteTime)
                                 .orElseGet(() -> MarketMinuteSnapshot.builder()
-                                                .symbol(snapshot.symbol())
-                                                .exchange(snapshot.exchange())
+                                                .symbol(
+                                                                snapshot.symbol())
+                                                .exchange(
+                                                                snapshot.exchange())
                                                 .minuteTime(minuteTime)
                                                 .tradingDate(
-                                                                minuteTime.toLocalDate())
+                                                                minuteTime
+                                                                                .toLocalDate())
                                                 .createdAt(now)
                                                 .build());
 
-                row.setLatestTickTime(snapshot.tickTime());
-                row.setBrokerToken(snapshot.brokerToken());
+                row.setLatestTickTime(
+                                snapshot.tickTime());
+
+                row.setBrokerToken(
+                                snapshot.brokerToken());
+
                 row.setSubscriptionMode(
                                 snapshot.subscriptionMode());
+
                 row.setExchangeType(
                                 snapshot.exchangeType());
-                row.setLastPrice(snapshot.lastPrice());
+
+                row.setLastPrice(
+                                snapshot.lastPrice());
+
                 row.setLastTradedQuantity(
                                 snapshot.lastTradedQuantity());
+
                 row.setAverageTradedPrice(
                                 snapshot.averageTradedPrice());
+
                 row.setVolumeTradedForDay(
                                 snapshot.volumeTradedForDay());
+
                 row.setTotalBuyQuantity(
                                 snapshot.totalBuyQuantity());
+
                 row.setTotalSellQuantity(
                                 snapshot.totalSellQuantity());
+
                 row.setOpenInterest(
                                 snapshot.openInterest());
+
                 row.setOpenInterestChangePercent(
                                 snapshot.openInterestChangePercentRaw());
+
                 row.setUpperCircuitLimit(
                                 snapshot.upperCircuitLimit());
+
                 row.setLowerCircuitLimit(
                                 snapshot.lowerCircuitLimit());
+
                 row.setFiftyTwoWeekHighPrice(
                                 snapshot.fiftyTwoWeekHighPrice());
+
                 row.setFiftyTwoWeekLowPrice(
                                 snapshot.fiftyTwoWeekLowPrice());
+
                 row.setLastTradedTimestampEpoch(
                                 snapshot.lastTradedTimestamp());
+
                 row.setExchangeTimestampEpoch(
                                 snapshot.exchangeTimestamp());
+
                 row.setSequenceNumber(
                                 snapshot.sequenceNumber());
+
                 row.setIsFinalized(false);
                 row.setUpdatedAt(now);
 
@@ -669,10 +774,13 @@ public class LiveMarketSnapshotService {
                 if (changed) {
                         resolution.setStatus(
                                         MinuteResolutionStatus.UNRESOLVED);
+
                         resolution.setReason(reason);
                         resolution.setResolvedAt(null);
                         resolution.setUpdatedAt(now);
-                        resolutionRepository.save(resolution);
+
+                        resolutionRepository.save(
+                                        resolution);
                 }
 
                 return changed;
@@ -689,9 +797,11 @@ public class LiveMarketSnapshotService {
                 }
 
                 LocalDateTime start = minutes.get(0);
+
                 LocalDateTime end = start;
 
                 for (int i = 1; i < minutes.size(); i++) {
+
                         LocalDateTime current = minutes.get(i);
 
                         if (!current.equals(

@@ -11,210 +11,294 @@ import com.trading.scanner.repository.LiveFeedStateRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
 public class UniverseWebSocketSubscriptionService {
 
-    private final StockUniverseRepository stockUniverseRepository;
-    private final InstrumentMasterRepository instrumentMasterRepository;
-    private final LiveFeedStateRepository liveFeedStateRepository;
-    private final AngelOneProperties angelOneProperties;
-    private final AngelOneWebSocketService angelOneWebSocketService;
-    private final TimeProvider timeProvider;
+        private static final String NIFTY_SYMBOL = "NIFTY";
+        private static final String NIFTY_EXCHANGE = "NSE";
 
-    public SubscriptionResult subscribeActiveUniverse(int mode) {
-        List<SubscriptionTarget> targets = buildActiveUniverseTargets();
+        private final StockUniverseRepository stockUniverseRepository;
+        private final InstrumentMasterRepository instrumentMasterRepository;
+        private final LiveFeedStateRepository liveFeedStateRepository;
+        private final AngelOneProperties angelOneProperties;
+        private final AngelOneWebSocketService angelOneWebSocketService;
+        private final TimeProvider timeProvider;
 
-        int maxPerConnection = angelOneProperties.websocketMaxSubscriptionsPerConnection();
+        @Transactional
+        public SubscriptionResult subscribeActiveUniverse(
+                        int mode) {
 
-        if (maxPerConnection <= 0) {
-            throw new IllegalStateException(
-                    "websocketMaxSubscriptionsPerConnection must be greater than zero");
+                List<SubscriptionTarget> targets = buildSubscriptionTargets();
+
+                int maxPerConnection = angelOneProperties
+                                .websocketMaxSubscriptionsPerConnection();
+
+                if (maxPerConnection <= 0) {
+                        throw new IllegalStateException(
+                                        "websocketMaxSubscriptionsPerConnection must be greater than zero");
+                }
+
+                int chunks = 0;
+                int subscribed = 0;
+
+                for (int i = 0; i < targets.size(); i += maxPerConnection) {
+
+                        List<SubscriptionTarget> chunk = targets.subList(
+                                        i,
+                                        Math.min(
+                                                        i + maxPerConnection,
+                                                        targets.size()));
+
+                        chunks++;
+
+                        angelOneWebSocketService.subscribe(
+                                        "active-universe-" + chunks,
+                                        mode,
+                                        chunk.stream()
+                                                        .map(SubscriptionTarget::tokenRef)
+                                                        .toList());
+
+                        for (SubscriptionTarget target : chunk) {
+                                markSubscriptionActive(
+                                                target.symbol(),
+                                                target.exchange());
+                        }
+
+                        subscribed += chunk.size();
+                }
+
+                return new SubscriptionResult(
+                                targets.size(),
+                                subscribed,
+                                chunks,
+                                "Subscribed active stock universe and required market references");
         }
 
-        int chunks = 0;
-        int subscribed = 0;
+        @Transactional
+        public SubscriptionResult unsubscribeActiveUniverse(
+                        int mode) {
 
-        for (int i = 0; i < targets.size(); i += maxPerConnection) {
-            List<SubscriptionTarget> chunk = targets.subList(
-                    i,
-                    Math.min(
-                            i + maxPerConnection,
-                            targets.size()));
+                List<SubscriptionTarget> targets = buildSubscriptionTargets();
 
-            chunks++;
+                int maxPerConnection = angelOneProperties
+                                .websocketMaxSubscriptionsPerConnection();
 
-            angelOneWebSocketService.subscribe(
-                    "active-universe-" + chunks,
-                    mode,
-                    chunk.stream()
-                            .map(SubscriptionTarget::tokenRef)
-                            .toList());
+                if (maxPerConnection <= 0) {
+                        throw new IllegalStateException(
+                                        "websocketMaxSubscriptionsPerConnection must be greater than zero");
+                }
 
-            for (SubscriptionTarget target : chunk) {
-                markSubscriptionActive(
-                        target.symbol(),
-                        target.exchange());
-            }
+                int chunks = 0;
+                int unsubscribed = 0;
 
-            subscribed += chunk.size();
+                for (int i = 0; i < targets.size(); i += maxPerConnection) {
+
+                        List<SubscriptionTarget> chunk = targets.subList(
+                                        i,
+                                        Math.min(
+                                                        i + maxPerConnection,
+                                                        targets.size()));
+
+                        chunks++;
+
+                        angelOneWebSocketService.unsubscribe(
+                                        "active-universe-" + chunks,
+                                        mode,
+                                        chunk.stream()
+                                                        .map(SubscriptionTarget::tokenRef)
+                                                        .toList());
+
+                        for (SubscriptionTarget target : chunk) {
+                                markSubscriptionInactive(
+                                                target.symbol(),
+                                                target.exchange());
+                        }
+
+                        unsubscribed += chunk.size();
+                }
+
+                return new SubscriptionResult(
+                                targets.size(),
+                                unsubscribed,
+                                chunks,
+                                "Unsubscribed active stock universe and required market references");
         }
 
-        return new SubscriptionResult(
-                targets.size(),
-                subscribed,
-                chunks,
-                "Subscribed active universe");
-    }
+        private List<SubscriptionTarget> buildSubscriptionTargets() {
+                Map<String, SubscriptionTarget> targets = new LinkedHashMap<>();
 
-    public SubscriptionResult unsubscribeActiveUniverse(int mode) {
-        List<SubscriptionTarget> targets = buildActiveUniverseTargets();
+                List<StockUniverse> activeUniverse = stockUniverseRepository
+                                .findByIsActiveTrueOrderBySymbolAsc();
 
-        int maxPerConnection = angelOneProperties.websocketMaxSubscriptionsPerConnection();
+                if (activeUniverse != null) {
+                        for (StockUniverse stock : activeUniverse) {
+                                if (stock == null
+                                                || stock.getSymbol() == null
+                                                || stock.getExchange() == null) {
+                                        continue;
+                                }
 
-        if (maxPerConnection <= 0) {
-            throw new IllegalStateException(
-                    "websocketMaxSubscriptionsPerConnection must be greater than zero");
+                                String symbol = normalize(stock.getSymbol());
+
+                                String exchange = normalize(stock.getExchange().name());
+
+                                instrumentMasterRepository
+                                                .findBySymbolAndExchange(
+                                                                symbol,
+                                                                exchange)
+                                                .filter(this::hasValidToken)
+                                                .ifPresent(instrument -> {
+                                                        String token = instrument.getBrokerToken();
+
+                                                        targets.putIfAbsent(
+                                                                        token,
+                                                                        new SubscriptionTarget(
+                                                                                        symbol,
+                                                                                        exchange,
+                                                                                        new AngelOneWebSocketService.TokenRef(
+                                                                                                        symbol,
+                                                                                                        token)));
+                                                });
+                        }
+                }
+
+                InstrumentMaster nifty = instrumentMasterRepository
+                                .findBySymbolAndExchange(
+                                                NIFTY_SYMBOL,
+                                                NIFTY_EXCHANGE)
+                                .filter(this::hasValidToken)
+                                .orElseThrow(() -> new IllegalStateException(
+                                                "Required NIFTY/NSE instrument is missing or has no broker token"));
+
+                String niftyToken = nifty.getBrokerToken();
+
+                targets.putIfAbsent(
+                                niftyToken,
+                                new SubscriptionTarget(
+                                                NIFTY_SYMBOL,
+                                                NIFTY_EXCHANGE,
+                                                new AngelOneWebSocketService.TokenRef(
+                                                                NIFTY_SYMBOL,
+                                                                niftyToken)));
+
+                return new ArrayList<>(
+                                targets.values());
         }
 
-        int chunks = 0;
-        int unsubscribed = 0;
+        private boolean hasValidToken(
+                        InstrumentMaster instrument) {
 
-        for (int i = 0; i < targets.size(); i += maxPerConnection) {
-            List<SubscriptionTarget> chunk = targets.subList(
-                    i,
-                    Math.min(
-                            i + maxPerConnection,
-                            targets.size()));
-
-            chunks++;
-
-            angelOneWebSocketService.unsubscribe(
-                    "active-universe-" + chunks,
-                    mode,
-                    chunk.stream()
-                            .map(SubscriptionTarget::tokenRef)
-                            .toList());
-
-            for (SubscriptionTarget target : chunk) {
-                markSubscriptionInactive(
-                        target.symbol(),
-                        target.exchange());
-            }
-
-            unsubscribed += chunk.size();
+                return instrument != null
+                                && Boolean.TRUE.equals(
+                                                instrument.getIsActive())
+                                && instrument.getBrokerToken() != null
+                                && !instrument.getBrokerToken()
+                                                .isBlank();
         }
 
-        return new SubscriptionResult(
-                targets.size(),
-                unsubscribed,
-                chunks,
-                "Unsubscribed active universe");
-    }
+        private void markSubscriptionActive(
+                        String symbol,
+                        String exchange) {
 
-    private List<SubscriptionTarget> buildActiveUniverseTargets() {
-        List<StockUniverse> activeUniverse = stockUniverseRepository
-                .findByIsActiveTrueOrderBySymbolAsc();
+                LocalDateTime now = timeProvider.nowDateTime();
 
-        List<SubscriptionTarget> targets = new ArrayList<>();
+                LocalDate date = timeProvider.today();
 
-        for (StockUniverse stock : activeUniverse) {
-            String symbol = stock.getSymbol()
-                    .trim()
-                    .toUpperCase(Locale.ROOT);
+                liveFeedStateRepository.ensureExists(
+                                symbol,
+                                exchange,
+                                date.toString(),
+                                now.toString());
 
-            String exchange = stock.getExchange().name();
+                LiveFeedState state = liveFeedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                symbol,
+                                                exchange,
+                                                date)
+                                .orElseThrow(() -> new IllegalStateException(
+                                                "Live feed state was not available after atomic creation: "
+                                                                + symbol
+                                                                + "|"
+                                                                + exchange
+                                                                + "|"
+                                                                + date));
 
-            instrumentMasterRepository
-                    .findBySymbolAndExchange(symbol, exchange)
-                    .filter(instrument -> instrument.getBrokerToken() != null
-                            && !instrument.getBrokerToken().isBlank())
-                    .ifPresent(instrument -> targets.add(new SubscriptionTarget(
-                            symbol,
-                            exchange,
-                            new AngelOneWebSocketService.TokenRef(
-                                    instrument.getSymbol(),
-                                    instrument.getBrokerToken()))));
+                state.setSubscriptionActive(true);
+
+                if (state.getHealthStatus() == null) {
+                        state.setHealthStatus(
+                                        FeedHealthStatus.HEALTHY);
+                }
+
+                if (state.getConsecutiveRecoveryTicks() == null) {
+                        state.setConsecutiveRecoveryTicks(0);
+                }
+
+                if (state.getLastHealthTransitionAt() == null) {
+                        state.setLastHealthTransitionAt(now);
+                }
+
+                state.setUpdatedAt(now);
+
+                liveFeedStateRepository.save(state);
         }
 
-        return targets;
-    }
+        private void markSubscriptionInactive(
+                        String symbol,
+                        String exchange) {
 
-    private void markSubscriptionActive(
-            String symbol,
-            String exchange) {
+                LocalDateTime now = timeProvider.nowDateTime();
 
-        LocalDateTime now = timeProvider.nowDateTime();
-        LocalDate date = timeProvider.today();
+                liveFeedStateRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                symbol,
+                                                exchange,
+                                                timeProvider.today())
+                                .ifPresent(state -> {
+                                        state.setSubscriptionActive(false);
+                                        state.setHealthStatus(
+                                                        FeedHealthStatus.HEALTHY);
+                                        state.setStaleSince(null);
+                                        state.setStaleAlertedAt(null);
+                                        state.setRecoveredAt(null);
+                                        state.setConsecutiveRecoveryTicks(0);
+                                        state.setLastHealthTransitionAt(now);
+                                        state.setUpdatedAt(now);
 
-        LiveFeedState state = liveFeedStateRepository
-                .findBySymbolAndExchangeAndTradingDate(
-                        symbol,
-                        exchange,
-                        date)
-                .orElseGet(() -> LiveFeedState.builder()
-                        .symbol(symbol)
-                        .exchange(exchange)
-                        .tradingDate(date)
-                        .healthStatus(FeedHealthStatus.HEALTHY)
-                        .consecutiveRecoveryTicks(0)
-                        .build());
-
-        state.setSubscriptionActive(true);
-
-        if (state.getHealthStatus() == null) {
-            state.setHealthStatus(FeedHealthStatus.HEALTHY);
+                                        liveFeedStateRepository.save(state);
+                                });
         }
 
-        if (state.getLastHealthTransitionAt() == null) {
-            state.setLastHealthTransitionAt(now);
+        private String normalize(
+                        String value) {
+
+                return value == null
+                                ? null
+                                : value.trim()
+                                                .toUpperCase(Locale.ROOT);
         }
 
-        state.setUpdatedAt(now);
-        liveFeedStateRepository.save(state);
-    }
+        private record SubscriptionTarget(
+                        String symbol,
+                        String exchange,
+                        AngelOneWebSocketService.TokenRef tokenRef) {
+        }
 
-    private void markSubscriptionInactive(
-            String symbol,
-            String exchange) {
-
-        LocalDateTime now = timeProvider.nowDateTime();
-
-        liveFeedStateRepository
-                .findBySymbolAndExchangeAndTradingDate(
-                        symbol,
-                        exchange,
-                        timeProvider.today())
-                .ifPresent(state -> {
-                    state.setSubscriptionActive(false);
-                    state.setHealthStatus(FeedHealthStatus.HEALTHY);
-                    state.setStaleSince(null);
-                    state.setStaleAlertedAt(null);
-                    state.setRecoveredAt(null);
-                    state.setConsecutiveRecoveryTicks(0);
-                    state.setLastHealthTransitionAt(now);
-                    state.setUpdatedAt(now);
-                    liveFeedStateRepository.save(state);
-                });
-    }
-
-    private record SubscriptionTarget(
-            String symbol,
-            String exchange,
-            AngelOneWebSocketService.TokenRef tokenRef) {
-    }
-
-    public record SubscriptionResult(
-            int eligibleSymbols,
-            int processedSubscriptions,
-            int chunks,
-            String message) {
-    }
+        public record SubscriptionResult(
+                        int eligibleSymbols,
+                        int processedSubscriptions,
+                        int chunks,
+                        String message) {
+        }
 }
