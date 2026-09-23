@@ -8,12 +8,15 @@ import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.ContextStatus;
 import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.DayType;
+import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.model.StockPrice;
+import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.model.VolumeTimeWindowBaseline;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
+import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -63,13 +66,10 @@ public class DailyStockContextService {
         private static final double PREVIOUS_DAY_MAX_RANGE_PCT = 4.0;
 
         private final DailyStockContextRepository dailyStockContextRepository;
-
         private final MarketCandleRepository marketCandleRepository;
-
         private final StockPriceRepository stockPriceRepository;
-
         private final VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
-
+        private final StockUniverseRepository stockUniverseRepository;
         private final MarketStateService marketStateService;
         private final TradingCalendar tradingCalendar;
         private final TimeProvider timeProvider;
@@ -196,6 +196,21 @@ public class DailyStockContextService {
                 LocalDate previousTradingDate = tradingCalendar.previousTradingDay(
                                 tradingDate);
 
+                LocalDate activeFrom = null;
+                if (stockUniverseRepository != null && context.getSymbol() != null && context.getExchange() != null) {
+                        try {
+                                activeFrom = stockUniverseRepository
+                                                .findBySymbolAndExchange(
+                                                                context.getSymbol(),
+                                                                Exchange.valueOf(context.getExchange()))
+                                                .map(StockUniverse::getActiveFrom)
+                                                .orElse(null);
+                        } catch (Exception ignored) {
+                        }
+                }
+
+                final LocalDate filterActiveFrom = activeFrom;
+
                 List<StockPrice> history = Optional.ofNullable(
                                 stockPriceRepository
                                                 .findBySymbolAndDateLessThanEqualOrderByDateAsc(
@@ -205,6 +220,8 @@ public class DailyStockContextService {
                                 .stream()
                                 .filter(price -> price != null
                                                 && price.getDate() != null)
+                                .filter(price -> filterActiveFrom == null
+                                                || !price.getDate().isBefore(filterActiveFrom))
                                 .filter(price -> price.getDate()
                                                 .isBefore(tradingDate))
                                 .sorted(Comparator.comparing(
@@ -525,12 +542,17 @@ public class DailyStockContextService {
         private void refreshSkipToday(
                         DailyStockContext context) {
 
+                boolean missingPreviousDay = context.getPrevDayClose() == null
+                                || context.getPrevDayHigh() == null
+                                || context.getPrevDayLow() == null;
+
                 boolean previousDayTooVolatile = context.getPrevDayRangePct() != null
                                 && context.getPrevDayRangePct() > PREVIOUS_DAY_MAX_RANGE_PCT;
 
                 context.setSkipToday(
-                                Boolean.TRUE.equals(
-                                                context.getCorporateActionFlag())
+                                missingPreviousDay
+                                                || Boolean.TRUE.equals(
+                                                                context.getCorporateActionFlag())
                                                 || Boolean.TRUE.equals(
                                                                 context.getFoBanFlag())
                                                 || Boolean.TRUE.equals(

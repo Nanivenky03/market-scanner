@@ -1,5 +1,7 @@
 package com.trading.scanner.config;
 
+import com.trading.scanner.calendar.TradingCalendar;
+import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.repository.InstrumentMasterRepository;
@@ -7,10 +9,14 @@ import com.trading.scanner.repository.StockUniverseRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -26,16 +32,26 @@ class StockUniverseSeederTest {
 
     private StockUniverseRepository stockUniverseRepository;
     private InstrumentMasterRepository instrumentMasterRepository;
+    private TimeProvider timeProvider;
+    private TradingCalendar tradingCalendar;
     private StockUniverseSeeder seeder;
 
     @BeforeEach
     void setUp() {
         stockUniverseRepository = mock(StockUniverseRepository.class);
         instrumentMasterRepository = mock(InstrumentMasterRepository.class);
+        timeProvider = mock(TimeProvider.class);
+        tradingCalendar = mock(TradingCalendar.class);
+
+        when(timeProvider.today()).thenReturn(LocalDate.of(2026, 9, 23));
+        when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 9, 23, 6, 30));
+        when(tradingCalendar.nextTradingDay(any(LocalDate.class))).thenReturn(LocalDate.of(2026, 9, 24));
 
         seeder = new StockUniverseSeeder(
                 stockUniverseRepository,
-                instrumentMasterRepository);
+                instrumentMasterRepository,
+                timeProvider,
+                tradingCalendar);
     }
 
     @Test
@@ -171,6 +187,47 @@ class StockUniverseSeederTest {
 
         verify(stockUniverseRepository, never())
                 .saveAll(anyList());
+    }
+
+    @Test
+    void seedIfNeeded_shouldSetActiveFromToToday_whenBefore7AM() {
+        when(stockUniverseRepository.count()).thenReturn(0L);
+        when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 9, 23, 6, 45));
+        when(timeProvider.today()).thenReturn(LocalDate.of(2026, 9, 23));
+        when(instrumentMasterRepository.findBySymbolAndExchange(anyString(), eq("NSE")))
+                .thenAnswer(inv -> Optional.of(activeEquity(inv.getArgument(0), "Company")));
+
+        List<StockUniverse>[] saved = new List[1];
+        doAnswer(inv -> {
+            saved[0] = inv.getArgument(0);
+            return saved[0];
+        }).when(stockUniverseRepository).saveAll(anyList());
+
+        seeder.seedIfNeeded();
+
+        assertNotNull(saved[0]);
+        assertEquals(LocalDate.of(2026, 9, 23), saved[0].get(0).getActiveFrom());
+    }
+
+    @Test
+    void seedIfNeeded_shouldSetActiveFromToNextTradingDay_whenAtOrAfter7AM() {
+        when(stockUniverseRepository.count()).thenReturn(0L);
+        when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 9, 23, 7, 0));
+        when(timeProvider.today()).thenReturn(LocalDate.of(2026, 9, 23));
+        when(tradingCalendar.nextTradingDay(LocalDate.of(2026, 9, 23))).thenReturn(LocalDate.of(2026, 9, 24));
+        when(instrumentMasterRepository.findBySymbolAndExchange(anyString(), eq("NSE")))
+                .thenAnswer(inv -> Optional.of(activeEquity(inv.getArgument(0), "Company")));
+
+        List<StockUniverse>[] saved = new List[1];
+        doAnswer(inv -> {
+            saved[0] = inv.getArgument(0);
+            return saved[0];
+        }).when(stockUniverseRepository).saveAll(anyList());
+
+        seeder.seedIfNeeded();
+
+        assertNotNull(saved[0]);
+        assertEquals(LocalDate.of(2026, 9, 24), saved[0].get(0).getActiveFrom());
     }
 
     private InstrumentMaster activeEquity(

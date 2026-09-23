@@ -21,6 +21,7 @@ import java.time.*;
  * 
  * Uses controllable clock for accelerated testing
  */
+@Deprecated
 @Slf4j
 @Configuration
 @Profile("simulation")

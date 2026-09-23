@@ -54,6 +54,26 @@ public class AngelOneTickParserService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final InstrumentMasterRepository instrumentMasterRepository;
+    private final java.util.Map<String, InstrumentMaster> tokenCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @jakarta.annotation.PostConstruct
+    public void initCache() {
+        refreshCache();
+    }
+
+    public void refreshCache() {
+        try {
+            java.util.List<InstrumentMaster> instruments = instrumentMasterRepository.findAll();
+            tokenCache.clear();
+            for (InstrumentMaster inst : instruments) {
+                if (inst.getBrokerToken() != null && !inst.getBrokerToken().isBlank()) {
+                    tokenCache.put(inst.getBrokerToken().trim(), inst);
+                }
+            }
+        } catch (Exception ignored) {
+            // Ignored on early startup before tables are populated
+        }
+    }
 
     public Optional<NormalizedTick> tryParseText(String payload) {
         if (payload == null || payload.isBlank()) {
@@ -143,12 +163,15 @@ public class AngelOneTickParserService {
             long exchangeTimestamp = readLittleEndianLong(payload, OFFSET_EXCHANGE_TIMESTAMP, LENGTH_LONG);
             long lastPriceRaw = readLittleEndianLong(payload, OFFSET_LAST_PRICE, LENGTH_LONG);
 
-            Optional<InstrumentMaster> instrumentOpt = instrumentMasterRepository.findByBrokerToken(brokerToken);
-            if (instrumentOpt.isEmpty()) {
-                return Optional.empty();
+            InstrumentMaster instrument = tokenCache.get(brokerToken);
+            if (instrument == null) {
+                Optional<InstrumentMaster> instrumentOpt = instrumentMasterRepository.findByBrokerToken(brokerToken);
+                if (instrumentOpt.isEmpty()) {
+                    return Optional.empty();
+                }
+                instrument = instrumentOpt.get();
+                tokenCache.put(brokerToken, instrument);
             }
-
-            InstrumentMaster instrument = instrumentOpt.get();
 
             LocalDateTime tickTime = exchangeTimestamp > 0
                     ? Instant.ofEpochMilli(exchangeTimestamp).atZone(INDIA_ZONE).toLocalDateTime()

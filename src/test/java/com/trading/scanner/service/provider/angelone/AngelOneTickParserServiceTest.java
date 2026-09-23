@@ -13,6 +13,8 @@ import java.util.HexFormat;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -189,6 +191,29 @@ class AngelOneTickParserServiceTest {
                 assertEquals(1999.95, tick.fiftyTwoWeekHighPrice());
                 assertEquals(1200.10, tick.fiftyTwoWeekLowPrice());
                 assertNotNull(tick.tickTime());
+        }
+
+        @Test
+        void tryParseBinary_shouldUseTokenCacheWithoutRepositoryQuery() {
+                byte[] payload = HexFormat.ofDelimiter(" ").parseHex(
+                                "01 01 31 36 36 37 35 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 88 52 F5 00 00 00 00 00 68 DB 2D DF 9E 01 00 00 C2 B3 02 00 00 00 00 00");
+
+                when(instrumentMasterRepository.findAll())
+                                .thenReturn(java.util.List.of(
+                                                InstrumentMaster.builder()
+                                                                .symbol("WIPRO")
+                                                                .exchange("NSE")
+                                                                .brokerToken("16675")
+                                                                .build()));
+
+                angelOneTickParserService.refreshCache();
+
+                Optional<AngelOneTickParserService.NormalizedTick> parsed = angelOneTickParserService
+                                .tryParseBinary(payload);
+
+                assertTrue(parsed.isPresent());
+                assertEquals("WIPRO", parsed.get().symbol());
+                verify(instrumentMasterRepository, never()).findByBrokerToken("16675");
         }
 
         private void writeAsciiToken(byte[] payload, int offset, int length, String token) {

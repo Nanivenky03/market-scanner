@@ -309,6 +309,17 @@ public void reportInstrumentMasterStartupFailure(
 }
 
 @Transactional
+public void reportEodReconciliationFailure(
+        java.time.LocalDate tradingDate,
+        int partialSymbols,
+        String message,
+        Object details) {
+
+    String alertKey = "runtime.eod.reconciliation_incomplete." + tradingDate;
+    upsertOpen(alertKey, "HIGH", message, details);
+}
+
+@Transactional
 public void resolveInstrumentMasterStartupFailure() {
     resolve(ALERT_KEY_INSTRUMENT_MASTER_STARTUP_FAILED);
 }

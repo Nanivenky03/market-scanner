@@ -1,5 +1,6 @@
 package com.trading.scanner.config;
 
+import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
@@ -14,6 +15,8 @@ import org.springframework.stereotype.Component;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,9 +28,12 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class StockUniverseSeeder {
 
-        private final StockUniverseRepository stockUniverseRepository;
+        private static final LocalTime MORNING_MAINTENANCE_CUTOFF = LocalTime.of(7, 0);
 
+        private final StockUniverseRepository stockUniverseRepository;
         private final InstrumentMasterRepository instrumentMasterRepository;
+        private final TimeProvider timeProvider;
+        private final TradingCalendar tradingCalendar;
 
         @Transactional
         public SeedResult seedIfNeeded() {
@@ -48,6 +54,8 @@ public class StockUniverseSeeder {
                         throw new IllegalStateException(
                                         "Stock universe CSV contains no symbols");
                 }
+
+                LocalDate activeFrom = resolveInitialActiveFromDate();
 
                 List<StockUniverse> rows = new ArrayList<>();
 
@@ -86,6 +94,7 @@ public class StockUniverseSeeder {
                                                         .sector(null)
                                                         .isActive(true)
                                                         .isTradable(false)
+                                                        .activeFrom(activeFrom)
                                                         .build());
                 }
 
@@ -93,13 +102,24 @@ public class StockUniverseSeeder {
 
                 log.info(
                                 "Initialized stock universe from instrument_master. "
-                                                + "configured={}, inserted={}, tradable=false",
+                                                + "configured={}, inserted={}, tradable=false, activeFrom={}",
                                 symbols.size(),
-                                rows.size());
+                                rows.size(),
+                                activeFrom);
 
                 return new SeedResult(
                                 rows.size(),
                                 "Stock universe initialized from instrument_master");
+        }
+
+        private LocalDate resolveInitialActiveFromDate() {
+                LocalDate today = timeProvider.today();
+                LocalTime now = timeProvider.nowDateTime().toLocalTime();
+
+                if (now.isBefore(MORNING_MAINTENANCE_CUTOFF)) {
+                        return today;
+                }
+                return tradingCalendar.nextTradingDay(today);
         }
 
         private List<String> loadConfiguredSymbols() {

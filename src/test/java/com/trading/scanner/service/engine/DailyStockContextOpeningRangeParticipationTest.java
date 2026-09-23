@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import com.trading.scanner.repository.StockUniverseRepository;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,6 +33,7 @@ class DailyStockContextOpeningRangeParticipationTest {
     private MarketCandleRepository candleRepository;
     private StockPriceRepository stockPriceRepository;
     private VolumeTimeWindowBaselineRepository baselineRepository;
+    private StockUniverseRepository stockUniverseRepository;
     private MarketStateService marketStateService;
     private TradingCalendar tradingCalendar;
     private TimeProvider timeProvider;
@@ -47,6 +49,8 @@ class DailyStockContextOpeningRangeParticipationTest {
 
         baselineRepository = mock(VolumeTimeWindowBaselineRepository.class);
 
+        stockUniverseRepository = mock(StockUniverseRepository.class);
+
         marketStateService = mock(MarketStateService.class);
 
         tradingCalendar = mock(TradingCalendar.class);
@@ -58,6 +62,7 @@ class DailyStockContextOpeningRangeParticipationTest {
                 candleRepository,
                 stockPriceRepository,
                 baselineRepository,
+                stockUniverseRepository,
                 marketStateService,
                 tradingCalendar,
                 timeProvider);

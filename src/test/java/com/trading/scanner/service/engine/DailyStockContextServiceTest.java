@@ -8,15 +8,18 @@ import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.ContextStatus;
 import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.DayType;
+import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.ExpiryType;
 import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.model.MarketSession;
 import com.trading.scanner.model.NiftyVwapDirection;
 import com.trading.scanner.model.StockPrice;
+import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.model.VolumeTimeWindowBaseline;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
+import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,6 +46,7 @@ class DailyStockContextServiceTest {
         private StockPriceRepository stockPriceRepository;
 
         private VolumeTimeWindowBaselineRepository baselineRepository;
+        private StockUniverseRepository stockUniverseRepository;
 
         private MarketStateService marketStateService;
         private TradingCalendar tradingCalendar;
@@ -59,6 +63,8 @@ class DailyStockContextServiceTest {
 
                 baselineRepository = mock(VolumeTimeWindowBaselineRepository.class);
 
+                stockUniverseRepository = mock(StockUniverseRepository.class);
+
                 marketStateService = mock(MarketStateService.class);
 
                 tradingCalendar = mock(TradingCalendar.class);
@@ -70,6 +76,7 @@ class DailyStockContextServiceTest {
                                 marketCandleRepository,
                                 stockPriceRepository,
                                 baselineRepository,
+                                stockUniverseRepository,
                                 marketStateService,
                                 tradingCalendar,
                                 timeProvider);
@@ -785,6 +792,63 @@ class DailyStockContextServiceTest {
                                 NiftyVwapDirection.FLAT);
         }
 
+        @Test
+        void processFinalizedOneMinuteCandle_shouldFilterPricesBeforeActiveFrom() {
+                LocalDate date = LocalDate.of(2026, 6, 24);
+                LocalDate activeFrom = LocalDate.of(2026, 6, 20);
+
+                when(tradingCalendar.previousTradingDay(date)).thenReturn(LocalDate.of(2026, 6, 23));
+                when(timeProvider.nowDateTime()).thenReturn(date.atTime(9, 15, 30));
+                when(dailyStockContextRepository.findBySymbolAndExchangeAndTradingDate("TCS", "NSE", date))
+                                .thenReturn(Optional.empty());
+
+                when(stockUniverseRepository.findBySymbolAndExchange("TCS", Exchange.NSE))
+                                .thenReturn(Optional.of(StockUniverse.builder()
+                                                .symbol("TCS")
+                                                .exchange(Exchange.NSE)
+                                                .activeFrom(activeFrom)
+                                                .build()));
+
+                when(stockPriceRepository.findBySymbolAndDateLessThanEqualOrderByDateAsc("TCS", date))
+                                .thenReturn(List.of(
+                                                stockPrice("TCS", LocalDate.of(2026, 6, 15), 3000.0, 3100.0, 2900.0, 3050.0), // Before activeFrom
+                                                stockPrice("TCS", LocalDate.of(2026, 6, 23), 3200.0, 3250.0, 3180.0, 3220.0))); // After activeFrom
+
+                MarketCandle candle = candle("TCS", date.atTime(9, 15), 3230.0, 3240.0, 3225.0, 3235.0, 1000L);
+                service.processFinalizedOneMinuteCandle(candle);
+
+                ArgumentCaptor<DailyStockContext> captor = ArgumentCaptor.forClass(DailyStockContext.class);
+                verify(dailyStockContextRepository).save(captor.capture());
+
+                DailyStockContext saved = captor.getValue();
+                assertEquals(3220.0, saved.getPrevDayClose());
+                assertEquals(3220.0, saved.getHighestClose15d()); // Close price is 3220.0
+        }
+
+        @Test
+        void processFinalizedOneMinuteCandle_shouldSetSkipTodayTrueWhenPreviousDayFactsMissing() {
+                LocalDate date = LocalDate.of(2026, 6, 24);
+
+                when(tradingCalendar.previousTradingDay(date)).thenReturn(LocalDate.of(2026, 6, 23));
+                when(timeProvider.nowDateTime()).thenReturn(date.atTime(9, 15, 30));
+                when(dailyStockContextRepository.findBySymbolAndExchangeAndTradingDate("TCS", "NSE", date))
+                                .thenReturn(Optional.empty());
+                when(stockUniverseRepository.findBySymbolAndExchange("TCS", Exchange.NSE))
+                                .thenReturn(Optional.empty());
+                when(stockPriceRepository.findBySymbolAndDateLessThanEqualOrderByDateAsc("TCS", date))
+                                .thenReturn(List.of());
+
+                MarketCandle candle = candle("TCS", date.atTime(9, 15), 3230.0, 3240.0, 3225.0, 3235.0, 1000L);
+                service.processFinalizedOneMinuteCandle(candle);
+
+                ArgumentCaptor<DailyStockContext> captor = ArgumentCaptor.forClass(DailyStockContext.class);
+                verify(dailyStockContextRepository).save(captor.capture());
+
+                DailyStockContext saved = captor.getValue();
+                assertTrue(saved.getSkipToday());
+                assertEquals(ContextStatus.PARTIAL, saved.getContextStatus());
+        }
+
         private MarketCandle candle(
                         String symbol,
                         LocalDateTime time,
@@ -813,4 +877,23 @@ class DailyStockContextServiceTest {
                                                 CandleProcessingStatus.RELEASED)
                                 .build();
         }
+
+        private StockPrice stockPrice(
+                        String symbol,
+                        LocalDate date,
+                        double open,
+                        double high,
+                        double low,
+                        double close) {
+                return StockPrice.builder()
+                                .symbol(symbol)
+                                .date(date)
+                                .openPrice(open)
+                                .highPrice(high)
+                                .lowPrice(low)
+                                .closePrice(close)
+                                .volume(1000)
+                                .build();
+        }
 }
+

@@ -230,7 +230,26 @@ class RuntimeSettingServiceTest {
 
         int seeded = service.ensureRequiredSettingsExist();
 
-        assertEquals(12, seeded);
-        verify(repository, times(12)).save(any(RuntimeSetting.class));
+        assertEquals(17, seeded);
+        verify(repository, times(17)).save(any(RuntimeSetting.class));
+    }
+
+    @Test
+    void upsert_shouldRejectInvalidCronExpression() {
+        org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class,
+                () -> service.upsert("schedule.custom.cron", "not a valid cron", "CRON", "test"));
+    }
+
+    @Test
+    void dynamicCronGetters_shouldFallbackWhenDbContainsInvalidCron() {
+        when(repository.findByNameAndIsActiveTrue("schedule.morning.maintenance.cron"))
+                .thenReturn(Optional.of(RuntimeSetting.builder()
+                        .name("schedule.morning.maintenance.cron")
+                        .value("corrupt-cron")
+                        .build()));
+
+        assertEquals("0 0 7 * * MON-FRI", service.morningMaintenanceCron());
+        assertEquals("5 * 9-15 * * MON-FRI", service.minuteRolloverCron());
     }
 }

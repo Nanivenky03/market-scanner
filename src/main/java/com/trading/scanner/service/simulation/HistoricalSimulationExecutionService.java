@@ -32,6 +32,11 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * @deprecated Legacy standalone simulation execution service. Simulation will be executed
+ * as a strategy pipeline stage rather than a separate simulation profile/subsystem.
+ */
+@Deprecated
 @Service
 @RequiredArgsConstructor
 public class HistoricalSimulationExecutionService {

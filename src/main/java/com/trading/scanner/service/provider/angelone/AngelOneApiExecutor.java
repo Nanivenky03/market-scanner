@@ -518,8 +518,8 @@ public class AngelOneApiExecutor {
                         .nextLong(
                                 jitterMaxMs + 1L);
 
-        return baseBackoffMs * attempt
-                + jitter;
+        long multiplier = 1L << Math.max(0, Math.min(attempt - 1, 10));
+        return (baseBackoffMs * multiplier) + jitter;
     }
 
     private void sleepQuietly(

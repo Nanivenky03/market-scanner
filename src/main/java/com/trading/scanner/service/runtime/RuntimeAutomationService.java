@@ -2,11 +2,13 @@ package com.trading.scanner.service.runtime;
 
 import com.trading.scanner.config.RuntimeAutomationProperties;
 import com.trading.scanner.config.TimeProvider;
+import com.trading.scanner.model.WorkflowStatus;
 import com.trading.scanner.service.data.LiveMarketCandleService;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
 import com.trading.scanner.service.provider.angelone.AngelOneWebSocketService;
 import com.trading.scanner.service.provider.angelone.UniverseWebSocketSubscriptionService;
 import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
+import com.trading.scanner.service.workflow.WorkflowStatusService;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,8 +17,10 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -63,6 +67,8 @@ public class RuntimeAutomationService {
 
         private final TimeProvider timeProvider;
 
+        private final WorkflowStatusService workflowStatusService;
+
         private volatile LocalDateTime nextWebsocketCloseCheckAt;
 
         private volatile String startupRecoveryWarning;
@@ -102,6 +108,10 @@ public class RuntimeAutomationService {
                 UniverseWebSocketSubscriptionService.SubscriptionResult subscriptionResult = universeWebSocketSubscriptionService
                                 .subscribeActiveUniverse(
                                                 runtimeSettingService.subscriptionMode());
+
+                if (websocketStatus.connected()) {
+                        markMarketHoursRunningIfApplicable();
+                }
 
                 return new RuntimeActionResult(
                                 "CONNECT_AND_SUBSCRIBE",
@@ -491,153 +501,65 @@ public void onApplicationReady() {
     }
 }
 
-        public void scheduledBrokerWarmup() {
+    public void scheduledBrokerSessionClear() {
 
-                if (!runtimeAutomationProperties
-                                .getLive()
-                                .isAutoRun()) {
-                        return;
-                }
-
-                LocalDateTime nowDateTime = timeProvider.nowDateTime();
-
-                if (!runtimeReadinessService
-                                .isTradingDay(
-                                                nowDateTime.toLocalDate())) {
-                        return;
-                }
-
-                LocalTime now = nowDateTime.toLocalTime();
-
-                LocalTime loginTime = runtimeSettingService.loginTime();
-
-                if (now.getHour() != loginTime.getHour()
-                                || now.getMinute() != loginTime.getMinute()) {
-                        return;
-                }
-
-                try {
-
-                        RuntimeActionResult result = warmUpBrokerSession();
-
-                        log.info(
-                                        "Scheduled broker session warmup completed: {}",
-                                        result);
-
-                } catch (Exception ex) {
-
-                        log.warn(
-                                        "Scheduled broker session warmup failed: {}",
-                                        ex.getMessage(),
-                                        ex);
-
-                        throw new IllegalStateException(
-                                        "Scheduled broker session warmup failed",
-                                        ex);
-                }
+        if (!runtimeAutomationProperties
+                .getLive()
+                .isAutoRun()) {
+            return;
         }
 
-        public void scheduledBrokerSessionClear() {
+        LocalDateTime nowDateTime = timeProvider.nowDateTime();
 
-                if (!runtimeAutomationProperties
-                                .getLive()
-                                .isAutoRun()) {
-                        return;
-                }
-
-                LocalDateTime nowDateTime = timeProvider.nowDateTime();
-
-                if (!runtimeReadinessService
-                                .isTradingDay(
-                                                nowDateTime.toLocalDate())) {
-                        return;
-                }
-
-                LocalTime now = nowDateTime.toLocalTime();
-
-                LocalTime brokerDisconnectTime = runtimeSettingService
-                                .angeloneDisconnectTime();
-
-                if (now.isBefore(brokerDisconnectTime)) {
-                        return;
-                }
-
-                if (angelOneWebSocketService
-                                .status()
-                                .connected()) {
-                        return;
-                }
-
-                if (!angelOneSessionService
-                                .sessionStatus()
-                                .cachedSessionPresent()) {
-                        return;
-                }
-
-                try {
-
-                        RuntimeActionResult result = clearBrokerSession();
-
-                        log.info(
-                                        "Scheduled broker session clear completed: {}",
-                                        result);
-
-                } catch (Exception ex) {
-
-                        log.warn(
-                                        "Scheduled broker session clear failed: {}",
-                                        ex.getMessage(),
-                                        ex);
-
-                        throw new IllegalStateException(
-                                        "Scheduled broker session clear failed",
-                                        ex);
-                }
+        if (!runtimeReadinessService
+                .isTradingDay(
+                        nowDateTime.toLocalDate())) {
+            return;
         }
 
-        public void scheduledConnectAndSubscribe() {
+        LocalTime now = nowDateTime.toLocalTime();
 
-                if (!runtimeAutomationProperties
-                                .getLive()
-                                .isAutoRun()) {
-                        return;
-                }
+        LocalTime brokerDisconnectTime = runtimeSettingService
+                .angeloneDisconnectTime();
 
-                LocalDateTime nowDateTime = timeProvider.nowDateTime();
-
-                if (!runtimeReadinessService
-                                .isTradingDay(
-                                                nowDateTime.toLocalDate())) {
-                        return;
-                }
-
-                LocalTime now = nowDateTime.toLocalTime();
-
-                LocalTime connectTime = runtimeSettingService.websocketConnectTime();
-
-                if (now.getHour() != connectTime.getHour()
-                                || now.getMinute() != connectTime.getMinute()) {
-                        return;
-                }
-
-                try {
-
-                        RuntimeActionResult result = connectAndSubscribe();
-
-                        log.info(
-                                        "Scheduled runtime connect/subscription completed: {}",
-                                        result);
-
-                } catch (Exception ex) {
-
-                        log.warn(
-                                        "Scheduled runtime connect/subscription failed: {}",
-                                        ex.getMessage(),
-                                        ex);
-                }
+        if (now.isBefore(brokerDisconnectTime)) {
+            return;
         }
 
-        public void scheduledRecoverLiveRuntime() {
+        if (angelOneWebSocketService
+                .status()
+                .connected()) {
+            return;
+        }
+
+        if (!angelOneSessionService
+                .sessionStatus()
+                .cachedSessionPresent()) {
+            return;
+        }
+
+        try {
+
+            RuntimeActionResult result = clearBrokerSession();
+
+            log.info(
+                    "Scheduled broker session clear completed: {}",
+                    result);
+
+        } catch (Exception ex) {
+
+            log.warn(
+                    "Scheduled broker session clear failed: {}",
+                    ex.getMessage(),
+                    ex);
+
+            throw new IllegalStateException(
+                    "Scheduled broker session clear failed",
+                    ex);
+        }
+    }
+
+    public void scheduledRecoverLiveRuntime() {
 
                 if (!runtimeAutomationProperties
                                 .getLive()
@@ -708,6 +630,8 @@ public void onApplicationReady() {
 
                         nextWebsocketCloseCheckAt = null;
 
+                        markMarketHoursCompletedIfApplicable(now.toLocalDate());
+
                         return;
                 }
 
@@ -722,6 +646,8 @@ public void onApplicationReady() {
                                 log.info(
                                                 "Websocket disconnected because no message timestamp was available: {}",
                                                 result);
+
+                                markMarketHoursCompletedIfApplicable(now.toLocalDate());
 
                         } catch (Exception ex) {
 
@@ -751,6 +677,8 @@ public void onApplicationReady() {
                                                 idleForMinutes,
                                                 result);
 
+                                markMarketHoursCompletedIfApplicable(now.toLocalDate());
+
                         } catch (Exception ex) {
 
                                 log.warn(
@@ -769,6 +697,66 @@ public void onApplicationReady() {
                                         "Websocket still active after close-check time. idleMinutes={}, nextCheckAt={}",
                                         idleForMinutes,
                                         nextWebsocketCloseCheckAt);
+                }
+        }
+
+        private void markMarketHoursRunningIfApplicable() {
+                if (workflowStatusService == null) {
+                        return;
+                }
+                try {
+                        LocalDate today = timeProvider.today();
+                        if (!runtimeReadinessService.isTradingDay(today)) {
+                                return;
+                        }
+
+                        UUID dependsOnId = null;
+                        try {
+                                WorkflowStatus premarketLive = workflowStatusService.findOrCreateDailyWorkflow(
+                                                WorkflowStatusService.PREMARKET_LIVE_START,
+                                                WorkflowStatusService.PREMARKET_GROUP,
+                                                today.toString(),
+                                                null);
+                                if (premarketLive != null) {
+                                        dependsOnId = premarketLive.getWorkflowId();
+                                }
+                        } catch (Exception ignored) {
+                        }
+
+                        WorkflowStatus marketHoursWorkflow = workflowStatusService.prepareForDaily(
+                                        WorkflowStatusService.MARKET_HOURS,
+                                        WorkflowStatusService.MARKET_HOURS_GROUP,
+                                        today.toString(),
+                                        dependsOnId);
+
+                        if (marketHoursWorkflow.getStatus() != WorkflowStatus.Status.SUCCESS
+                                        && marketHoursWorkflow.getStatus() != WorkflowStatus.Status.RUNNING) {
+                                workflowStatusService.markRunning(marketHoursWorkflow.getWorkflowId());
+                        }
+                } catch (Exception ex) {
+                        log.warn("Failed to update market-hours workflow status to RUNNING: {}", ex.getMessage());
+                }
+        }
+
+        private void markMarketHoursCompletedIfApplicable(LocalDate date) {
+                if (workflowStatusService == null || date == null) {
+                        return;
+                }
+                try {
+                        WorkflowStatus marketHours = workflowStatusService.findOrCreateDailyWorkflow(
+                                        WorkflowStatusService.MARKET_HOURS,
+                                        WorkflowStatusService.MARKET_HOURS_GROUP,
+                                        date.toString(),
+                                        null);
+
+                        if (marketHours.getStatus() != WorkflowStatus.Status.SUCCESS) {
+                                workflowStatusService.markSuccess(
+                                                marketHours.getWorkflowId(),
+                                                "Market hours ingestion ended and websocket disconnected after quiescence");
+                                log.info("Market hours workflow stage marked SUCCESS for date: {}", date);
+                        }
+                } catch (Exception ex) {
+                        log.warn("Failed to mark market-hours workflow as SUCCESS for date {}: {}", date, ex.getMessage());
                 }
         }
 

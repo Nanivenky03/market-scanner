@@ -9,6 +9,7 @@ import org.springframework.validation.annotation.Validated;
 
 import java.time.LocalDate;
 
+@Deprecated
 @ConfigurationProperties(prefix = "simulation")
 @Component
 @Validated

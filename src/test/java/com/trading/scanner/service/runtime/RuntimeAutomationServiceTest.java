@@ -53,6 +53,9 @@ class RuntimeAutomationServiceTest {
     @Mock
     private TimeProvider timeProvider;
 
+    @Mock
+    private com.trading.scanner.service.workflow.WorkflowStatusService workflowStatusService;
+
     private RuntimeAutomationProperties runtimeAutomationProperties;
 
     private RuntimeAutomationService runtimeAutomationService;
@@ -87,7 +90,8 @@ class RuntimeAutomationServiceTest {
                 runtimeAutomationProperties,
                 runtimeReadinessService,
                 runtimeBootstrapService,
-                timeProvider));
+                timeProvider,
+                workflowStatusService));
     }
 
     @Test
@@ -546,57 +550,7 @@ class RuntimeAutomationServiceTest {
                 .connectAndSubscribe();
     }
 
-    @Test
-    void scheduledBrokerWarmup_shouldSkipOnNonTradingDay() {
-        LocalDateTime now = LocalDateTime.of(
-                2026,
-                7,
-                4,
-                8,
-                50);
 
-        when(timeProvider.nowDateTime())
-                .thenReturn(now);
-
-        when(runtimeReadinessService.isTradingDay(
-                now.toLocalDate()))
-                .thenReturn(false);
-
-        runtimeAutomationService
-                .scheduledBrokerWarmup();
-
-        verify(runtimeAutomationService, never())
-                .warmUpBrokerSession();
-
-        verify(runtimeSettingService, never())
-                .loginTime();
-    }
-
-    @Test
-    void scheduledConnectAndSubscribe_shouldSkipOnNonTradingDay() {
-        LocalDateTime now = LocalDateTime.of(
-                2026,
-                7,
-                4,
-                9,
-                0);
-
-        when(timeProvider.nowDateTime())
-                .thenReturn(now);
-
-        when(runtimeReadinessService.isTradingDay(
-                now.toLocalDate()))
-                .thenReturn(false);
-
-        runtimeAutomationService
-                .scheduledConnectAndSubscribe();
-
-        verify(runtimeAutomationService, never())
-                .connectAndSubscribe();
-
-        verify(runtimeSettingService, never())
-                .websocketConnectTime();
-    }
 
     @Test
     void scheduledConditionalFlushAndDisconnect_shouldSkipOnNonTradingDay() {

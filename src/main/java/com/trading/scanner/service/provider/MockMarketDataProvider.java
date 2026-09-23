@@ -9,6 +9,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 
+@Deprecated
 @Component
 @Primary
 @Profile("simulation")

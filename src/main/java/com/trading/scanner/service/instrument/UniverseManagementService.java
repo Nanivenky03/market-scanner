@@ -1,6 +1,8 @@
 package com.trading.scanner.service.instrument;
 
+import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.config.HistoricalBackfillProperties;
+import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
@@ -12,16 +14,22 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
 public class UniverseManagementService {
 
+    private static final LocalTime MORNING_MAINTENANCE_CUTOFF = LocalTime.of(7, 0);
+
     private final InstrumentMasterRepository instrumentMasterRepository;
     private final StockUniverseRepository stockUniverseRepository;
     private final HistoricalBackfillService historicalBackfillService;
     private final HistoricalBackfillProperties historicalBackfillProperties;
+    private final TimeProvider timeProvider;
+    private final TradingCalendar tradingCalendar;
 
     @Transactional(readOnly = true)
     public List<InstrumentSearchResult> searchActiveInstruments(String query, String exchange) {
@@ -50,11 +58,16 @@ public class UniverseManagementService {
                 .findBySymbolAndExchange(instrument.getSymbol(), exchange)
                 .orElse(null);
 
+        LocalDate activeFrom = resolveActiveFromDate();
+
         if (existing != null) {
             boolean reactivated = Boolean.FALSE.equals(existing.getIsActive());
 
             if (reactivated) {
                 existing.setIsActive(true);
+                if (existing.getActiveFrom() == null) {
+                    existing.setActiveFrom(activeFrom);
+                }
                 stockUniverseRepository.save(existing);
             }
 
@@ -81,6 +94,7 @@ public class UniverseManagementService {
                 .companyName(instrument.getCompanyName())
                 .sector(null)
                 .isActive(true)
+                .activeFrom(activeFrom)
                 .build();
 
         stockUniverseRepository.save(newUniverseRow);
@@ -98,6 +112,16 @@ public class UniverseManagementService {
                 "Instrument added to stock_universe",
                 backfillResult
         );
+    }
+
+    private LocalDate resolveActiveFromDate() {
+        LocalDate today = timeProvider.today();
+        LocalTime now = timeProvider.nowDateTime().toLocalTime();
+
+        if (now.isBefore(MORNING_MAINTENANCE_CUTOFF)) {
+            return today;
+        }
+        return tradingCalendar.nextTradingDay(today);
     }
 
     @Transactional
