@@ -1,50 +1,35 @@
 INSERT INTO runtime_setting
 (
-    setting_key,
-    setting_value,
+    name,
+    value,
     value_type,
-    scope,
     description,
     is_active,
-    updated_at,
-    updated_by,
-    version
+    updated_at
 )
 VALUES
 (
     'runtime.bootstrap.status',
     'REQUIRED',
     'STRING',
-    'GLOBAL',
     'One-time historical bootstrap lifecycle state',
     TRUE,
-    now()::text,
-    'system',
-    0
+    now()::text
 ),
 (
     'runtime.bootstrap.message',
     'First-run historical bootstrap is required',
     'STRING',
-    'GLOBAL',
     'One-time historical bootstrap lifecycle message',
     TRUE,
-    now()::text,
-    'system',
-    0
+    now()::text
 ),
 (
     'runtime.bootstrap.date',
     '',
     'DATE',
-    'GLOBAL',
     'Date on which the bootstrap state was last updated',
     TRUE,
-    now()::text,
-    'system',
-    0
+    now()::text
 )
-ON CONFLICT (setting_key, scope) DO NOTHING;
-
-
-
+ON CONFLICT (name) DO NOTHING;
