@@ -7,8 +7,8 @@ import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.repository.InstrumentMasterRepository;
 import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.angelone.AngelOneApiExecutor;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,7 +23,6 @@ import java.util.Map;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AngelOneInstrumentCatalogSyncService {
 
     private static final String NSE = "NSE";
@@ -38,6 +37,20 @@ public class AngelOneInstrumentCatalogSyncService {
 
     @Value("${provider.angelone.instrument-master-url:https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json}")
     private String instrumentMasterUrl;
+
+    @Autowired
+    public AngelOneInstrumentCatalogSyncService(
+            ObjectMapper objectMapper,
+            AngelOneApiExecutor apiExecutor,
+            AngelOneProperties angelOneProperties,
+            InstrumentMasterRepository instrumentMasterRepository,
+            @Autowired(required = false) com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService) {
+        this.objectMapper = objectMapper;
+        this.apiExecutor = apiExecutor;
+        this.angelOneProperties = angelOneProperties;
+        this.instrumentMasterRepository = instrumentMasterRepository;
+        this.angelOneTickParserService = angelOneTickParserService;
+    }
 
     public AngelOneInstrumentCatalogSyncService(
             ObjectMapper objectMapper,
