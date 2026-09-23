@@ -17,15 +17,32 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class WorkflowStatusService {
 
-    public static final String STARTUP_GROUP = "startup";
+        public static final String STARTUP_GROUP = "startup";
+    public static final String PREMARKET_GROUP = "pre-market";
+    public static final String MARKET_HOURS_GROUP = "market-hours";
+    public static final String EOD_GROUP = "eod";
+    public static final String SESSION_GROUP = "session";
 
+    // Startup stages
     public static final String INSTRUMENT_MASTER_SYNC = "instrument-master-sync";
-
     public static final String MARKET_REFERENCE_SETUP = "market-reference-setup";
     public static final String STOCK_UNIVERSE_SEED = "stock-universe-seed";
     public static final String RUNTIME_SETTING_SYNC = "runtime-setting-sync";
     public static final String EOD_DATA_READINESS = "eod-data-readiness";
     public static final String RUNTIME_BOOTSTRAP_COMPLETE = "runtime-bootstrap-complete";
+
+    // Daily Pre-Market stages
+    public static final String TRADING_DAY_INIT = "trading-day-init";
+    public static final String PREMARKET_HOUSEKEEPING = "premarket-housekeeping";
+    public static final String PREMARKET_CATALOG_SYNC = "premarket-catalog-sync";
+    public static final String PREMARKET_UNIVERSE_SYNC = "premarket-universe-sync";
+    public static final String PREMARKET_MORNING_REFERENCE = "premarket-morning-reference";
+    public static final String PREMARKET_LIVE_START = "premarket-live-start";
+
+    // Daily Market Hours & EOD stages
+    public static final String MARKET_HOURS = "market-hours";
+    public static final String EOD_RECONCILIATION = "eod-reconciliation";
+    public static final String DAILY_CYCLE_COMPLETE = "daily-cycle-complete";
 
     private final WorkflowStatusRepository workflowStatusRepository;
 
@@ -287,6 +304,63 @@ public class WorkflowStatusService {
                 timeProvider.nowDateTime());
 
         return workflowStatusRepository.save(workflow);
+    }
+
+        @Transactional
+    public WorkflowStatus prepareForDaily(
+            String workflowName,
+            String workflowGroup,
+            String processDate,
+            UUID dependsOnWorkflowId) {
+
+        List<WorkflowStatus> activeWorkflows = workflowStatusRepository
+                .findByNameAndWorkflowGroupAndProcessDateAndIsActiveTrueOrderByInsertTimestampDesc(
+                        workflowName,
+                        workflowGroup,
+                        processDate);
+
+        if (activeWorkflows.size() > 1) {
+            throw new IllegalStateException(
+                    "Multiple active daily workflows found. name=" + workflowName
+                            + ", group=" + workflowGroup + ", date=" + processDate);
+        }
+
+        if (activeWorkflows.size() == 1) {
+            WorkflowStatus existing = activeWorkflows.get(0);
+
+            // If already completed successfully, return it as is
+            if (existing.getStatus() == Status.SUCCESS) {
+                return existing;
+            }
+
+            // If failed (or retrying), deactivate the old failed row to preserve failure history
+            if (existing.getStatus() == Status.FAILED) {
+                existing.setIsActive(Boolean.FALSE);
+                existing.setUpdateTimestamp(timeProvider.nowDateTime());
+                workflowStatusRepository.save(existing);
+
+                // Create a fresh active row for clean retry execution
+                return create(
+                        workflowName,
+                        workflowGroup,
+                        processDate,
+                        dependsOnWorkflowId);
+            }
+
+            // If currently READY or RUNNING, reset status to READY
+            existing.setStatus(Status.READY);
+            existing.setMessage("Workflow is ready for daily execution");
+            existing.setErrorDetails(null);
+            existing.setUpdateTimestamp(timeProvider.nowDateTime());
+            return workflowStatusRepository.save(existing);
+        }
+
+        // Fresh first-time execution for today
+        return create(
+                workflowName,
+                workflowGroup,
+                processDate,
+                dependsOnWorkflowId);
     }
 
     @Transactional

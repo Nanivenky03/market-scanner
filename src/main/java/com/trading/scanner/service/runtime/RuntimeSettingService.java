@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -21,6 +22,63 @@ public class RuntimeSettingService {
     private final RuntimeSettingRepository runtimeSettingRepository;
     private final RuntimeAutomationProperties runtimeAutomationProperties;
     private final TimeProvider timeProvider;
+
+        public static final String PROCESS_DATE_KEY = "runtime.process.date";
+
+    @Transactional(readOnly = true)
+    public LocalDate processDate() {
+        return runtimeSettingRepository.findByNameAndIsActiveTrue(PROCESS_DATE_KEY)
+                .map(RuntimeSetting::getValue)
+                .filter(val -> val != null && !val.isBlank())
+                .map(LocalDate::parse)
+                .orElse(null);
+    }
+
+    @Transactional
+    public RuntimeSetting setProcessDate(LocalDate date) {
+        String value = date != null ? date.toString() : timeProvider.today().toString();
+        return upsert(
+                PROCESS_DATE_KEY,
+                value,
+                "DATE",
+                "Current trading business process date for the application",
+                "system");
+    }
+
+        @Transactional(readOnly = true)
+    public String morningMaintenanceCron() {
+        String cron = getString("schedule.morning.maintenance.cron", "0 0 7 * * MON-FRI");
+        return org.springframework.scheduling.support.CronExpression.isValidExpression(cron) ? cron : "0 0 7 * * MON-FRI";
+    }
+
+    @Transactional(readOnly = true)
+    public String preMarketDataPipelineCron() {
+        String cron = getString("schedule.premarket.data.cron", "0 0 8 * * MON-FRI");
+        return org.springframework.scheduling.support.CronExpression.isValidExpression(cron) ? cron : "0 0 8 * * MON-FRI";
+    }
+
+    @Transactional(readOnly = true)
+    public String liveRuntimeStartCron() {
+        String cron = getString("schedule.live.start.cron", "0 55 8 * * MON-FRI");
+        return org.springframework.scheduling.support.CronExpression.isValidExpression(cron) ? cron : "0 55 8 * * MON-FRI";
+    }
+
+    @Transactional(readOnly = true)
+    public String scheduleZone() {
+        String zone = getString("schedule.zone", "Asia/Kolkata");
+        try {
+            java.time.ZoneId.of(zone);
+            return zone;
+        } catch (Exception ex) {
+            return "Asia/Kolkata";
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public String minuteRolloverCron() {
+        String cron = getString("schedule.minute.rollover.cron", "5 * 9-15 * * MON-FRI");
+        return org.springframework.scheduling.support.CronExpression.isValidExpression(cron) ? cron : "5 * 9-15 * * MON-FRI";
+    }
 
     @Transactional(readOnly = true)
     public LocalTime getTime(String name, LocalTime fallback) {
@@ -141,6 +199,12 @@ public class RuntimeSettingService {
 
     @Transactional
     public RuntimeSetting upsert(String name, String value, String valueType, String description, String updatedBy) {
+        if (name != null && (name.endsWith(".cron") || "CRON".equalsIgnoreCase(valueType))) {
+            if (!org.springframework.scheduling.support.CronExpression.isValidExpression(value)) {
+                throw new IllegalArgumentException("Invalid cron expression for setting '" + name + "': " + value);
+            }
+        }
+
         RuntimeSetting setting = runtimeSettingRepository.findByName(name)
                 .orElseGet(() -> RuntimeSetting.builder()
                         .name(name)
@@ -156,7 +220,7 @@ public class RuntimeSettingService {
         return runtimeSettingRepository.save(setting);
     }
 
-        @Transactional
+    @Transactional
     public int ensureRequiredSettingsExist() {
         int createdCount = 0;
 
@@ -207,6 +271,26 @@ public class RuntimeSettingService {
         createdCount += seedIfMissing("alert.parser.failures.threshold",
                 String.valueOf(runtimeAutomationProperties.getAlert().getParserFailuresThreshold()),
                 "INTEGER", "Alert threshold for consecutive websocket parse errors");
+
+        createdCount += seedIfMissing("schedule.morning.maintenance.cron",
+                "0 0 7 * * MON-FRI",
+                "CRON", "Daily morning maintenance trigger cron expression (07:00 AM)");
+
+        createdCount += seedIfMissing("schedule.premarket.data.cron",
+                "0 0 8 * * MON-FRI",
+                "CRON", "Daily pre-market data preparation pipeline trigger cron expression (08:00 AM)");
+
+        createdCount += seedIfMissing("schedule.live.start.cron",
+                "0 55 8 * * MON-FRI",
+                "CRON", "Daily live market data start trigger cron expression (08:55 AM)");
+
+        createdCount += seedIfMissing("schedule.minute.rollover.cron",
+                "5 * 9-15 * * MON-FRI",
+                "CRON", "Clock-based minute candle rollover trigger cron expression (5s grace period)");
+
+        createdCount += seedIfMissing("schedule.zone",
+                "Asia/Kolkata",
+                "STRING", "Timezone identifier for scheduler triggers");
 
         return createdCount;
     }

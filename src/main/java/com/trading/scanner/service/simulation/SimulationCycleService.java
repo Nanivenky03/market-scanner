@@ -22,6 +22,11 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * @deprecated Legacy standalone simulation cycle service. Simulation will be executed
+ * as a strategy pipeline stage rather than a separate simulation profile/subsystem.
+ */
+@Deprecated
 @Service
 @Slf4j
 @RequiredArgsConstructor

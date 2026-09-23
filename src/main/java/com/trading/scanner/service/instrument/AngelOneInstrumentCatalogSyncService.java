@@ -34,9 +34,18 @@ public class AngelOneInstrumentCatalogSyncService {
     private final AngelOneApiExecutor apiExecutor;
     private final AngelOneProperties angelOneProperties;
     private final InstrumentMasterRepository instrumentMasterRepository;
+    private final com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService;
 
     @Value("${provider.angelone.instrument-master-url:https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json}")
     private String instrumentMasterUrl;
+
+    public AngelOneInstrumentCatalogSyncService(
+            ObjectMapper objectMapper,
+            AngelOneApiExecutor apiExecutor,
+            AngelOneProperties angelOneProperties,
+            InstrumentMasterRepository instrumentMasterRepository) {
+        this(objectMapper, apiExecutor, angelOneProperties, instrumentMasterRepository, null);
+    }
 
     @Transactional
     public CatalogSyncResult syncNseCatalog() {
@@ -147,6 +156,10 @@ public class AngelOneInstrumentCatalogSyncService {
 
         if (!changed.isEmpty()) {
             instrumentMasterRepository.saveAll(changed);
+        }
+
+        if (angelOneTickParserService != null) {
+            angelOneTickParserService.refreshCache();
         }
 
         CatalogSyncResult result = new CatalogSyncResult(

@@ -39,6 +39,8 @@ public class InstrumentTokenSyncService {
 
     private final SymbolAliasService symbolAliasService;
 
+    private final com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService;
+
     @Autowired
     public InstrumentTokenSyncService(
             InstrumentMasterRepository instrumentMasterRepository,
@@ -46,19 +48,16 @@ public class InstrumentTokenSyncService {
             AngelOneProperties angelOneProperties,
             AngelOneSessionService angelOneSessionService,
             AngelOneApiExecutor angelOneApiExecutor,
-            SymbolAliasService symbolAliasService) {
+            SymbolAliasService symbolAliasService,
+            @Autowired(required = false) com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService) {
 
         this.instrumentMasterRepository = instrumentMasterRepository;
-
         this.stockUniverseRepository = stockUniverseRepository;
-
         this.angelOneProperties = angelOneProperties;
-
         this.angelOneSessionService = angelOneSessionService;
-
         this.angelOneApiExecutor = angelOneApiExecutor;
-
         this.symbolAliasService = symbolAliasService;
+        this.angelOneTickParserService = angelOneTickParserService;
     }
 
     /*
@@ -77,7 +76,8 @@ public class InstrumentTokenSyncService {
                 angelOneProperties,
                 angelOneSessionService,
                 angelOneApiExecutor,
-                symbolAliasService);
+                symbolAliasService,
+                null);
     }
 
     @Transactional
@@ -171,6 +171,10 @@ public class InstrumentTokenSyncService {
                         instrument.getExchange(),
                         ex.getMessage());
             }
+        }
+
+        if (mapped > 0 && angelOneTickParserService != null) {
+            angelOneTickParserService.refreshCache();
         }
 
         log.info(

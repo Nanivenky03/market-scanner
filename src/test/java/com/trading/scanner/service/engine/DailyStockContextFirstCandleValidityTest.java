@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import com.trading.scanner.repository.StockUniverseRepository;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -32,6 +34,7 @@ class DailyStockContextFirstCandleValidityTest {
     private MarketCandleRepository candleRepository;
     private StockPriceRepository stockPriceRepository;
     private VolumeTimeWindowBaselineRepository baselineRepository;
+    private StockUniverseRepository stockUniverseRepository;
     private MarketStateService marketStateService;
     private TradingCalendar tradingCalendar;
     private TimeProvider timeProvider;
@@ -47,6 +50,8 @@ class DailyStockContextFirstCandleValidityTest {
 
         baselineRepository = mock(VolumeTimeWindowBaselineRepository.class);
 
+        stockUniverseRepository = mock(StockUniverseRepository.class);
+
         marketStateService = mock(MarketStateService.class);
 
         tradingCalendar = mock(TradingCalendar.class);
@@ -58,6 +63,7 @@ class DailyStockContextFirstCandleValidityTest {
                 candleRepository,
                 stockPriceRepository,
                 baselineRepository,
+                stockUniverseRepository,
                 marketStateService,
                 tradingCalendar,
                 timeProvider);

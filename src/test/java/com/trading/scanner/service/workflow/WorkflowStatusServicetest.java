@@ -170,6 +170,158 @@ class WorkflowStatusServiceTest {
     }
 
     @Test
+    void prepareForDaily_whenNoActiveRow_createsReadyWorkflow() {
+        String processDate = "2026-09-15";
+        String stageName = WorkflowStatusService.TRADING_DAY_INIT;
+        String group = WorkflowStatusService.PREMARKET_GROUP;
+
+        when(repository
+                .findByNameAndWorkflowGroupAndProcessDateAndIsActiveTrueOrderByInsertTimestampDesc(
+                        stageName,
+                        group,
+                        processDate))
+                .thenReturn(List.of());
+
+        WorkflowStatus result = service.prepareForDaily(
+                stageName,
+                group,
+                processDate,
+                null);
+
+        assertEquals(WorkflowStatus.Status.READY, result.getStatus());
+        assertEquals(stageName, result.getName());
+        assertEquals(group, result.getWorkflowGroup());
+        assertEquals(processDate, result.getProcessDate());
+        assertTrue(result.getIsActive());
+
+        verify(repository).save(any(WorkflowStatus.class));
+    }
+
+    @Test
+    void prepareForDaily_whenSuccess_returnsExistingWithoutModifying() {
+        String processDate = "2026-09-15";
+        String stageName = WorkflowStatusService.TRADING_DAY_INIT;
+        String group = WorkflowStatusService.PREMARKET_GROUP;
+
+        WorkflowStatus existing = WorkflowStatus.builder()
+                .workflowId(UUID.randomUUID())
+                .name(stageName)
+                .workflowGroup(group)
+                .processDate(processDate)
+                .status(WorkflowStatus.Status.SUCCESS)
+                .isActive(true)
+                .build();
+
+        when(repository
+                .findByNameAndWorkflowGroupAndProcessDateAndIsActiveTrueOrderByInsertTimestampDesc(
+                        stageName,
+                        group,
+                        processDate))
+                .thenReturn(List.of(existing));
+
+        WorkflowStatus result = service.prepareForDaily(
+                stageName,
+                group,
+                processDate,
+                null);
+
+        assertEquals(WorkflowStatus.Status.SUCCESS, result.getStatus());
+        verify(repository, never()).save(any(WorkflowStatus.class));
+    }
+
+    @Test
+    void prepareForDaily_whenFailed_deactivatesOldAndCreatesFresh() {
+        String processDate = "2026-09-15";
+        String stageName = WorkflowStatusService.TRADING_DAY_INIT;
+        String group = WorkflowStatusService.PREMARKET_GROUP;
+
+        WorkflowStatus failedOld = WorkflowStatus.builder()
+                .workflowId(UUID.randomUUID())
+                .name(stageName)
+                .workflowGroup(group)
+                .processDate(processDate)
+                .status(WorkflowStatus.Status.FAILED)
+                .isActive(true)
+                .build();
+
+        when(repository
+                .findByNameAndWorkflowGroupAndProcessDateAndIsActiveTrueOrderByInsertTimestampDesc(
+                        stageName,
+                        group,
+                        processDate))
+                .thenReturn(List.of(failedOld));
+
+        WorkflowStatus result = service.prepareForDaily(
+                stageName,
+                group,
+                processDate,
+                null);
+
+        // Old row must be deactivated
+        assertEquals(Boolean.FALSE, failedOld.getIsActive());
+        // New row created
+        assertEquals(WorkflowStatus.Status.READY, result.getStatus());
+        assertEquals(stageName, result.getName());
+        assertEquals(processDate, result.getProcessDate());
+
+        // Verify save was called for deactivation and for new row
+        verify(repository, times(2)).save(any(WorkflowStatus.class));
+    }
+
+    @Test
+    void prepareForDaily_whenRunning_resetsToReady() {
+        String processDate = "2026-09-15";
+        String stageName = WorkflowStatusService.TRADING_DAY_INIT;
+        String group = WorkflowStatusService.PREMARKET_GROUP;
+
+        WorkflowStatus running = WorkflowStatus.builder()
+                .workflowId(UUID.randomUUID())
+                .name(stageName)
+                .workflowGroup(group)
+                .processDate(processDate)
+                .status(WorkflowStatus.Status.RUNNING)
+                .isActive(true)
+                .build();
+
+        when(repository
+                .findByNameAndWorkflowGroupAndProcessDateAndIsActiveTrueOrderByInsertTimestampDesc(
+                        stageName,
+                        group,
+                        processDate))
+                .thenReturn(List.of(running));
+
+        WorkflowStatus result = service.prepareForDaily(
+                stageName,
+                group,
+                processDate,
+                null);
+
+        assertEquals(WorkflowStatus.Status.READY, result.getStatus());
+        assertEquals("Workflow is ready for daily execution", result.getMessage());
+        verify(repository).save(running);
+    }
+
+    @Test
+    void prepareForDaily_whenMultipleActive_throwsException() {
+        String processDate = "2026-09-15";
+        String stageName = WorkflowStatusService.TRADING_DAY_INIT;
+        String group = WorkflowStatusService.PREMARKET_GROUP;
+
+        WorkflowStatus w1 = WorkflowStatus.builder().build();
+        WorkflowStatus w2 = WorkflowStatus.builder().build();
+
+        when(repository
+                .findByNameAndWorkflowGroupAndProcessDateAndIsActiveTrueOrderByInsertTimestampDesc(
+                        stageName,
+                        group,
+                        processDate))
+                .thenReturn(List.of(w1, w2));
+
+        assertThrows(IllegalStateException.class, () ->
+                service.prepareForDaily(stageName, group, processDate, null));
+    }
+
+    @Test
     void findOrCreateDailyWorkflow_createsWorkflowWithProcessDate() {
         String processDate = "2026-09-15";
         String stageName = "pre-market-context";

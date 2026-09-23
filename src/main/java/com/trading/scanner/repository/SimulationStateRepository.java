@@ -8,7 +8,9 @@ import org.springframework.stereotype.Repository;
  * Simulation State Repository
  * 
  * Manages the single-row simulation state table
+ * @deprecated Legacy standalone simulation repository.
  */
+@Deprecated
 @Repository
 public interface SimulationStateRepository extends JpaRepository<SimulationState, Integer> {
     // Standard CRUD operations via JpaRepository

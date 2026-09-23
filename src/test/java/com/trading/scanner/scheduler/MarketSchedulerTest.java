@@ -1,5 +1,6 @@
 package com.trading.scanner.scheduler;
 
+import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.service.data.BackfillQueueService;
 import com.trading.scanner.service.data.EodReconciliationService;
@@ -8,6 +9,7 @@ import com.trading.scanner.service.engine.MarketStateService;
 import com.trading.scanner.service.engine.VolumeBaselineService;
 import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
 import com.trading.scanner.service.runtime.FeedHealthService;
+import com.trading.scanner.service.runtime.MarketCalendarService;
 import com.trading.scanner.service.runtime.PreMarketWorkflowService;
 import com.trading.scanner.service.runtime.RuntimeAlertService;
 import com.trading.scanner.service.runtime.RuntimeAutomationService;
@@ -68,47 +70,49 @@ class MarketSchedulerTest {
         @Mock
         private ScheduledJobAlertService scheduledJobAlertService;
 
+        @Mock
+        private com.trading.scanner.service.data.LiveMarketCandleService liveMarketCandleService;
+
+        @Mock
+        private MarketCalendarService marketCalendarService;
+
+        @Mock
+        private TradingCalendar tradingCalendar;
+
         @InjectMocks
         private MarketScheduler marketScheduler;
 
-        @Test
-        void scheduledBrokerWarmup_shouldDelegate() {
-                marketScheduler.scheduledBrokerWarmup();
-
-                verify(runtimeAutomationService)
-                                .scheduledBrokerWarmup();
-        }
 
         @Test
-        void scheduledPreMarketFoundationRefresh_shouldDelegate() {
-                marketScheduler.scheduledPreMarketFoundationRefresh();
+        void scheduledMorningMaintenance_shouldDelegate() {
+                marketScheduler.scheduledMorningMaintenance();
 
                 verify(preMarketWorkflowService)
-                                .refreshFoundation();
+                                .runMorningMaintenance();
         }
 
         @Test
-        void scheduledReadinessVerification_shouldDelegate() {
-                marketScheduler.scheduledReadinessVerification();
+        void scheduledPreMarketDataPipeline_shouldDelegate() {
+                marketScheduler.scheduledPreMarketDataPipeline();
 
                 verify(preMarketWorkflowService)
-                                .verifyReadiness();
+                                .runPreMarketDataPipeline();
         }
 
         @Test
-        void scheduledInstrumentMasterRefresh_shouldDelegate() {
-                marketScheduler.scheduledInstrumentMasterRefresh();
-
-                verify(preMarketWorkflowService)
-                                .refreshFinalInstruments();
-        }
-
-        @Test
-        void scheduledConnectAndSubscribe_shouldDelegate() {
-                marketScheduler.scheduledConnectAndSubscribe();
+        void scheduledLiveRuntimeStart_shouldDelegate() {
+                marketScheduler.scheduledLiveRuntimeStart();
 
                 verify(preMarketWorkflowService)
                                 .startLiveRuntime();
+        }
+
+        @Test
+        void scheduledMinuteRollover_shouldDelegate() {
+                marketScheduler.scheduledMinuteRollover();
+
+                verify(liveMarketCandleService)
+                                .rolloverCompletedMinutes();
         }
 
         @Test
@@ -133,23 +137,6 @@ class MarketSchedulerTest {
 
                 verify(runtimeAutomationService)
                                 .scheduledBrokerSessionClear();
-        }
-
-        @Test
-        void scheduledHousekeeping_shouldDelegate() {
-                marketScheduler.scheduledHousekeeping();
-
-                verify(runtimeHousekeepingService)
-                                .scheduledHousekeeping();
-        }
-
-        @Test
-        void scheduledVolumeBaselinePreCalculation_shouldDelegate() {
-                // This method is intentionally retained if present in the project.
-                marketScheduler.scheduledVolumeBaselinePreCalculation();
-
-                verify(volumeBaselineService)
-                                .scheduledPreCalculateBaselines();
         }
 
         @Test
@@ -201,37 +188,58 @@ class MarketSchedulerTest {
         }
 
         @Test
+        void scheduledEodReconciliation_shouldSkipOnNonTradingDay() {
+                LocalDate today = LocalDate.of(2026, 8, 29);
+                when(timeProvider.today()).thenReturn(today);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(false);
+
+                marketScheduler.scheduledEodReconciliation();
+
+                verify(eodReconciliationService, never())
+                                .reconcileTradingDay(any());
+        }
+
+        @Test
         void scheduledEodReconciliation_shouldSkipWhenWebsocketIsOpen() {
+                LocalDate today = LocalDate.of(2026, 8, 27);
+                when(timeProvider.today()).thenReturn(today);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
                 when(runtimeAutomationService.runtimeStatus())
                                 .thenReturn(runtimeStatus(true, false));
 
                 marketScheduler.scheduledEodReconciliation();
 
                 verify(eodReconciliationService, never())
-                                .reconcilePreviousTradingDay();
+                                .reconcileTradingDay(any());
         }
 
         @Test
         void scheduledEodReconciliation_shouldSkipWhenWebsocketIsConnecting() {
+                LocalDate today = LocalDate.of(2026, 8, 27);
+                when(timeProvider.today()).thenReturn(today);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
                 when(runtimeAutomationService.runtimeStatus())
                                 .thenReturn(runtimeStatus(false, true));
 
                 marketScheduler.scheduledEodReconciliation();
 
                 verify(eodReconciliationService, never())
-                                .reconcilePreviousTradingDay();
+                                .reconcileTradingDay(any());
         }
 
         @Test
         void scheduledEodReconciliation_shouldRunWhenWebsocketIsClosed() {
+                LocalDate today = LocalDate.of(2026, 8, 27);
+                when(timeProvider.today()).thenReturn(today);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
                 when(runtimeAutomationService.runtimeStatus())
                                 .thenReturn(runtimeStatus(false, false));
 
                 when(eodReconciliationService
-                                .reconcilePreviousTradingDay())
+                                .reconcileTradingDay(today))
                                 .thenReturn(
                                                 new EodReconciliationService.ReconciliationBatchResult(
-                                                                LocalDate.of(2026, 8, 27),
+                                                                today,
                                                                 2,
                                                                 1,
                                                                 1,
@@ -241,7 +249,7 @@ class MarketSchedulerTest {
                 marketScheduler.scheduledEodReconciliation();
 
                 verify(eodReconciliationService)
-                                .reconcilePreviousTradingDay();
+                                .reconcileTradingDay(today);
         }
 
         private RuntimeAutomationService.RuntimeStatus runtimeStatus(
@@ -279,6 +287,9 @@ class MarketSchedulerTest {
 
         @Test
         void scheduledEodReconciliation_shouldAlertFailureWhenWebsocketIsOpen() {
+                LocalDate today = LocalDate.of(2026, 8, 27);
+                when(timeProvider.today()).thenReturn(today);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
                 when(runtimeAutomationService.runtimeStatus())
                                 .thenReturn(runtimeStatus(true, false));
 
@@ -290,37 +301,7 @@ class MarketSchedulerTest {
                                                 any(IllegalStateException.class));
 
                 verify(eodReconciliationService, never())
-                                .reconcilePreviousTradingDay();
-        }
-
-        @Test
-        void scheduledHousekeeping_shouldReportSuccess() {
-                RuntimeHousekeepingService.HousekeepingResult result = new RuntimeHousekeepingService.HousekeepingResult(
-                                LocalDateTime.of(2026, 8, 27, 5, 30),
-                                30,
-                                30,
-                                10,
-                                2,
-                                1,
-                                1,
-                                1,
-                                1,
-                                1,
-                                1,
-                                1,
-                                1,
-                                "Housekeeping completed");
-
-                when(runtimeHousekeepingService.scheduledHousekeeping())
-                                .thenReturn(result);
-
-                marketScheduler.scheduledHousekeeping();
-
-                verify(scheduledJobAlertService)
-                                .reportSuccess(
-                                                "housekeeping",
-                                                "Housekeeping completed",
-                                                result);
+                                .reconcileTradingDay(any());
         }
 
 }

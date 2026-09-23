@@ -6,6 +6,7 @@ CREATE TABLE stock_universe (
     sector TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     is_tradable BOOLEAN NOT NULL DEFAULT FALSE,
+    active_from TEXT,
     CONSTRAINT uq_stock_universe_symbol_exchange UNIQUE (symbol, exchange),
     CONSTRAINT ck_stock_universe_exchange CHECK (exchange IN ('NSE'))
 );

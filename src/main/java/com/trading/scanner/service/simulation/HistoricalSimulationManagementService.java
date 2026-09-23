@@ -20,6 +20,7 @@ import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
 
+@Deprecated
 @Service
 @RequiredArgsConstructor
 public class HistoricalSimulationManagementService {

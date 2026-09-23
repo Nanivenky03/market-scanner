@@ -6,6 +6,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 
+@Deprecated
 @Repository
 public interface SimulationVariantRepository extends JpaRepository<SimulationVariant, Integer> {
 
