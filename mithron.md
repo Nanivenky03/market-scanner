@@ -1,151 +1,184 @@
-# Mithron: verified project reference
+# Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-09-25  
-Evidence boundary: this document reflects the checked-out source tree, project guidance in `project_rules.md` and `project_workflow.md`, the authoritative Common Engine Validation Guide, and local unit-test output.
+Last audited: 2026-09-27  
+Status: **Version 1.0 Complete** (Data & Market Lifecycle Foundation — 314 unit tests passing).
 
-## Executive conclusion
+---
 
-Mithron Version 1 is a Spring Boot 3.2 / Java 21 safety-first NSE market data ingestion, candle processing, indicator calculation, EOD reconciliation, raw broker archiving, and session automation engine. The source implements robust data pipelines, fail-closed scheduling, WebSocket streaming with post-market quiescence handling, continuous rate-limited queue worker backfill, raw broker REST archiving to disk, 375-minute candle reconciliation, high-priority alerting, and daily session teardown. It does **not** contain a live-order placement or position-management implementation; it must therefore not be described as a complete automated live-trading system.
+## 1. What is Mithron?
 
-Version 1 encompasses 5 core phases:
-- **Phase 1:** Application Bootstrapping & Startup Readiness (6 fail-closed stages)
-- **Phase 2:** Daily Pre-Market Pipeline (07:00 AM maintenance, 08:00 AM data preparation, 08:55 AM live start gate)
-- **Phase 3:** Live Market Ingestion & Intraday Gap Repair (08:55 AM to post-market quiescence, continuous 400ms rate-limited queue worker)
-- **Phase 4:** Shared Calculation & Common Indicator Engine (VWAP, Wilder's RSI-14, ATR-14, VOL_X, Baselines, Candle Structure)
-- **Phase 5:** Post-Market Shutdown, Raw Broker Archiving, 375-Minute EOD Reconciliation, Alerting & Session Teardown
+**Mithron is a personal, rules-based market analysis, strategy research, and trading decision-support engine for Indian equities.**
 
-Trading strategy execution (VWAP Pullback, FCHB, ORB), scanner state machines, and the web user interface are designated for **Version 2**.
+Its purpose is to turn raw market data and trading hypotheses into **persistent, measurable, and auditable evidence**, and filter the **Nifty 500 universe** into a **small, structured, explainable set of qualified setups** with explicit risk controls.
 
-The application test suite is fully verified: **314 unit tests passing** (0 failures, 0 errors, 1 skipped).
+Mithron is designed to answer:
+> *"Given everything known about the market up to this exact point in time, which stocks deserve attention, why do they deserve it, what would invalidate the setup, where is the risk, and what does the historical evidence show?"*
 
-## What Mithron is for
+### What Mithron is NOT:
+- **Not an autonomous black-box trading bot** (the human operator is the decision authority).
+- **Not an AI stock predictor** or forecasting model.
+- **Not a replacement for TradingView** (visual charting remains a companion tool).
+- **Not a collection of 50 random indicators** or manually maintained spreadsheets.
+- **Not a strategy factory** (adding more unproven rules is not progress).
 
-### Product definition
+---
 
-Mithron is a personal, safety-first intraday market-analysis and trading-support application for NSE equities. Its job is to turn provider market data into trustworthy, explainable trading facts and then reconcile and archive all session data deterministically.
+## 2. Core Philosophy & Operating Principles
 
-It is not a general investment platform, portfolio manager, tip generator, high-frequency system, or a promise of profitable trades. It is a deterministic decision-support and automation system for a deliberately small, curated stock universe.
+1. **Process Over Prediction:** The goal is not to guess tomorrow's price, but to apply the exact same validated process every single day.
+2. **Exclusion Before Selection:** First determine: *"Which stocks should I NOT consider?"* Only after low-quality, illiquid, erratic, or high-risk candidates are eliminated does Mithron rank the qualified remainder.
+3. **Rules Must Be Explicit:** Every rule is mathematical and deterministic (`INPUT → FORMULA → OUTPUT`). No subjective interpretations, no "looks bullish", no unquantified intuition.
+4. **Strategies Propose, Validator Approves:** Strategies never execute trades directly. A strategy proposes a candidate signal; the independent **Strategy Validator** verifies market state, data quality, trading window, duplicate checks, and risk limits.
+5. **Strategies Never Fetch or Calculate Indicators:** Strategies must never fetch market data, call broker APIs, calculate RSI/VWAP, or build candles. They strictly consume the canonical shared facts calculated once in Layer 2.
+6. **Risk Engine Precedes Backtesting:** A backtest without risk rules is meaningless. The **Risk Engine** (entry zones, stop loss, risk distance %, position sizing, R:R targets, max daily loss) is integrated directly into the backtest engine in **Version 3.0** so strategies are tested as complete, realistic trades.
+7. **Early Universe Expansion (Nifty 500 Data Accumulation):** Right after V1.0 live validation, the universe expands to Nifty 500 so Mithron silently accumulates 30+ days of clean 1M candles and volume baselines in the background while V2, V3, and V4 are built.
+8. **Explainability Over Black Boxes:** Whenever Mithron qualifies or rejects a stock, it records the exact reasons:
+   ```text
+   HINDUNILVR
+   Setup:        VWAP Pullback
+   Why:          ✓ Above VWAP | ✓ RSI 57.3 | ✓ VOL_X 1.84 | ✓ Trend Aligned
+   Invalidation: Price closes below ₹2,480.00
+   Risk:         0.85% (₹21.00/share)
+   Target:       ₹2,545.00 (2.5R)
+   Status:       APPROVED
+   ```
+9. **Point-in-Time Correctness:** At minute $T$, the engine must strictly only know what was knowable at minute $T$. No lookahead bias or future-leakage is permitted in live or historical replay.
+10. **Same Strategy Code for Live & Replay:** The exact same strategy and risk code must evaluate live market feeds and historical simulation datasets to eliminate implementation drift.
+11. **Immutability of Research Evidence:** Generated signals and forward outcomes are permanent research records. Rule modifications increment `rule_version` rather than rewriting history.
+12. **Simplicity Before Scale:** Built as a clean, modular monolith maintainable by a single engineer. Complexity must earn its place.
 
-### Intended use case
+---
 
-The intended operator is the project owner running a small NSE intraday workflow. Before, during, and after each trading session, Mithron:
-
-1. Establishes a known-good universe and mapping of symbols to Angel One instruments, including NIFTY as market context.
-2. Acquires historical and live market data, builds canonical one-minute candles, and derives higher timeframes.
-3. Rejects incomplete, stale, malformed, un-mapped, or otherwise untrustworthy data rather than filling gaps or guessing.
-4. Calculates shared facts once: VWAP, RSI-14 (Wilder's smoothing), ATR-14 (Wilder's smoothing), time-normalized volume baselines (375 session minutes), VOL_X, candle structure, daily context, and opening references.
-5. Ingests live WebSocket feeds past 15:30 until post-16:00 quiescence (disconnecting only after $\ge 3$ minutes of silence).
-6. Fetches official historical candles from Angel One REST API post-17:00, saves raw JSON responses to disk (`data/raw-eod/YYYY-MM-DD/SYMBOL.json`), reconciles all 375 minute bars, and triggers high-priority alerts on missing data.
-7. Performs daily session teardown, invalidates broker session tokens, and marks the daily cycle complete.
-
-### Desired end-state workflow (Version 1)
+## 3. The 5-Layer Mental Model
 
 ```text
-Angel One catalog / historical REST / live WebSocket
-                    ↓
-Canonical instruments and reconciled 1-minute candles
-                    ↓
-Derived 5m/15m candles, indicators, volume baselines, structure, market context
-                    ↓
-Post-market quiescence disconnect & raw API disk archiving
-                    ↓
-375-minute EOD reconciliation & high-priority alerting
-                    ↓
-Broker session token invalidation & daily cycle finalization
+┌────────────────────────────────────────────────────────────────────────┐
+│                        LAYER 5: USER / UI (V4)                         │
+│   Market Dashboard • Setup Buckets • Explainability Cards • Analytics  │
+├────────────────────────────────────────────────────────────────────────┤
+│                 LAYER 4: DECISION SUPPORT & RISK (V2/V3)               │
+│   Scanner Engine → Strategy Validator → Risk Engine → Signal Audit     │
+├────────────────────────────────────────────────────────────────────────┤
+│                        LAYER 3: STRATEGIES (V2)                        │
+│               VWAP Pullback  │  Breakout (FCHB)  │  ORB                │
+├────────────────────────────────────────────────────────────────────────┤
+│             LAYER 2: MARKET UNDERSTANDING & DATA (V1 COMPLETE)         │
+│     1M/5M/15M Candles • VWAP, RSI, ATR, Baselines • 4-Test EOD Archiving │
+├────────────────────────────────────────────────────────────────────────┤
+│                    LAYER 1: INFRASTRUCTURE (V1 COMPLETE)               │
+│        PostgreSQL DB • TradingCalendar • 400ms Backfill Queue • Alerts │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Phase 4: Common Engine Validation Standards
+## 4. Current State: Version 1.0 (Data & Market Lifecycle Foundation) `[COMPLETE]`
 
-All calculation engines adhere to the following exact specifications:
+Version 1.0 is the production-grade market data, candle materialization, indicator calculation, EOD reconciliation, raw archiving, and automation engine.
 
-### 1. RSI-14 (Wilder's Smoothing)
-- **Stored on:** `market_candles.rsi_14` (1M, 5M, 15M mandatory).
-- **Prerequisite Gate:** Requires $\ge 42$ consecutive clean 1M candles of today. If $< 42 \to$ returns `null` (never `0.0`).
-- **Seeding:** Simple average for first 14 candles (`avg_gain = sum(gains)/14`, `avg_loss = sum(losses)/14`).
-- **Smoothing:** Wilder's smoothing for subsequent candles (`avg_gain = (prev_avg_gain * 13 + current_gain) / 14`).
-- **Edge Cases:** All gains $\to 100.0$, all losses $\to 0.0$, zero change $\to 50.0$.
-- **Tolerance:** Within 0.1 points vs TradingView RSI(14).
-
-### 2. ATR-14 (Wilder's Smoothing)
-- **Stored on:** `market_candles.atr_14` (1M, 5M, 15M mandatory).
-- **Prerequisite Gate:** Requires $\ge 14$ consecutive clean 1M candles of today **AND** authoritative `prevDayClose` from `stock_prices`. If $< 14$ or `prevDayClose == null` $\to$ returns `null`.
-- **True Range:** `TR = max(high - low, |high - prev_close|, |low - prev_close|)`.
-  - **Previous Close:** For the first candle of the trading day, previous close comes from `stock_prices` (authoritative daily close). For subsequent candles, previous close comes from previous same-timeframe candle close.
-- **Smoothing:** Simple average for first 14 TR values, then Wilder's smoothing (`ATR = (prev_ATR * 13 + current_TR) / 14`).
-- **Tolerance:** Within Rs. 0.05 vs TradingView ATR(14).
-
-### 3. VWAP & Derived Metrics
-- **Stored on:** `market_candles.vwap` (1M calculated, carried forward to 5M/15M).
-- **Prerequisite Gate:** Requires $\ge 1$ candle today with volume $> 0$.
-- **Formula:** `TP = (high + low + close) / 3`, `VWAP = cumulative(TP * volume) / cumulative(volume)`.
-- **Reset:** Resets strictly at 09:15 AM every trading day.
-- **Runtime Derivations:**
-  - `niftyAboveVwap` = `nifty_close > nifty_vwap` (master long switch).
-  - `niftyVwapDirection`: RISING (> +0.05%), FALLING (< -0.05%), FLAT (-0.05% to +0.05%), UNKNOWN (< 4 points).
-  - `vwapProximityPct` = `(stock_close - stock_vwap) / stock_vwap * 100`.
-- **Tolerance:** Within Rs. 0.10 vs Angel One chart VWAP.
-
-### 4. Volume Engine & Baselines
-- **Active-From Market Days Gate:** Evaluates `TradingCalendar.tradingDaysBetween(active_from, today)`. If completed trading days $< 20 \to$ ADV-20, runtime $\text{VOL\_X}$, and participation ratio return `null` (Fail-Closed).
-- **20-Day ADV:** Average daily volume across last 20 trading days from clean `stock_prices.volume` (`volume_daily_baseline.avg_daily_volume_20`).
-- **Time-Normalized Baselines (375 minutes):** Average cumulative volume across last 20 trading days for every minute $0 \dots 374$ from `market_candles` (`volume_time_window_baseline`).
-- **Runtime VOL_X:** `currentCumulativeVolume / baselineCumulativeVolume(currentSessionMinute)`.
-
-### 5. Candle Structure & Guards
-- **Zero Range Guard:** If `high - low <= 0` or `low <= 0`, all ratios are `null`, `strongBullish = false`, `strongBearish = false`.
-- **Ratios:** `bodyRatio = |close - open| / range`, `upperWickRatio = (high - max(open, close)) / range`, `lowerWickRatio = (min(open, close) - low) / range`, `rangePct = (high - low) / close * 100`.
-- **Strong Bullish:** `direction == BULLISH && bodyRatio >= 0.60 && upperWickRatio <= 0.25 && rangePct >= 0.15%`.
-- **Strong Bearish:** `direction == BEARISH && bodyRatio >= 0.60 && lowerWickRatio <= 0.25 && rangePct >= 0.15%`.
+### Verified Capabilities:
+- **Phase 1 (Startup Bootstrap):** 6 fail-closed stages verifying catalog, active NIFTY index, universe seed, runtime settings, and previous-day EOD readiness.
+- **Phase 2 (Pre-Market Pipeline):** 07:00 AM morning maintenance, 08:00 AM catalog & token sync, universe validation, and reference baseline calculation.
+- **Phase 3 (Live Streaming & Ingestion):** Binary SmartStream WebSocket parser, tick deduplication, 1M candle accumulation, and **400ms (2.5 RPS / 150 RPM) paced background queue worker** intercepting `AB1021` in-memory.
+- **Phase 4 (Shared Indicators):** Wilder's RSI-14 ($\ge 42$ clean 1M candles), Wilder's ATR-14 ($\ge 14$ clean 1M candles + `prevDayClose`), Session VWAP (09:15 reset), 375-minute volume baseline curves, runtime $\text{VOL\_X}$, and candle structure ratios.
+- **Phase 5 (Quiescence, Archiving & EOD):** Post-16:00 quiescence disconnect ($\ge 3$ min silence), raw JSON disk archiving (`data/raw-eod/YYYY-MM-DD/SYMBOL.json`), **unified 4-test provider data integrity verification**, **Attempt 1 (17:01 PM) zero-trade confirmation**, hourly retry deferrals (17:00-22:00), and 23:45 session token teardown.
+- **Runtime Admin & Developer Tools:** Swagger UI OpenAPI inspector (`/swagger-ui/index.html`), authenticated SmartAPI proxy (`POST /admin/runtime/broker/smartapi/proxy`), and on-demand EOD reconciliation (`/admin/runtime/eod/reconcile`).
+- **Test Baseline:** **314 unit tests passing** (0 failures, 0 errors, 1 skipped).
 
 ---
 
-## Phase 5: Post-Market Shutdown, Archiving, EOD Reconciliation & Teardown
+## 5. Master Version Roadmap
 
-- **Quiescence Disconnect (16:00 to 17:00):** Evaluated every 5 minutes post-16:00. Disconnects WebSocket only when idle $\ge 3$ minutes. Marks `market-hours` stage `SUCCESS`.
-- **Hourly EOD Reconciliation, 4-Test Provider Integrity Verification & Raw Disk Archiving (17:00 to 23:00):** Executes hourly at 17:00, 18:00, 19:00, 20:00, 21:00, 22:00, and 23:00 (`0 0 17,18,19,20,21,22,23 * * MON-FRI`). Fetches official 1-minute historical candles from SmartAPI, archiving clean JSON responses (`RawBrokerCandleArchive`) to `<runtime.eod.raw-archive-dir>/<YYYY-MM-DD>/<SYMBOL>.json`. Validates provider historical feed integrity using 4 rigorous checks: (1) Session boundary (`09:15` start to `15:29` close), (2) Official Market Quote Day OHLC matching (Open, High, Low, LTP/Close), (3) Total volume ceiling check ($\sum \text{1M Volume} \le \text{quote.tradeVolume}$), and (4) Benchmark index handling. When integrity passes, any absent minute in the provider feed is confirmed as genuine `NO_TRADE_CONFIRMED` immediately on Attempt 1 (17:01 PM), recomputing indicators and completing EOD same-day without unnecessary waiting.
-- **Incremental & Deferred Resolution:** Skips already `COMPLETE`/`REPAIRED` symbols on subsequent attempts. Retains `PARTIAL` status and logs `INFO` without sending false alert emails during intermediate hourly runs (17:00-22:00) if provider data is temporarily lagging or truncated; strictly on the final $\ge$ 23:00 attempt, unresolvable symbols fail the workflow and trigger high-priority alerts. Automatically resolves `runtime.eod.reconciliation_incomplete.<date>` alert when partial count reaches 0.
-- **375-Minute Candle Reconciliation:** Matches local candles against broker API data, repairs missing bars into `market_candles`, updates `eod_data_entry`, and recomputes derived indicators.
-- **Pre-Market Auto-Catchup (08:00 AM):** `PreMarketWorkflowService` automatically executes `reconcilePreviousTradingDay()` before universe sync to catch up any prior-day omissions.
-- **Feed Health & Alert Auto-Resolution:** `FeedHealthService` evaluates tick staleness strictly during live feed window (08:55 - 15:30) on trading days, resolving `runtime.feed_health` outside market hours. Startup recovery alerts auto-resolve once bootstrap is ready.
-- **Session Teardown (23:45):** Scheduled broker session clear to 23:45 (11:45 PM) post-reconciliation, invalidates active broker tokens, and marks `daily-cycle-complete` stage `SUCCESS`.
+```text
+MITHRON MASTER ROADMAP
+
+V1.0 — Market Data & Daily Session Foundation          [COMPLETE ✅]
+  ✓ SmartStream WebSocket ingestion, 1M/5M/15M candles, 400ms paced backfill
+  ✓ Indicators (VWAP, RSI-14, ATR-14, VOL_X, 375m Baselines, Structure)
+  ✓ 4-Test EOD integrity verification & raw JSON disk archiving
+  ✓ 314 passing unit tests & Swagger SmartAPI inspector proxy
+
+  └─► IMMEDIATE POST-V1 ACTION:
+      Expand Universe to Nifty 500 (Starts daily 500-stock data accumulation)
+
+V2.0 — Strategy Intelligence & Real-Time Signals        [NEXT MILESTONE]
+  - Market State Scanner (TRENDING_UP, TRENDING_DOWN, RANGE, BREAKOUT_ENV)
+  - Strategy Framework & Interfaces (Strategies propose; Validator approves)
+  - Core Strategies: VWAP Pullback, FCHB (First Candle High Breakout), ORB (Opening Range Breakout)
+  - Strategy Validator & Signal Audit Trail (Explicit passed/failed reasons)
+
+V3.0 — Risk Engine & Historical Backtesting Laboratory  [RISK + RESEARCH]
+  - Risk & Trade-Plan Engine:
+    • Structural Stop Loss & Invalidation Level
+    • Risk Distance (%) & Extension Guards (Max risk per trade)
+    • Position Sizing & Reward-to-Risk (R:R) targets
+    • Max Daily Loss & Trailing Stop rules
+  - Historical Backtest Engine:
+    • Point-in-time replay using the EXACT same strategy + risk code
+    • Evaluates complete trades across accumulated Nifty 500 dataset
+    • Performance Metrics: Win/Loss rate, Profit Factor, Max Drawdown, MFE/MAE, Expectancy
+
+V4.0 — Professional Web UI & Trader Dashboard           [DEDICATED UI VERSION]
+  - Live Market State & Nifty 500 Universe Overview
+  - Strategy Setup Buckets & Live Signal Cards with "Why is this stock here?" explainability
+  - Interactive Backtest Explorer & Strategy Analytics Charts
+  - Trade Plan Visualizer (Entry, Stop, Target, Risk %)
+  - Stock Search & History Timeline
+
+V5.0 — Trading Engine & Order Execution (SmartAPI)     [ORDER EXECUTION]
+  - SmartAPI Order Service: placeOrder, modifyOrder, cancelOrder
+  - Order Book, Trade Book, and Position Book live synchronization
+  - Live execution integration with Risk Engine (Hard Daily Loss cutoff, Max Exposure)
+  - Emergency Kill Switch (Cancel all pending orders & square-off)
+  - Order Lifecycle Audit Trail (PROPOSED → SUBMITTED → FILLED → CLOSED)
+
+V6.0 — Small-Capital Live Trading & Paper/Live Toggle
+  - Paper Mode vs Live Mode toggle
+  - Live execution with small real capital on proven strategies
+  - Production vs Backtest validation
+```
 
 ---
 
-## Outage & Startup Auto-Catchup Sequencing
+## 6. The Strategy Promotion Pipeline
 
-When the application or network experiences downtime during any part of the day, Mithron automatically catches up missed workflow stages upon restart or network recovery in strict chronological order:
+A strategy never jumps directly into live trading:
 
-1. **Pre-Market Outages (07:00 – 08:55 AM):**
-   - `StartupRecoveryService` triggers `catchUpPreMarketWorkflowsIfDue()`.
-   - If offline at 07:00 AM and started at 08:15 AM: runs `runMorningMaintenance()` (trading-day-init, housekeeping) immediately, followed by `runPreMarketDataPipeline()` (catalog-sync, universe-sync, morning-reference).
-   - If started at 09:00 AM (during market): runs the full pre-market chain in sequence, connects WebSocket, and marks live start `SUCCESS`.
-2. **Live Market Outages & Network Disconnections (09:15 – 15:30):**
-   - WebSocket auto-reconnect runs every 60 seconds (`scheduledRecoverLiveRuntime`).
-   - Closed-minute gap detection and in-memory tick sequence checks scan universe symbols for missing 1-minute bars and enqueue them into `BackfillQueueService`.
-   - Continuous rate-limited queue worker (`backfill-queue-worker` daemon thread) paces REST historical candle fetches at **400ms (2.5 RPS / 150 RPM)**, catching `AB1021` in-memory and immediately resolving un-traded minutes as `NO_TRADE_CONFIRMED` on Attempt 1. All 51 universe symbols drain in **~20.4 seconds flat**.
-   - Recomputes VWAP, RSI, ATR, and volume baselines seamlessly without dropping data.
-3. **Post-Market / EOD Outages (17:00 – 23:45):**
-   - Retries run hourly at 17:00, 18:00, 19:00, 20:00, 21:00, 22:00, and 23:00.
-   - If offline during evening attempts and restarted later that night (e.g., 23:30): `StartupRecoveryService` immediately executes `reconcileTradingDay(today)` on startup.
-   - If offline overnight until the next morning: `PreMarketWorkflowService` executes `reconcilePreviousTradingDay()` at 08:00 AM before evaluating universe tradability.
+```text
+Strategy Development (V2.0)
+        ↓
+Historical Backtest with Risk Engine (V3.0)
+        ↓
+Visual Inspection & Dashboard Analysis (V4.0)
+        ↓
+Trading Engine Integration & Order Simulation (V5.0)
+        ↓
+Small-Capital Live Trading (V6.0)
+```
+*(If live behavior deviates materially from simulation, the strategy is immediately demoted.)*
 
 ---
 
-## Operating Principles and Safety Posture
+## 7. The Core Mental Transition
 
-- Correctness, safety, reliability, and simplicity take priority over trade frequency or performance.
-- Database (`holiday_calendar`, `runtime_setting`, `workflow_status`) is the authoritative source of truth.
-- `TradingCalendar` is the single source of truth for trading day arithmetic (skipping weekends and official holidays).
-- Data quality is an execution gate, not a warning. Unknown must result in fail-closed safety.
-- Secrets and tokens must never be committed or written to logs.
-- The system is restart-safe, auditable, and idempotent.
+```text
+Version 1.0 Answers:
+"What happened in the market, and can I trust the data?"
 
-## Verified Application Shape
+Version 2.0 Answers:
+"What is happening now, and which predefined setups qualify?"
 
-- Root package and entry point: `com.trading.scanner.ScannerApplication`.
-- Build: Maven; Spring Boot parent `3.2.0`; Java 21.
-- Persistence: PostgreSQL + Flyway migrations (`V001` through `V033`).
-- Runtime Developer Tools: Swagger UI OpenAPI inspector (`/swagger-ui/index.html`), SmartAPI authenticated proxy (`POST /admin/runtime/broker/smartapi/proxy`), on-demand EOD reconciliation (`POST /admin/runtime/eod/reconcile`), session lifecycle admin (`/admin/runtime/broker/*`).
-- Test suite: **314 unit tests passing**, 0 failures, 0 errors, 1 skipped.
+Version 3.0 Answers:
+"With full risk rules (stops, targets, sizing), would this setup have made money historically?"
+
+Version 4.0 Answers:
+"How can I clearly visualize, inspect, and monitor setups and historical performance?"
+
+Version 5.0 Answers:
+"How do I submit, modify, cancel, and manage live orders safely with strict risk guardrails?"
+
+Version 6.0 Answers:
+"Does live execution with small real capital match our simulated evidence?"
+```
+
+The human remains in the loop. Mithron's job is to make every decision **systematic, evidence-based, disciplined, and reproducible**.
