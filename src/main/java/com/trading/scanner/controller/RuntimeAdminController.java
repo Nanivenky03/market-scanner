@@ -7,7 +7,9 @@ import com.trading.scanner.model.LiveSimulationSignal;
 import com.trading.scanner.model.MarketMinuteSnapshot;
 import com.trading.scanner.model.RuntimeAlertState;
 import com.trading.scanner.model.RuntimeSetting;
+import com.trading.scanner.service.data.EodReconciliationService;
 import com.trading.scanner.service.engine.DailyStockContextService;
+import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
 import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
 import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
@@ -48,6 +50,7 @@ public class RuntimeAdminController {
     private final MarketCalendarService marketCalendarService;
     private final LiveMarketSnapshotService liveMarketSnapshotService;
     private final WebSocketFrameCaptureService webSocketFrameCaptureService;
+    private final EodReconciliationService eodReconciliationService;
 
     public record UpsertRuntimeSettingRequest(
             @Schema(example = "websocket.connect.time") String key,
@@ -79,6 +82,20 @@ public class RuntimeAdminController {
     @GetMapping("/broker/status")
     public ResponseEntity<AngelOneSessionService.SessionStatus> brokerStatus() {
         return ResponseEntity.ok(angelOneSessionService.sessionStatus());
+    }
+
+    @Operation(summary = "Execute custom SmartAPI request for debugging and inspection", description = "Calls any Angel One SmartAPI endpoint with active session authorization and headers. "
+            + "Allows debugging/inspecting raw responses directly from Swagger UI without writing code.\n\n"
+            + "Examples:\n"
+            + "- Market Quote: `POST` `/rest/secure/angelbroking/market/v1/quote/` with body `{\"mode\": \"FULL\", \"exchangeTokens\": {\"NSE\": [\"3045\"]}}`\n"
+            + "- Historical Candles: `POST` `/rest/secure/angelbroking/historical/v1/getCandleData` with body `{\"exchange\": \"NSE\", \"symboltoken\": \"3045\", \"interval\": \"ONE_MINUTE\", \"fromdate\": \"2026-09-25 09:15\", \"todate\": \"2026-09-25 15:30\"}`\n"
+            + "- Search Scrip: `POST` `/rest/secure/angelbroking/order/v1/searchScrip` with body `{\"exchange\": \"NSE\", \"searchscrip\": \"SBIN\"}`\n"
+            + "- User Profile: `GET` `/rest/secure/angelbroking/user/v1/getProfile`\n"
+            + "- RMS Limits: `GET` `/rest/secure/angelbroking/user/v1/getRMS`")
+    @PostMapping("/broker/smartapi/proxy")
+    public ResponseEntity<AngelOneAuthDtos.SmartApiProxyResponse> executeSmartApiProxy(
+            @RequestBody AngelOneAuthDtos.SmartApiProxyRequest request) {
+        return ResponseEntity.ok(angelOneSessionService.executeSmartApiProxy(request));
     }
 
     @Operation(summary = "Manually connect websocket and subscribe active universe")
@@ -247,5 +264,12 @@ public class RuntimeAdminController {
     @PostMapping("/live-signals/clear")
     public ResponseEntity<LiveSignalService.ClearSignalsResult> clearLiveSignals() {
         return ResponseEntity.ok(liveSignalService.clearSignals());
+    }
+
+    @Operation(summary = "Trigger EOD reconciliation now")
+    @PostMapping("/eod/reconcile")
+    public ResponseEntity<EodReconciliationService.ReconciliationBatchResult> triggerEodReconciliation(
+            @Parameter(description = "Trading date in yyyy-MM-dd format (defaults to previous/current trading day)", example = "2026-09-25") @RequestParam(required = false) LocalDate date) {
+        return ResponseEntity.ok(eodReconciliationService.reconcileTradingDay(date));
     }
 }

@@ -3,7 +3,7 @@
 
 # Log files
 *.log
-data/logs/
+/data/logs/
 
 # Maven
 target/
@@ -50,7 +50,7 @@ out/
 data/market_scanner.db*
 
 # Application data
-data/
+/data/
 
 # Sensitive information
 .env

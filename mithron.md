@@ -1,16 +1,16 @@
 # Mithron: verified project reference
 
-Last audited: 2026-09-23  
+Last audited: 2026-09-25  
 Evidence boundary: this document reflects the checked-out source tree, project guidance in `project_rules.md` and `project_workflow.md`, the authoritative Common Engine Validation Guide, and local unit-test output.
 
 ## Executive conclusion
 
-Mithron Version 1 is a Spring Boot 3.2 / Java 21 safety-first NSE market data ingestion, candle processing, indicator calculation, EOD reconciliation, raw broker archiving, and session automation engine. The source implements robust data pipelines, fail-closed scheduling, WebSocket streaming with post-market quiescence handling, raw broker REST archiving to disk, 375-minute candle reconciliation, high-priority alerting, and daily session teardown. It does **not** contain a live-order placement or position-management implementation; it must therefore not be described as a complete automated live-trading system.
+Mithron Version 1 is a Spring Boot 3.2 / Java 21 safety-first NSE market data ingestion, candle processing, indicator calculation, EOD reconciliation, raw broker archiving, and session automation engine. The source implements robust data pipelines, fail-closed scheduling, WebSocket streaming with post-market quiescence handling, continuous rate-limited queue worker backfill, raw broker REST archiving to disk, 375-minute candle reconciliation, high-priority alerting, and daily session teardown. It does **not** contain a live-order placement or position-management implementation; it must therefore not be described as a complete automated live-trading system.
 
 Version 1 encompasses 5 core phases:
 - **Phase 1:** Application Bootstrapping & Startup Readiness (6 fail-closed stages)
 - **Phase 2:** Daily Pre-Market Pipeline (07:00 AM maintenance, 08:00 AM data preparation, 08:55 AM live start gate)
-- **Phase 3:** Live Market Ingestion & Intraday Gap Repair (08:55 AM to post-market quiescence)
+- **Phase 3:** Live Market Ingestion & Intraday Gap Repair (08:55 AM to post-market quiescence, continuous 400ms rate-limited queue worker)
 - **Phase 4:** Shared Calculation & Common Indicator Engine (VWAP, Wilder's RSI-14, ATR-14, VOL_X, Baselines, Candle Structure)
 - **Phase 5:** Post-Market Shutdown, Raw Broker Archiving, 375-Minute EOD Reconciliation, Alerting & Session Teardown
 
@@ -104,10 +104,32 @@ All calculation engines adhere to the following exact specifications:
 ## Phase 5: Post-Market Shutdown, Archiving, EOD Reconciliation & Teardown
 
 - **Quiescence Disconnect (16:00 to 17:00):** Evaluated every 5 minutes post-16:00. Disconnects WebSocket only when idle $\ge 3$ minutes. Marks `market-hours` stage `SUCCESS`.
-- **Raw Disk Archiving (17:00):** Fetches official broker candles from Angel One REST API and saves raw responses to `<runtime.eod.raw-archive-dir>/<YYYY-MM-DD>/<SYMBOL>.json`.
+- **Hourly EOD Reconciliation, 4-Test Provider Integrity Verification & Raw Disk Archiving (17:00 to 23:00):** Executes hourly at 17:00, 18:00, 19:00, 20:00, 21:00, 22:00, and 23:00 (`0 0 17,18,19,20,21,22,23 * * MON-FRI`). Fetches official 1-minute historical candles from SmartAPI, archiving clean JSON responses (`RawBrokerCandleArchive`) to `<runtime.eod.raw-archive-dir>/<YYYY-MM-DD>/<SYMBOL>.json`. Validates provider historical feed integrity using 4 rigorous checks: (1) Session boundary (`09:15` start to `15:29` close), (2) Official Market Quote Day OHLC matching (Open, High, Low, LTP/Close), (3) Total volume ceiling check ($\sum \text{1M Volume} \le \text{quote.tradeVolume}$), and (4) Benchmark index handling. When integrity passes, any absent minute in the provider feed is confirmed as genuine `NO_TRADE_CONFIRMED` immediately on Attempt 1 (17:01 PM), recomputing indicators and completing EOD same-day without unnecessary waiting.
+- **Incremental & Deferred Resolution:** Skips already `COMPLETE`/`REPAIRED` symbols on subsequent attempts. Retains `PARTIAL` status and logs `INFO` without sending false alert emails during intermediate hourly runs (17:00-22:00) if provider data is temporarily lagging or truncated; strictly on the final $\ge$ 23:00 attempt, unresolvable symbols fail the workflow and trigger high-priority alerts. Automatically resolves `runtime.eod.reconciliation_incomplete.<date>` alert when partial count reaches 0.
 - **375-Minute Candle Reconciliation:** Matches local candles against broker API data, repairs missing bars into `market_candles`, updates `eod_data_entry`, and recomputes derived indicators.
-- **High-Priority Alerting:** Dispatches HIGH-severity email and webhook alerts immediately if any symbol has incomplete data.
-- **Session Teardown:** Invalidates active broker tokens and marks `daily-cycle-complete` stage `SUCCESS`.
+- **Pre-Market Auto-Catchup (08:00 AM):** `PreMarketWorkflowService` automatically executes `reconcilePreviousTradingDay()` before universe sync to catch up any prior-day omissions.
+- **Feed Health & Alert Auto-Resolution:** `FeedHealthService` evaluates tick staleness strictly during live feed window (08:55 - 15:30) on trading days, resolving `runtime.feed_health` outside market hours. Startup recovery alerts auto-resolve once bootstrap is ready.
+- **Session Teardown (23:45):** Scheduled broker session clear to 23:45 (11:45 PM) post-reconciliation, invalidates active broker tokens, and marks `daily-cycle-complete` stage `SUCCESS`.
+
+---
+
+## Outage & Startup Auto-Catchup Sequencing
+
+When the application or network experiences downtime during any part of the day, Mithron automatically catches up missed workflow stages upon restart or network recovery in strict chronological order:
+
+1. **Pre-Market Outages (07:00 – 08:55 AM):**
+   - `StartupRecoveryService` triggers `catchUpPreMarketWorkflowsIfDue()`.
+   - If offline at 07:00 AM and started at 08:15 AM: runs `runMorningMaintenance()` (trading-day-init, housekeeping) immediately, followed by `runPreMarketDataPipeline()` (catalog-sync, universe-sync, morning-reference).
+   - If started at 09:00 AM (during market): runs the full pre-market chain in sequence, connects WebSocket, and marks live start `SUCCESS`.
+2. **Live Market Outages & Network Disconnections (09:15 – 15:30):**
+   - WebSocket auto-reconnect runs every 60 seconds (`scheduledRecoverLiveRuntime`).
+   - Closed-minute gap detection and in-memory tick sequence checks scan universe symbols for missing 1-minute bars and enqueue them into `BackfillQueueService`.
+   - Continuous rate-limited queue worker (`backfill-queue-worker` daemon thread) paces REST historical candle fetches at **400ms (2.5 RPS / 150 RPM)**, catching `AB1021` in-memory and immediately resolving un-traded minutes as `NO_TRADE_CONFIRMED` on Attempt 1. All 51 universe symbols drain in **~20.4 seconds flat**.
+   - Recomputes VWAP, RSI, ATR, and volume baselines seamlessly without dropping data.
+3. **Post-Market / EOD Outages (17:00 – 23:45):**
+   - Retries run hourly at 17:00, 18:00, 19:00, 20:00, 21:00, 22:00, and 23:00.
+   - If offline during evening attempts and restarted later that night (e.g., 23:30): `StartupRecoveryService` immediately executes `reconcileTradingDay(today)` on startup.
+   - If offline overnight until the next morning: `PreMarketWorkflowService` executes `reconcilePreviousTradingDay()` at 08:00 AM before evaluating universe tradability.
 
 ---
 
@@ -125,4 +147,5 @@ All calculation engines adhere to the following exact specifications:
 - Root package and entry point: `com.trading.scanner.ScannerApplication`.
 - Build: Maven; Spring Boot parent `3.2.0`; Java 21.
 - Persistence: PostgreSQL + Flyway migrations (`V001` through `V033`).
+- Runtime Developer Tools: Swagger UI OpenAPI inspector (`/swagger-ui/index.html`), SmartAPI authenticated proxy (`POST /admin/runtime/broker/smartapi/proxy`), on-demand EOD reconciliation (`POST /admin/runtime/eod/reconcile`), session lifecycle admin (`/admin/runtime/broker/*`).
 - Test suite: **314 unit tests passing**, 0 failures, 0 errors, 1 skipped.

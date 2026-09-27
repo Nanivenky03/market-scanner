@@ -1,6 +1,7 @@
 package com.trading.scanner.controller;
 
 import com.trading.scanner.model.MarketMinuteSnapshot;
+import com.trading.scanner.service.data.EodReconciliationService;
 import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
 import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
@@ -15,8 +16,10 @@ import com.trading.scanner.service.runtime.RuntimeSettingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.*;
@@ -34,6 +37,7 @@ class RuntimeAdminControllerTest {
     private MarketCalendarService marketCalendarService;
     private LiveMarketSnapshotService liveMarketSnapshotService;
     private WebSocketFrameCaptureService webSocketFrameCaptureService;
+    private EodReconciliationService eodReconciliationService;
     private RuntimeAdminController controller;
 
     @BeforeEach
@@ -49,6 +53,7 @@ class RuntimeAdminControllerTest {
         marketCalendarService = mock(MarketCalendarService.class);
         liveMarketSnapshotService = mock(LiveMarketSnapshotService.class);
         webSocketFrameCaptureService = mock(WebSocketFrameCaptureService.class);
+        eodReconciliationService = mock(EodReconciliationService.class);
 
         controller = new RuntimeAdminController(
                 runtimeAutomationService,
@@ -61,7 +66,8 @@ class RuntimeAdminControllerTest {
                 angelOneSessionService,
                 marketCalendarService,
                 liveMarketSnapshotService,
-                webSocketFrameCaptureService);
+                webSocketFrameCaptureService,
+                eodReconciliationService);
     }
 
     @Test
@@ -163,5 +169,47 @@ class RuntimeAdminControllerTest {
         assertEquals(200, response.getStatusCode().value());
         assertEquals(1, response.getBody().size());
         assertEquals("WIPRO", response.getBody().get(0).getSymbol());
+    }
+
+    @Test
+    void triggerEodReconciliation_shouldCallServiceAndReturnSummary() {
+        LocalDate date = LocalDate.of(2026, 9, 25);
+        EodReconciliationService.ReconciliationBatchResult batchResult = new EodReconciliationService.ReconciliationBatchResult(
+                date, 10, 8, 1, 1, "Completed reconciliation");
+
+        when(eodReconciliationService.reconcileTradingDay(date)).thenReturn(batchResult);
+
+        var response = controller.triggerEodReconciliation(date);
+
+        assertEquals(200, response.getStatusCode().value());
+        assertEquals(10, response.getBody().symbolsProcessed());
+        assertEquals(date, response.getBody().tradingDate());
+        verify(eodReconciliationService).reconcileTradingDay(date);
+    }
+
+    @Test
+    void executeSmartApiProxy_shouldCallSessionServiceAndReturnResponse() {
+        var request = new com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos.SmartApiProxyRequest(
+                "POST",
+                "/rest/secure/angelbroking/market/v1/quote/",
+                Map.of("mode", "FULL"),
+                Map.of());
+
+        var expectedResponse = new com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos.SmartApiProxyResponse(
+                200,
+                true,
+                "POST",
+                "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/",
+                Map.of("status", true),
+                null);
+
+        when(angelOneSessionService.executeSmartApiProxy(request)).thenReturn(expectedResponse);
+
+        var response = controller.executeSmartApiProxy(request);
+
+        assertEquals(200, response.getStatusCode().value());
+        assertEquals(true, response.getBody().success());
+        assertEquals(200, response.getBody().statusCode());
+        verify(angelOneSessionService).executeSmartApiProxy(request);
     }
 }

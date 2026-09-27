@@ -71,4 +71,39 @@ public final class AngelOneMarketDtos {
                         }
                 }
         }
+
+        public record AngelOneMarketQuoteRequest(
+                        String mode,
+                        java.util.Map<String, List<String>> exchangeTokens) {
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public record AngelOneMarketQuoteResponse(
+                        Boolean status,
+                        String message,
+                        String errorcode,
+                        AngelOneMarketQuoteData data) {
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public record AngelOneMarketQuoteData(
+                        List<AngelOneMarketQuoteItem> fetched,
+                        List<Object> unfetched) {
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public record AngelOneMarketQuoteItem(
+                        String exchange,
+                        String tradingSymbol,
+                        String symbolToken,
+                        Double open,
+                        Double high,
+                        Double low,
+                        Double close,
+                        Double ltp,
+                        Double avgPrice,
+                        Long tradeVolume,
+                        Double totalTradedValue,
+                        Double totalTradedVolume) {
+        }
 }
