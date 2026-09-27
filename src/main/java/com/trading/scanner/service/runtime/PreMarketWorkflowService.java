@@ -47,22 +47,28 @@ public class PreMarketWorkflowService {
     private final RuntimeAutomationProperties runtimeAutomationProperties;
     private final AngelOneProperties angelOneProperties;
     private final TimeProvider timeProvider;
+    private final com.trading.scanner.service.data.EodReconciliationService eodReconciliationService;
 
     private final Object workflowLock = new Object();
 
-        /**
+    /**
      * 07:00 AM Morning Maintenance Chain:
-     * 1. Startup Bootstrap Verification (Fail-closed if runtime-bootstrap-complete is not SUCCESS)
-     * 2. trading-day-init (Checks holiday calendar, updates runtime.process.date; skips if weekend/holiday)
-     * 3. premarket-housekeeping (Purges candles, signals, snapshots beyond retention days & clears memory)
+     * 1. Startup Bootstrap Verification (Fail-closed if runtime-bootstrap-complete
+     * is not SUCCESS)
+     * 2. trading-day-init (Checks holiday calendar, updates runtime.process.date;
+     * skips if weekend/holiday)
+     * 3. premarket-housekeeping (Purges candles, signals, snapshots beyond
+     * retention days & clears memory)
      */
     public WorkflowResult runMorningMaintenance() {
         synchronized (workflowLock) {
             LocalDate today = timeProvider.today();
 
             // Prerequisite: Verify one-time startup bootstrap is complete
-            if (!workflowStatusService.isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE)) {
-                throw new IllegalStateException("Morning maintenance blocked: Startup bootstrap sequence is not complete");
+            if (!workflowStatusService
+                    .isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE)) {
+                throw new IllegalStateException(
+                        "Morning maintenance blocked: Startup bootstrap sequence is not complete");
             }
 
             // Refresh official NSE holiday calendar
@@ -73,8 +79,11 @@ public class PreMarketWorkflowService {
             }
 
             if (!tradingCalendar.isTradingDay(today)) {
-                log.info("Today ({}) is not a trading day (Weekend / NSE Holiday). Skipping daily pre-market workflows.", today);
-                return skipped(WorkflowStatusService.TRADING_DAY_INIT, today, "Non-trading day. Daily workflows skipped.");
+                log.info(
+                        "Today ({}) is not a trading day (Weekend / NSE Holiday). Skipping daily pre-market workflows.",
+                        today);
+                return skipped(WorkflowStatusService.TRADING_DAY_INIT, today,
+                        "Non-trading day. Daily workflows skipped.");
             }
 
             // Step 1: trading-day-init
@@ -86,35 +95,47 @@ public class PreMarketWorkflowService {
             // Step 2: premarket-housekeeping (Chained to trading-day-init)
             executeStage(WorkflowStatusService.PREMARKET_HOUSEKEEPING, today, dayInit.getWorkflowId(), () -> {
                 RuntimeHousekeepingService.HousekeepingResult result = runtimeHousekeepingService.runHousekeeping();
-                return "Housekeeping completed. deletedCandles=" + (result.deletedOneMinuteCandles() + result.deletedFiveMinuteCandles() + result.deletedFifteenMinuteCandles())
+                return "Housekeeping completed. deletedCandles="
+                        + (result.deletedOneMinuteCandles() + result.deletedFiveMinuteCandles()
+                                + result.deletedFifteenMinuteCandles())
                         + ", deletedSignals=" + result.deletedLiveSignals();
             });
 
-            return complete(WorkflowStatusService.PREMARKET_HOUSEKEEPING, today, "Morning maintenance chain completed successfully");
+            return complete(WorkflowStatusService.PREMARKET_HOUSEKEEPING, today,
+                    "Morning maintenance chain completed successfully");
         }
     }
 
     /**
      * 08:00 AM Pre-Market Data Preparation Chain:
-     * 3. premarket-catalog-sync (Catalog download, NIFTY check, session login, token sync)
-     * 4. premarket-universe-sync (Reconcile stock_universe with instrument_master + prior day EOD completeness)
-     * 5. premarket-morning-reference (Compute CPR, ADR, resistance, volume baselines)
+     * 3. premarket-catalog-sync (Catalog download, NIFTY check, session login,
+     * token sync)
+     * 4. premarket-universe-sync (Reconcile stock_universe with instrument_master +
+     * prior day EOD completeness)
+     * 5. premarket-morning-reference (Compute CPR, ADR, resistance, volume
+     * baselines)
      */
     public WorkflowResult runPreMarketDataPipeline() {
         synchronized (workflowLock) {
             LocalDate today = timeProvider.today();
 
             if (!tradingCalendar.isTradingDay(today)) {
-                return skipped(WorkflowStatusService.PREMARKET_CATALOG_SYNC, today, "Non-trading day. Data pipeline skipped.");
+                return skipped(WorkflowStatusService.PREMARKET_CATALOG_SYNC, today,
+                        "Non-trading day. Data pipeline skipped.");
             }
 
             // Prerequisite: Verify both morning maintenance steps succeeded for today
-            if (!workflowStatusService.isSuccessfulActiveDailyWorkflow(WorkflowStatusService.TRADING_DAY_INIT, WorkflowStatusService.PREMARKET_GROUP, today.toString())) {
-                throw new IllegalStateException("Pre-market data pipeline blocked: trading-day-init is not SUCCESS for today (" + today + ")");
+            if (!workflowStatusService.isSuccessfulActiveDailyWorkflow(WorkflowStatusService.TRADING_DAY_INIT,
+                    WorkflowStatusService.PREMARKET_GROUP, today.toString())) {
+                throw new IllegalStateException(
+                        "Pre-market data pipeline blocked: trading-day-init is not SUCCESS for today (" + today + ")");
             }
 
-            if (!workflowStatusService.isSuccessfulActiveDailyWorkflow(WorkflowStatusService.PREMARKET_HOUSEKEEPING, WorkflowStatusService.PREMARKET_GROUP, today.toString())) {
-                throw new IllegalStateException("Pre-market data pipeline blocked: premarket-housekeeping is not SUCCESS for today (" + today + ")");
+            if (!workflowStatusService.isSuccessfulActiveDailyWorkflow(WorkflowStatusService.PREMARKET_HOUSEKEEPING,
+                    WorkflowStatusService.PREMARKET_GROUP, today.toString())) {
+                throw new IllegalStateException(
+                        "Pre-market data pipeline blocked: premarket-housekeeping is not SUCCESS for today (" + today
+                                + ")");
             }
 
             // Step 3: premarket-catalog-sync
@@ -123,7 +144,8 @@ public class PreMarketWorkflowService {
                     throw new IllegalStateException("Angel One provider is disabled");
                 }
 
-                AngelOneInstrumentCatalogSyncService.CatalogSyncResult catalogResult = catalogSyncService.syncNseCatalog();
+                AngelOneInstrumentCatalogSyncService.CatalogSyncResult catalogResult = catalogSyncService
+                        .syncNseCatalog();
                 if (catalogResult == null || catalogResult.importedRecords() == 0 || !catalogResult.niftyImported()) {
                     throw new IllegalStateException("Instrument catalog synchronization failed or missing NIFTY");
                 }
@@ -134,80 +156,104 @@ public class PreMarketWorkflowService {
                 angelOneSessionService.createSessionTokens();
 
                 // Sync active instruments tokens
-                InstrumentTokenSyncService.TokenSyncResult tokenResult = instrumentTokenSyncService.syncActiveInstruments();
+                InstrumentTokenSyncService.TokenSyncResult tokenResult = instrumentTokenSyncService
+                        .syncActiveInstruments();
                 if (tokenResult == null || tokenResult.failed() > 0) {
-                    throw new IllegalStateException("Token synchronization failed. failed=" + (tokenResult != null ? tokenResult.failed() : "null"));
+                    throw new IllegalStateException("Token synchronization failed. failed="
+                            + (tokenResult != null ? tokenResult.failed() : "null"));
                 }
 
-                return "Catalog synced (imported=" + catalogResult.importedRecords() + "), market references verified (" + requiredChanges + "), tokens mapped (" + tokenResult.mapped() + ")";
+                return "Catalog synced (imported=" + catalogResult.importedRecords() + "), market references verified ("
+                        + requiredChanges + "), tokens mapped (" + tokenResult.mapped() + ")";
             });
 
             // Step 4: premarket-universe-sync (Chained to premarket-catalog-sync)
-            WorkflowStatus universeStep = executeStage(WorkflowStatusService.PREMARKET_UNIVERSE_SYNC, today, catalogStep.getWorkflowId(), () -> {
-                List<StockUniverse> universe = stockUniverseRepository.findAll();
-                LocalDate prevDay = tradingCalendar.previousTradingDay(today);
-                List<String> untradableSymbols = new ArrayList<>();
-                int activeCount = 0;
-                int tradableCount = 0;
+            WorkflowStatus universeStep = executeStage(WorkflowStatusService.PREMARKET_UNIVERSE_SYNC, today,
+                    catalogStep.getWorkflowId(), () -> {
+                        LocalDate prevDay = tradingCalendar.previousTradingDay(today);
 
-                for (StockUniverse stock : universe) {
-                    String exchange = stock.getExchange() != null ? stock.getExchange().name() : "NSE";
-                    InstrumentMaster inst = instrumentMasterRepository.findBySymbolAndExchange(stock.getSymbol(), exchange).orElse(null);
+                        // Auto-catchup prior day EOD reconciliation if evening runs were missed or
+                        // incomplete
+                        if (eodReconciliationService != null) {
+                            try {
+                                eodReconciliationService.reconcilePreviousTradingDay();
+                            } catch (Exception ex) {
+                                log.warn("Auto-catchup EOD reconciliation for {} had issues: {}", prevDay,
+                                        ex.getMessage());
+                            }
+                        }
 
-                    // Reconcile with instrument_master
-                    if (inst == null || !Boolean.TRUE.equals(inst.getIsActive())) {
-                        stock.setIsActive(false);
-                        stock.setIsTradable(false);
-                        stockUniverseRepository.save(stock);
-                        continue;
-                    }
+                        List<StockUniverse> universe = stockUniverseRepository.findAll();
+                        List<String> untradableSymbols = new ArrayList<>();
+                        int activeCount = 0;
+                        int tradableCount = 0;
 
-                    if (Boolean.TRUE.equals(stock.getIsActive())) {
-                        activeCount++;
+                        for (StockUniverse stock : universe) {
+                            String exchange = stock.getExchange() != null ? stock.getExchange().name() : "NSE";
+                            InstrumentMaster inst = instrumentMasterRepository
+                                    .findBySymbolAndExchange(stock.getSymbol(), exchange).orElse(null);
 
-                        // EOD Completeness Check for previous trading day
-                        boolean eodComplete = eodDataEntryService.isSuccessful(stock.getSymbol(), exchange, prevDay);
-                        if (!eodComplete) {
-                            if (Boolean.TRUE.equals(stock.getIsTradable())) {
+                            // Reconcile with instrument_master
+                            if (inst == null || !Boolean.TRUE.equals(inst.getIsActive())) {
+                                stock.setIsActive(false);
                                 stock.setIsTradable(false);
                                 stockUniverseRepository.save(stock);
-                                untradableSymbols.add(stock.getSymbol());
+                                continue;
                             }
-                        } else if (Boolean.TRUE.equals(stock.getIsTradable())) {
-                            tradableCount++;
+
+                            if (Boolean.TRUE.equals(stock.getIsActive())) {
+                                activeCount++;
+
+                                // EOD Completeness Check for previous trading day
+                                boolean eodComplete = eodDataEntryService.isSuccessful(stock.getSymbol(), exchange,
+                                        prevDay);
+                                if (!eodComplete) {
+                                    if (Boolean.TRUE.equals(stock.getIsTradable())) {
+                                        stock.setIsTradable(false);
+                                        stockUniverseRepository.save(stock);
+                                        untradableSymbols.add(stock.getSymbol());
+                                    }
+                                } else if (Boolean.TRUE.equals(stock.getIsTradable())) {
+                                    tradableCount++;
+                                }
+                            }
                         }
-                    }
-                }
 
-                if (!untradableSymbols.isEmpty()) {
-                    log.warn("Demoted {} symbols to isTradable=false due to incomplete EOD data for {}: {}",
-                            untradableSymbols.size(), prevDay, String.join(", ", untradableSymbols));
-                }
+                        if (!untradableSymbols.isEmpty()) {
+                            log.warn("Demoted {} symbols to isTradable=false due to incomplete EOD data for {}: {}",
+                                    untradableSymbols.size(), prevDay, String.join(", ", untradableSymbols));
+                        }
 
-                return "Universe reconciled. active=" + activeCount + ", tradable=" + tradableCount + ", eodDemoted=" + untradableSymbols.size();
-            });
+                        return "Universe reconciled. active=" + activeCount + ", tradable=" + tradableCount
+                                + ", eodDemoted=" + untradableSymbols.size();
+                    });
 
             // Step 5: premarket-morning-reference (Chained to premarket-universe-sync)
             executeStage(WorkflowStatusService.PREMARKET_MORNING_REFERENCE, today, universeStep.getWorkflowId(), () -> {
                 LocalDate prevDay = tradingCalendar.previousTradingDay(today);
-                VolumeBaselineService.PreCalculationResult baselineResult = volumeBaselineService.preCalculateForCompletedTradingDay(prevDay);
-                return "Morning baselines pre-calculated for " + prevDay + ". processedSymbols=" + baselineResult.processedSymbols();
+                VolumeBaselineService.PreCalculationResult baselineResult = volumeBaselineService
+                        .preCalculateForCompletedTradingDay(prevDay);
+                return "Morning baselines pre-calculated for " + prevDay + ". processedSymbols="
+                        + baselineResult.processedSymbols();
             });
 
-            return complete(WorkflowStatusService.PREMARKET_MORNING_REFERENCE, today, "Pre-market data preparation pipeline completed successfully");
+            return complete(WorkflowStatusService.PREMARKET_MORNING_REFERENCE, today,
+                    "Pre-market data preparation pipeline completed successfully");
         }
     }
 
     /**
      * 08:55 AM Final Pre-Market Live Start Gate:
-     * 6. premarket-live-start (Verifies all 5 prior steps SUCCESS, connects WebSocket & subscribes)
+     * 6. premarket-live-start (Verifies all 5 prior steps SUCCESS, connects
+     * WebSocket & subscribes)
      */
     public WorkflowResult startLiveRuntime() {
         synchronized (workflowLock) {
             LocalDate today = timeProvider.today();
 
             if (!tradingCalendar.isTradingDay(today)) {
-                return skipped(WorkflowStatusService.PREMARKET_LIVE_START, today, "Non-trading day. Live start skipped.");
+                return skipped(WorkflowStatusService.PREMARKET_LIVE_START, today,
+                        "Non-trading day. Live start skipped.");
             }
 
             if (!runtimeAutomationProperties.getLive().isAutoRun()) {
@@ -224,8 +270,10 @@ public class PreMarketWorkflowService {
                     WorkflowStatusService.PREMARKET_MORNING_REFERENCE);
 
             for (String stage : requiredStages) {
-                if (!workflowStatusService.isSuccessfulActiveDailyWorkflow(stage, WorkflowStatusService.PREMARKET_GROUP, dateStr)) {
-                    throw new IllegalStateException("Live runtime start blocked: prerequisite stage [" + stage + "] is not SUCCESS for today (" + dateStr + ")");
+                if (!workflowStatusService.isSuccessfulActiveDailyWorkflow(stage, WorkflowStatusService.PREMARKET_GROUP,
+                        dateStr)) {
+                    throw new IllegalStateException("Live runtime start blocked: prerequisite stage [" + stage
+                            + "] is not SUCCESS for today (" + dateStr + ")");
                 }
             }
 
@@ -239,6 +287,69 @@ public class PreMarketWorkflowService {
             });
 
             return complete(WorkflowStatusService.PREMARKET_LIVE_START, today, "Live runtime started successfully");
+        }
+    }
+
+    /**
+     * Checks time of day and catches up any missed pre-market workflow stages in
+     * sequence.
+     */
+    public void catchUpPreMarketWorkflowsIfDue() {
+        synchronized (workflowLock) {
+            LocalDate today = timeProvider.today();
+            if (!tradingCalendar.isTradingDay(today)) {
+                return;
+            }
+
+            java.time.LocalTime now = timeProvider.nowDateTime().toLocalTime();
+
+            // 1. Morning Maintenance (due >= 07:00 AM)
+            if (!now.isBefore(java.time.LocalTime.of(7, 0))) {
+                boolean maintenanceDone = workflowStatusService.isSuccessfulActiveDailyWorkflow(
+                        WorkflowStatusService.PREMARKET_HOUSEKEEPING,
+                        WorkflowStatusService.PREMARKET_GROUP,
+                        today.toString());
+                if (!maintenanceDone) {
+                    log.info("Auto-catching up morning maintenance for date={}", today);
+                    try {
+                        runMorningMaintenance();
+                    } catch (Exception ex) {
+                        log.warn("Morning maintenance auto-catchup failed: {}", ex.getMessage(), ex);
+                    }
+                }
+            }
+
+            // 2. Pre-Market Data Pipeline (due >= 08:00 AM)
+            if (!now.isBefore(java.time.LocalTime.of(8, 0))) {
+                boolean pipelineDone = workflowStatusService.isSuccessfulActiveDailyWorkflow(
+                        WorkflowStatusService.PREMARKET_MORNING_REFERENCE,
+                        WorkflowStatusService.PREMARKET_GROUP,
+                        today.toString());
+                if (!pipelineDone) {
+                    log.info("Auto-catching up pre-market data pipeline for date={}", today);
+                    try {
+                        runPreMarketDataPipeline();
+                    } catch (Exception ex) {
+                        log.warn("Pre-market data pipeline auto-catchup failed: {}", ex.getMessage(), ex);
+                    }
+                }
+            }
+
+            // 3. Live Start Gate (due >= 08:55 AM until market close 15:30)
+            if (!now.isBefore(java.time.LocalTime.of(8, 55)) && now.isBefore(java.time.LocalTime.of(15, 30))) {
+                boolean liveStartDone = workflowStatusService.isSuccessfulActiveDailyWorkflow(
+                        WorkflowStatusService.PREMARKET_LIVE_START,
+                        WorkflowStatusService.PREMARKET_GROUP,
+                        today.toString());
+                if (!liveStartDone) {
+                    log.info("Auto-catching up live runtime start for date={}", today);
+                    try {
+                        startLiveRuntime();
+                    } catch (Exception ex) {
+                        log.warn("Live runtime start auto-catchup failed: {}", ex.getMessage(), ex);
+                    }
+                }
+            }
         }
     }
 

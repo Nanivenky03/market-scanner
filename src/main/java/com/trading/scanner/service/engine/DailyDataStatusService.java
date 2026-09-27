@@ -185,16 +185,21 @@ public class DailyDataStatusService {
                                         resolution);
                 }
 
-                Set<LocalDateTime> actualTimes = new HashSet<>();
+                Set<LocalDateTime> sessionActualTimes = new HashSet<>();
 
                 boolean duplicate = false;
                 boolean unfinalized = false;
                 boolean suspect = false;
 
+                LocalDateTime sessionEnd = from.plusMinutes(expected);
+
                 for (MarketCandle candle : candles) {
-                        if (!actualTimes.add(
-                                        candle.getCandleTime())) {
-                                duplicate = true;
+                        if (candle.getCandleTime() != null
+                                        && !candle.getCandleTime().isBefore(from)
+                                        && candle.getCandleTime().isBefore(sessionEnd)) {
+                                if (!sessionActualTimes.add(candle.getCandleTime())) {
+                                        duplicate = true;
+                                }
                         }
 
                         if (!isReleased(candle)
@@ -211,9 +216,10 @@ public class DailyDataStatusService {
                 int noTradeCount = 0;
                 int missing = 0;
 
-                for (LocalDateTime minute = from; !minute.isAfter(to); minute = minute.plusMinutes(1)) {
+                for (int i = 0; i < expected; i++) {
+                        LocalDateTime minute = from.plusMinutes(i);
 
-                        if (actualTimes.contains(minute)) {
+                        if (sessionActualTimes.contains(minute)) {
                                 continue;
                         }
 
@@ -227,7 +233,7 @@ public class DailyDataStatusService {
                         }
                 }
 
-                boolean complete = actualTimes.size()
+                boolean complete = sessionActualTimes.size()
                                 + noTradeCount == expected
                                 && missing == 0
                                 && !duplicate

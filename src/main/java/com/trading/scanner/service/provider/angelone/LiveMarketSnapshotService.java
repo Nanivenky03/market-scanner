@@ -159,15 +159,20 @@ public class LiveMarketSnapshotService {
                         return 0;
                 }
 
-                LocalDateTime latestClosedMinute = now.minusMinutes(1);
-
-                if (latestClosedMinute.toLocalTime()
-                                .isAfter(MARKET_CLOSE)) {
-                        latestClosedMinute = date.atTime(MARKET_CLOSE);
+                LocalTime currentTime = now.toLocalTime();
+                if (currentTime.isBefore(MARKET_OPEN.plusMinutes(1))
+                                || currentTime.isAfter(MARKET_CLOSE.plusMinutes(1))) {
+                        return 0;
                 }
 
-                if (latestClosedMinute.toLocalTime()
-                                .isBefore(MARKET_OPEN)) {
+                LocalDateTime maxClosedMinute = date.atTime(MARKET_CLOSE);
+                LocalDateTime latestClosedMinute = now.minusMinutes(1);
+
+                if (latestClosedMinute.isAfter(maxClosedMinute)) {
+                        latestClosedMinute = maxClosedMinute;
+                }
+
+                if (latestClosedMinute.isBefore(date.atTime(MARKET_OPEN))) {
                         return 0;
                 }
 

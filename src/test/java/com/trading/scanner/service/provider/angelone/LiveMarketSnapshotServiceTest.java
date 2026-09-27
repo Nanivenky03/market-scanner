@@ -801,6 +801,51 @@ class LiveMarketSnapshotServiceTest {
                 verifyNoInteractions(snapshotRepository);
         }
 
+        @Test
+        void checkForClosedMinuteGaps_shouldReturnZeroAtMidnight() {
+                LocalDate date = LocalDate.of(2026, 9, 25);
+                LocalDateTime midnight = date.atTime(0, 0);
+
+                when(timeProvider.nowDateTime()).thenReturn(midnight);
+                when(tradingCalendar.isTradingDay(date)).thenReturn(true);
+
+                int detected = service.checkForClosedMinuteGaps();
+
+                assertEquals(0, detected);
+                verifyNoInteractions(stockUniverseRepository);
+                verifyNoInteractions(eventPublisher);
+        }
+
+        @Test
+        void checkForClosedMinuteGaps_shouldReturnZeroBeforeMarketOpen() {
+                LocalDate date = LocalDate.of(2026, 9, 25);
+                LocalDateTime preMarket = date.atTime(9, 15);
+
+                when(timeProvider.nowDateTime()).thenReturn(preMarket);
+                when(tradingCalendar.isTradingDay(date)).thenReturn(true);
+
+                int detected = service.checkForClosedMinuteGaps();
+
+                assertEquals(0, detected);
+                verifyNoInteractions(stockUniverseRepository);
+                verifyNoInteractions(eventPublisher);
+        }
+
+        @Test
+        void checkForClosedMinuteGaps_shouldReturnZeroAfterMarketClose() {
+                LocalDate date = LocalDate.of(2026, 9, 25);
+                LocalDateTime postMarket = date.atTime(15, 31);
+
+                when(timeProvider.nowDateTime()).thenReturn(postMarket);
+                when(tradingCalendar.isTradingDay(date)).thenReturn(true);
+
+                int detected = service.checkForClosedMinuteGaps();
+
+                assertEquals(0, detected);
+                verifyNoInteractions(stockUniverseRepository);
+                verifyNoInteractions(eventPublisher);
+        }
+
         private LiveFeedState feedState(
                         String symbol,
                         String exchange,

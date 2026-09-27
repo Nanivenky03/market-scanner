@@ -52,7 +52,8 @@ public class MarketScheduler implements SchedulingConfigurer {
 
     @Override
     public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
-        // 1. Dynamic Database-Driven Trigger for Morning Maintenance (Default: 07:00 AM)
+        // 1. Dynamic Database-Driven Trigger for Morning Maintenance (Default: 07:00
+        // AM)
         taskRegistrar.addTriggerTask(
                 this::scheduledMorningMaintenance,
                 triggerContext -> {
@@ -61,7 +62,8 @@ public class MarketScheduler implements SchedulingConfigurer {
                     return safeCronTrigger(cron, zone, "0 0 7 * * MON-FRI").nextExecution(triggerContext);
                 });
 
-        // 2. Dynamic Database-Driven Trigger for Pre-Market Data Pipeline (Default: 08:00 AM)
+        // 2. Dynamic Database-Driven Trigger for Pre-Market Data Pipeline (Default:
+        // 08:00 AM)
         taskRegistrar.addTriggerTask(
                 this::scheduledPreMarketDataPipeline,
                 triggerContext -> {
@@ -79,7 +81,8 @@ public class MarketScheduler implements SchedulingConfigurer {
                     return safeCronTrigger(cron, zone, "0 55 8 * * MON-FRI").nextExecution(triggerContext);
                 });
 
-        // 4. Dynamic Database-Driven Trigger for Minute Rollover (Default: 5s after each minute)
+        // 4. Dynamic Database-Driven Trigger for Minute Rollover (Default: 5s after
+        // each minute)
         taskRegistrar.addTriggerTask(
                 this::scheduledMinuteRollover,
                 triggerContext -> {
@@ -167,7 +170,6 @@ public class MarketScheduler implements SchedulingConfigurer {
         }
     }
 
-
     @Scheduled(fixedDelayString = "${runtime.live.recovery-interval-ms:60000}", initialDelayString = "${runtime.live.recovery-interval-ms:60000}")
     public void scheduledRecoverLiveRuntime() {
         runtimeAutomationService
@@ -207,18 +209,15 @@ public class MarketScheduler implements SchedulingConfigurer {
         marketStateService.scheduledUpdate();
     }
 
-    @Scheduled(cron = "${runtime.schedule.data-completeness-check-cron}", zone = "${runtime.schedule.zone}")
     public void scheduledDataCompletenessCheck() {
         dailyDataStatusService
                 .scheduledCompletenessCheck();
     }
 
-    @Scheduled(cron = "${runtime.schedule.backfill-process-cron}", zone = "${runtime.schedule.zone}")
     public void scheduledBackfillProcess() {
         backfillQueueService.scheduledProcess();
     }
 
-    @Scheduled(cron = "${runtime.schedule.live-gap-check-cron}", zone = "${runtime.schedule.zone}")
     public void scheduledLiveGapCheck() {
         liveMarketSnapshotService
                 .checkForClosedMinuteGaps();

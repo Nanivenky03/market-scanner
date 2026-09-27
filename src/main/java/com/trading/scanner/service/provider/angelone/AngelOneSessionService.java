@@ -1,5 +1,6 @@
 package com.trading.scanner.service.provider.angelone;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.config.provider.AngelOneProperties;
 import com.trading.scanner.service.provider.ProviderException;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 @Slf4j
@@ -21,6 +23,7 @@ public class AngelOneSessionService {
     private final TotpService totpService;
     private final AngelOneApiExecutor angelOneApiExecutor;
     private final TimeProvider timeProvider;
+    private final ObjectMapper objectMapper;
 
     private volatile AngelOneAuthDtos.AngelOneSessionTokens cachedSessionTokens;
     private volatile LocalDateTime lastLoginAt;
@@ -97,6 +100,118 @@ public class AngelOneSessionService {
                 tokens != null && !isBlank(tokens.jwtToken()),
                 tokens != null && !isBlank(tokens.refreshToken()),
                 tokens != null && !isBlank(tokens.feedToken()));
+    }
+
+    public AngelOneAuthDtos.SmartApiProxyResponse executeSmartApiProxy(AngelOneAuthDtos.SmartApiProxyRequest request) {
+        if (request == null || isBlank(request.endpoint())) {
+            return new AngelOneAuthDtos.SmartApiProxyResponse(
+                    400,
+                    false,
+                    request != null ? request.httpMethod() : null,
+                    request != null ? request.endpoint() : null,
+                    null,
+                    "Endpoint path is required (e.g. /rest/secure/angelbroking/market/v1/quote/)");
+        }
+
+        try {
+            validateBaseConfig();
+            AngelOneAuthDtos.AngelOneSessionTokens tokens = createSessionTokens();
+
+            String rawEndpoint = request.endpoint().trim();
+            String targetUrl;
+            if (rawEndpoint.startsWith("http://") || rawEndpoint.startsWith("https://")) {
+                targetUrl = rawEndpoint;
+            } else {
+                String base = properties.baseUrl() != null ? properties.baseUrl().trim()
+                        : "https://apiconnect.angelone.in";
+                if (base.endsWith("/") && rawEndpoint.startsWith("/")) {
+                    targetUrl = base + rawEndpoint.substring(1);
+                } else if (!base.endsWith("/") && !rawEndpoint.startsWith("/")) {
+                    targetUrl = base + "/" + rawEndpoint;
+                } else {
+                    targetUrl = base + rawEndpoint;
+                }
+            }
+
+            String method = (request.httpMethod() != null && !request.httpMethod().isBlank())
+                    ? request.httpMethod().trim().toUpperCase(Locale.ROOT)
+                    : "POST";
+
+            Map<String, String> headers = new LinkedHashMap<>();
+            headers.put("Content-Type", "application/json");
+            headers.put("Accept", "application/json");
+            headers.put("Authorization", "Bearer " + tokens.jwtToken());
+            headers.put("X-UserType", "USER");
+            headers.put("X-SourceID", "WEB");
+            headers.put("X-ClientLocalIP", properties.clientLocalIp());
+            headers.put("X-ClientPublicIP", properties.clientPublicIp());
+            headers.put("X-MACAddress", properties.macAddress());
+            headers.put("X-PrivateKey", properties.apiKey());
+
+            if (request.customHeaders() != null) {
+                headers.putAll(request.customHeaders());
+            }
+
+            String bodyString = null;
+            if (request.payload() != null) {
+                if (request.payload() instanceof String s) {
+                    bodyString = s;
+                } else {
+                    try {
+                        bodyString = objectMapper.writeValueAsString(request.payload());
+                    } catch (Exception ex) {
+                        return new AngelOneAuthDtos.SmartApiProxyResponse(
+                                400,
+                                false,
+                                method,
+                                targetUrl,
+                                null,
+                                "Failed to serialize request payload to JSON: " + ex.getMessage());
+                    }
+                }
+            }
+
+            AngelOneApiExecutor.RawApiResponse rawResponse = angelOneApiExecutor.executeRawRequest(
+                    method,
+                    targetUrl,
+                    headers,
+                    bodyString);
+
+            Object parsedData = null;
+            String rawBody = rawResponse.body();
+            if (rawBody != null && !rawBody.isBlank()) {
+                String trimmed = rawBody.trim();
+                if ((trimmed.startsWith("{") && trimmed.endsWith("}"))
+                        || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+                    try {
+                        parsedData = objectMapper.readValue(trimmed, Object.class);
+                    } catch (Exception ignored) {
+                        parsedData = trimmed;
+                    }
+                } else {
+                    parsedData = trimmed;
+                }
+            }
+
+            boolean isSuccess = rawResponse.statusCode() >= 200 && rawResponse.statusCode() < 300;
+            return new AngelOneAuthDtos.SmartApiProxyResponse(
+                    rawResponse.statusCode(),
+                    isSuccess,
+                    method,
+                    targetUrl,
+                    parsedData,
+                    isSuccess ? null : "Angel One returned HTTP " + rawResponse.statusCode());
+
+        } catch (Exception ex) {
+            log.warn("SmartAPI proxy execution failed for endpoint={}: {}", request.endpoint(), ex.getMessage());
+            return new AngelOneAuthDtos.SmartApiProxyResponse(
+                    500,
+                    false,
+                    request.httpMethod(),
+                    request.endpoint(),
+                    null,
+                    "SmartAPI proxy execution error: " + ex.getMessage());
+        }
     }
 
     private AngelOneAuthDtos.AngelOneSessionTokens createSessionTokensInternal(String totp) {

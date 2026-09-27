@@ -49,11 +49,11 @@ flowchart TD
         C4 --> C5["Candle Structure Ratios & Quality Flags"]
     end
 
-    subgraph Phase5 [Phase 5: Post-Market Shutdown, Archiving, EOD & Teardown - 16:00 to 17:30]
-        P1["16:00-17:00 PM: Conditional Quiescence Disconnect<br/>(3-min silence check → Disconnect → market-hours SUCCESS)"] --> P2["17:00 PM: EOD Historical Fetch & Raw Archiving<br/>(Save raw JSON to data/raw-eod/YYYY-MM-DD/SYMBOL.json)"]
-        P2 --> P3["375-Minute Candle Reconciliation & Indicator Recompute"]
-        P3 --> P4["High-Priority Alerting on Incomplete/Failed EOD"]
-        P4 --> P5["eod-reconciliation SUCCESS → Session Invalidation & daily-cycle-complete SUCCESS"]
+    subgraph Phase5 [Phase 5: Post-Market Shutdown, Archiving, EOD & Teardown - 16:00 to 23:45]
+        P1["16:00-17:00 PM: Conditional Quiescence Disconnect<br/>(3-min silence check → Disconnect → market-hours SUCCESS)"] --> P2["17:00-23:00 PM Hourly: EOD Historical Fetch & Raw Archiving<br/>(Fetch 50 stocks + NIFTY 99926000, Save clean JSON to data/raw-eod/YYYY-MM-DD/SYMBOL.json)"]
+        P2 --> P3["375-Minute Candle Reconciliation & Indicator Recompute<br/>(Skip COMPLETE symbols, defer NO_TRADE_CONFIRMED to >= 23:00 final attempt)"]
+        P3 --> P4["High-Priority Alerting on Incomplete/Failed EOD (Auto-resolves upon completion)"]
+        P4 --> P5["23:45 PM: Session Invalidation & daily-cycle-complete SUCCESS"]
     end
 
     Phase1 --> Phase2
@@ -119,9 +119,9 @@ flowchart TD
    - **`trading-day-init`:** Queries `TradingCalendar` (`holiday_calendar` DB is single source of truth). If holiday/weekend, stops cleanly. If trading day, sets `runtime.process.date = today` and marks `SUCCESS`.
    - **`premarket-housekeeping`:** Purges data older than retention settings and clears memory caches.
 2. **08:00 AM Pre-Market Data Preparation:**
-   - **`premarket-catalog-sync`:** Downloads Angel One catalog, authenticates broker session early, syncs tokens with exponential backoff.
+   - **`premarket-catalog-sync`:** Downloads official Angel One master catalog (143k scrips), maps 2,747 NSE Cash instruments & NIFTY (`99926000`), authenticates broker session early, and verifies broker tokens directly from DB (only queries search API if tokens are missing, avoiding redundant network API calls).
    - **`premarket-universe-sync`:** Reconciles active universe. Checks `eod_data_entry` for the **previous official trading day** (`tradingCalendar.previousTradingDay(today)`); if missing/incomplete for any symbol, demotes `is_tradable = false` while keeping `is_active = true` (streaming continues, trading blocked).
-   - **`premarket-morning-reference`:** Authoritative computation of CPR, ADR, 15-day resistance, 20-day ADV, and 375m volume baseline curves into `DailyStockContext`.
+   - **`premarket-morning-reference`:** Authoritative computation of CPR, ADR, 15-day resistance, 20-day ADV, and 375m volume baseline curves for previous trading day into `DailyStockContext`.
 3. **08:55 AM Live Start Gate:**
    - **`premarket-live-start`:** Strictly verifies all 5 prior daily steps are `SUCCESS` for today's date before connecting the WebSocket and starting the `market-hours` stage.
 
@@ -145,8 +145,11 @@ flowchart TD
 4. **1-Minute Candle Construction & DB Persistence:**
    - `LiveMarketCandleService` accumulates ticks into 1M bars ($xx:xx:00 \dots xx:xx:59$).
    - On minute rollover, finalizes candle, persists to `market_candles`, and updates `market_minute_snapshot`.
-5. **Real-Time Intraday Gap Detection & Repair:**
-   - Missing minute detected $\rightarrow$ fires `IntradayGapDetectedEvent` $\rightarrow$ `IntradayCandleBackfillService` fetches missing 1M candles from Angel One REST API asynchronously without stalling live streaming.
+5. **Real-Time Intraday Gap Detection & Continuous Queue Worker Backfill:**
+   - Missing minute detected $\rightarrow$ fires `IntradayGapDetectedEvent` $\rightarrow$ enqueues job in `backfill_job` table and notifies background worker thread (`backfill-queue-worker`).
+   - The daemon queue worker continuously drains pending jobs at a paced rate of **400ms (2.5 RPS / 150 RPM)**, providing safe headroom below Angel One's 3.0 RPS firewall threshold and intercepting `AB1021` in-memory.
+   - Immediately executes `confirmNoTradeForUnresolvedRange()` on Attempt 1, confirming zero-trade minutes as `NO_TRADE_CONFIRMED` and releasing repaired candles into `market_candles` with recomputed derived indicators in **~20.4 seconds flat** for all 51 universe symbols.
+   - Non-blocking 3-second retry loop for temporary network glitches (`next_attempt_at = now + 3s`).
 6. **15:30 Market Close - Extended Ingestion Policy:**
    - No immediate unsubscription or disconnection at 15:30. Ingestion continues until at least 16:00 to capture post-market settlement ticks and closing adjustments.
 
@@ -197,16 +200,20 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["16:00-17:00 PM: Conditional Quiescence Check<br/>(Runs every 5 min. If idle >= 3 min, disconnect WebSocket)"] --> B["Mark market-hours Workflow SUCCESS"]
-    B --> C["17:00 PM: Scheduled EOD Reconciliation<br/>(Prerequisite: market-hours SUCCESS & WebSocket DISCONNECTED)"]
-    C --> D["Fetch Official Historical Candles from Angel One"]
-    D --> E["Save Raw Broker Response to Disk<br/>(data/raw-eod/YYYY-MM-DD/SYMBOL.json)"]
-    E --> F["Reconcile 375 Candles, Repair Gaps, Confirm No-Trade"]
-    F --> G["Recompute Derived Data (RSI, ATR, VWAP, 5M/15M)"]
-    G --> H{"Any Symbol PARTIAL or Failed?"}
-    H -- Yes --> I["Dispatch HIGH-Priority Email/Webhook Alert<br/>Mark eod-reconciliation FAILED"]
-    H -- No --> J["Mark eod-reconciliation SUCCESS"]
-    J --> K["Session Teardown: Invalidate Angel One Tokens"]
-    K --> L["Mark daily-cycle-complete SUCCESS"]
+    B --> C["17:00, 18:00, 19:00, 20:00, 21:00, 22:00, 23:00 PM: Scheduled Hourly EOD Reconciliation<br/>(Prerequisite: market-hours SUCCESS & WebSocket DISCONNECTED)"]
+    C --> D["Batch Market Quote Fetch (50 Tokens/sec) & 1M Historical Candle Fetch<br/>Save Clean Raw JSON to data/raw-eod/YYYY-MM-DD/SYMBOL.json"]
+    D --> E["4-Test Provider Integrity Verification<br/>(1. Boundary 09:15-15:29, 2. Quote OHLC, 3. Volume Ceiling, 4. Index handling)"]
+    E -- Integrity Passed --> F["Reconcile & Repair Minutes, Confirm NO_TRADE on Omissions<br/>Complete Symbol on Attempt 1 (17:01 PM)"]
+    E -- Integrity Failed / Broker Lag --> G{"Is Final Attempt (>= 23:00)?"}
+    G -- No --> H["Retain PARTIAL Status & Defer Alerts (Hourly Retry 18:00-22:00)"]
+    G -- Yes --> I["Final Attempt Fallback & Evaluation"]
+    F --> J["Recompute Derived Data (RSI, ATR, VWAP, 5M/15M)"]
+    I --> J
+    J --> K{"Any Remaining PARTIAL Symbol?"}
+    K -- Yes (Final Attempt) --> L["Dispatch HIGH-Priority Email/Webhook Alert<br/>Mark eod-reconciliation FAILED"]
+    K -- No --> M["Resolve EOD Alert & Mark eod-reconciliation SUCCESS"]
+    M --> N["23:45 PM Session Teardown: Invalidate Angel One Tokens"]
+    N --> O["Mark daily-cycle-complete SUCCESS"]
 ```
 
 ### Stage Details
@@ -217,24 +224,54 @@ flowchart TD
      - Flushes open candles and disconnects SmartStream WebSocket.
      - Unsubscribes active universe tokens and disables auto-reconnect.
      - Marks `market-hours` workflow stage as `SUCCESS`.
-2. **17:00 PM - EOD Historical Fetch & Raw Archiving (`EodReconciliationService`):**
-   - Scheduled via cron `0 0 17 * * MON-FRI`.
+2. **17:00–23:00 PM Hourly - EOD 4-Test Provider Integrity Verification & Clean Raw Archiving (`EodReconciliationService`):**
+   - Scheduled via cron `0 0 17,18,19,20,21,22,23 * * MON-FRI`.
    - Verifies prerequisite: `market-hours` stage is `SUCCESS` and WebSocket is `DISCONNECTED`.
-   - For every active symbol and `NIFTY`:
-     - Calls Angel One REST API `fetchHistoricalOneMinuteCandles`.
-     - Archives the raw response directly to disk: `<runtime.eod.raw-archive-dir>/<YYYY-MM-DD>/<SYMBOL>.json`.
-3. **375-Minute Candle Matching & Derived Recomputation:**
+   - Incremental processing: skips symbols already `COMPLETE` or `REPAIRED` in `eod_data_entry`.
+   - **Market Quote Session Integrity Check:** First performs batch quote requests via Angel One Quote API (`/rest/secure/angelbroking/market/v1/quote/`) in chunks of 50 symbols.
+     - If local 1M candle sum matches `tradeVolume` and `high`/`low` match: immediately confirms all non-traded minutes as `NO_TRADE_CONFIRMED` and marks symbol `RECONCILED` without fetching 1-minute historical candles.
+     - If mismatch occurs: falls back to calling Angel One REST API `fetchHistoricalOneMinuteCandles`, archiving clean raw responses (`RawBrokerCandleArchive` DTO) to `<runtime.eod.raw-archive-dir>/<YYYY-MM-DD>/<SYMBOL>.json`.
+3. **375-Minute Candle Matching & In-Memory Derived Recomputation:**
    - Matches local 1M candles against provider candles for all 375 market minutes (09:15 to 15:29).
    - Inserts/repairs missing or mismatched candles in `market_candles` with `quality_status = REPAIRED`.
-   - Recomputes derived indicators (`RSI-14`, `ATR-14`, `VWAP`, `5M`, `15M` candles) from the start of the day to ensure full analytical consistency.
-   - Updates `eod_data_entry` and `DailyDataStatusService` completeness status.
-4. **High-Priority Incomplete Data Alerting:**
-   - If any symbol has `status != COMPLETE` or unresolved minutes $> 0$, immediately dispatches a **HIGH-priority email and webhook alert** via `RuntimeAlertService`.
-   - Marks `eod-reconciliation` workflow stage as `FAILED` (fail-closed).
-5. **Session Teardown & Lifecycle Finalization:**
-   - If all symbols reconcile cleanly, marks `eod-reconciliation` as `SUCCESS`.
+   - Purges unconfirmed provisional ghost candles from `market_candles` when broker data confirms `NO_TRADE_CONFIRMED` to maintain 100% data integrity.
+   - Intermediate hourly runs (17:00-22:00) retain `PARTIAL` status for lagging symbols to allow Angel One SmartAPI publishing delay, logging `INFO` progress without sending premature failure alert emails.
+   - Strictly on the final run ($\ge$ 23:00 / 11 PM), remaining unresolved missing bars fail the stage and trigger high-priority alerts.
+   - Recomputes derived indicators (`RSI-14`, `ATR-14`, `VWAP`, `5M`, `15M` candles) using ultra-fast in-memory list operations and batch persistence (`saveAll`), completing all 51 symbols in $< 20$ seconds.
+   - Updates `eod_data_entry` and `DailyDataStatusService` completeness status across the exact 375-minute window (09:15-15:29). Auto-resolves EOD alert upon completion.
+   - Protected against concurrency collisions via `ReentrantLock` (`reconciliationLock.tryLock()`).
+4. **Pre-Market Auto-Catchup (08:00 AM):**
+   - Injected into `PreMarketWorkflowService` to automatically execute `reconcilePreviousTradingDay()` before `premarket-universe-sync` checks previous-day completeness.
+5. **Feed Health & Alert Auto-Resolution:**
+   - `FeedHealthService` evaluates tick staleness strictly during live feed window (`08:55` - `15:30`) on trading days, resolving `runtime.feed_health` outside market hours.
+   - Startup unclean shutdown alert (`runtime.unclean_previous_shutdown`) automatically resolves once application bootstrap is ready outside market hours.
+6. **23:45 PM - Session Teardown & Lifecycle Finalization:**
+   - Scheduled broker session clear to 23:45 post-EOD retries.
    - Executes session teardown: invalidates active Angel One broker session tokens (`angelOneSessionService.clearCachedSession()`).
    - Marks `daily-cycle-complete` workflow stage (group `session`) as `SUCCESS`.
+7. **Comprehensive Outage & Downtime Auto-Catchup:**
+   - **Pre-Market (07:00 – 08:55 AM):** If application is started late (e.g. 08:30 AM), `StartupRecoveryService` triggers `catchUpPreMarketWorkflowsIfDue()`, executing morning maintenance (07:00 AM) and pre-market data pipeline (08:00 AM) in sequence before live start.
+   - **Live Market (09:15 – 15:30):** If application recovers from crash/network drop during market hours, WebSocket reconnects within 60s, `checkForClosedMinuteGaps()` strictly within market hours (`09:16` to `15:30`) scans universe symbols for missing bars, and `BackfillQueueService` continuously pulls 1-minute historical candles from Angel One REST API at 400ms pace to seamlessly backfill gaps, confirm zero-trade minutes on Attempt 1, and recompute indicators. Both `LiveMarketSnapshotService` and `BackfillQueueService` enforce strict market-hours bounding to guarantee no spurious future gap checks trigger outside market hours.
+   - **Post-Market / EOD (17:00 – 23:45):** If application was offline during evening retries and restarts at night, `StartupRecoveryService` runs `reconcileTradingDay(today)` immediately. If offline overnight, `PreMarketWorkflowService` catches up prior day EOD reconciliation at 08:00 AM next morning.
+
+---
+
+## Runtime Admin & Broker Developer Endpoints `[IMPLEMENTED + TESTED]`
+
+The system provides developer inspection and operations endpoints under `/admin/runtime`:
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/admin/runtime/broker/smartapi/proxy` | `POST` | Authenticated SmartAPI proxy inspector to call any broker endpoint (Quote, Historical, Search Scrip, Profile, RMS) with active session headers |
+| `/admin/runtime/broker/warmup` | `POST` | Warm up or refresh broker session tokens |
+| `/admin/runtime/broker/status` | `GET` | Inspect active session token validity and expiration state |
+| `/admin/runtime/broker/clear` | `POST` | Clear cached session tokens |
+| `/admin/runtime/broker/reconcile-startup` | `POST` | Manually run startup state reconciliation |
+| `/admin/runtime/connect-and-subscribe` | `POST` | Manually connect WebSocket and subscribe active universe |
+| `/admin/runtime/flush-and-disconnect` | `POST` | Manually flush live candles and disconnect WebSocket |
+| `/admin/runtime/eod/reconcile` | `POST` | Trigger on-demand 375-minute EOD reconciliation for any trading date |
+| `/admin/runtime/housekeeping/run` | `POST` | Run historical data housekeeping purge on demand |
+| `/admin/runtime/alerts` | `GET` | List all runtime alerts and their current resolution status |
 
 ---
 

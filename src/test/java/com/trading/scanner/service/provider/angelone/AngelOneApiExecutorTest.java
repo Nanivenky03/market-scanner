@@ -69,6 +69,30 @@ class AngelOneApiExecutorTest {
         assertEquals(2, calls.get());
     }
 
+    @Test
+    void executeRawRequest_shouldExecuteGetAndPostDirectly() throws Exception {
+        server.createContext("/api/proxy", exchange -> {
+            String method = exchange.getRequestMethod();
+            String response = "{\"method\":\"" + method + "\"}";
+            exchange.sendResponseHeaders(200, response.length());
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(response.getBytes());
+            }
+        });
+
+        server.start();
+
+        String url = "http://localhost:" + server.getAddress().getPort() + "/api/proxy";
+
+        var postRes = executor.executeRawRequest("POST", url, Map.of("X-Test", "123"), "{\"query\":\"test\"}");
+        assertEquals(200, postRes.statusCode());
+        assertEquals("{\"method\":\"POST\"}", postRes.body());
+
+        var getRes = executor.executeRawRequest("GET", url, Map.of(), null);
+        assertEquals(200, getRes.statusCode());
+        assertEquals("{\"method\":\"GET\"}", getRes.body());
+    }
+
     private void set(String name, Object value) throws Exception {
         Field field = AngelOneApiExecutor.class.getDeclaredField(name);
         field.setAccessible(true);

@@ -25,546 +25,631 @@ import java.util.concurrent.ThreadLocalRandom;
 @RequiredArgsConstructor
 public class AngelOneApiExecutor {
 
-    public enum ApiEndpoint {
-        AUTH_LOGIN,
-        SEARCH_SCRIP,
-        HISTORICAL_CANDLE,
-        INSTRUMENT_MASTER
-    }
-
-    private final ObjectMapper objectMapper;
-
-    @Value("${provider.retry.baseBackoffMs:1000}")
-    private long baseBackoffMs = 1000L;
-
-    @Value("${provider.retry.jitterMaxMs:500}")
-    private long jitterMaxMs = 500L;
-
-    @Value("${provider.timeout:30000}")
-    private long timeoutMs = 30000L;
-
-    @Value("${provider.angelone.rate.auth.ms:1500}")
-    private long authRateMs = 1500L;
-
-    @Value("${provider.angelone.rate.search.ms:500}")
-    private long searchRateMs = 500L;
-
-    @Value("${provider.angelone.rate.historical.ms:500}")
-    private long historicalRateMs = 500L;
-
-    @Value("${provider.angelone.rate.instrument-master.ms:1000}")
-    private long instrumentMasterRateMs = 1000L;
-
-    @Value("${provider.angelone.limit.auth.requests-per-second:1}")
-    private int authRequestsPerSecond = 1;
-
-    @Value("${provider.angelone.limit.search.requests-per-second:2}")
-    private int searchRequestsPerSecond = 2;
-
-    @Value("${provider.angelone.limit.historical.requests-per-second:2}")
-    private int historicalRequestsPerSecond = 2;
-
-    @Value("${provider.angelone.limit.instrument-master.requests-per-second:1}")
-    private int instrumentMasterRequestsPerSecond = 1;
-
-    @Value("${provider.angelone.limit.auth.requests-per-minute:30}")
-    private int authRequestsPerMinute = 30;
-
-    @Value("${provider.angelone.limit.search.requests-per-minute:100}")
-    private int searchRequestsPerMinute = 100;
-
-    @Value("${provider.angelone.limit.historical.requests-per-minute:120}")
-    private int historicalRequestsPerMinute = 120;
-
-    @Value("${provider.angelone.limit.instrument-master.requests-per-minute:30}")
-    private int instrumentMasterRequestsPerMinute = 30;
-
-    @Value("${provider.angelone.retry.auth.max-attempts:2}")
-    private int authMaxAttempts = 2;
-
-    @Value("${provider.angelone.retry.search.max-attempts:3}")
-    private int searchMaxAttempts = 3;
-
-    @Value("${provider.angelone.retry.historical.max-attempts:3}")
-    private int historicalMaxAttempts = 3;
-
-    @Value("${provider.angelone.retry.instrument-master.max-attempts:3}")
-    private int instrumentMasterMaxAttempts = 3;
-
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(20))
-            .build();
-
-    private final Object throttleLock = new Object();
-
-    private final Map<ApiEndpoint, Deque<Long>> requestTimes = new EnumMap<>(ApiEndpoint.class);
-
-    private final Map<ApiEndpoint, Long> lastRequestAt = new EnumMap<>(ApiEndpoint.class);
-
-    public <T> T postJson(
-            ApiEndpoint endpoint,
-            String url,
-            Map<String, String> headers,
-            Object requestBody,
-            Class<T> responseType) {
-
-        String body = postJsonForBody(
-                endpoint,
-                url,
-                headers,
-                requestBody);
-
-        String trimmed = body == null ? "" : body.trim();
-
-        if (trimmed.isBlank()) {
-            throw new ProviderException(
-                    "Angel One API returned empty response");
+        public enum ApiEndpoint {
+                AUTH_LOGIN,
+                SEARCH_SCRIP,
+                HISTORICAL_CANDLE,
+                INSTRUMENT_MASTER,
+                MARKET_DATA_QUOTE
         }
 
-        if (!trimmed.startsWith("{")) {
-            throw new ProviderException(
-                    "Unexpected non-JSON response: "
-                            + abbreviate(trimmed, 200));
-        }
+        private final ObjectMapper objectMapper;
 
-        try {
-            return objectMapper.readValue(
-                    trimmed,
-                    responseType);
-        } catch (Exception ex) {
-            throw new ProviderException(
-                    "Failed to parse Angel One API JSON response",
-                    ex);
-        }
-    }
+        @Value("${provider.retry.baseBackoffMs:1000}")
+        private long baseBackoffMs = 1000L;
 
-    public String postJsonForBody(
-            ApiEndpoint endpoint,
-            String url,
-            Map<String, String> headers,
-            Object requestBody) {
+        @Value("${provider.retry.jitterMaxMs:500}")
+        private long jitterMaxMs = 500L;
 
-        Exception lastException = null;
+        @Value("${provider.timeout:30000}")
+        private long timeoutMs = 30000L;
 
-        int attempts = Math.max(
-                1,
-                maxAttemptsFor(endpoint));
+        @Value("${provider.angelone.rate.auth.ms:1500}")
+        private long authRateMs = 1500L;
 
-        for (int attempt = 1; attempt <= attempts; attempt++) {
+        @Value("${provider.angelone.rate.search.ms:1000}")
+        private long searchRateMs = 1000L;
 
-            try {
-                throttleBeforeRequest(endpoint);
+        @Value("${provider.angelone.rate.historical.ms:400}")
+        private long historicalRateMs = 400L;
 
-                return executePostOnce(
-                        url,
-                        headers,
-                        requestBody);
+        @Value("${provider.angelone.rate.instrument-master.ms:1000}")
+        private long instrumentMasterRateMs = 1000L;
 
-            } catch (RetryableProviderException ex) {
-                lastException = ex;
+        @Value("${provider.angelone.rate.quote.ms:1000}")
+        private long quoteRateMs = 1000L;
 
-                if (attempt < attempts) {
-                    sleepQuietly(
-                            Math.max(
-                                    backoffForAttempt(attempt),
-                                    ex.retryAfterMs()));
+        @Value("${provider.angelone.limit.auth.requests-per-second:1}")
+        private int authRequestsPerSecond = 1;
+
+        @Value("${provider.angelone.limit.search.requests-per-second:1}")
+        private int searchRequestsPerSecond = 1;
+
+        @Value("${provider.angelone.limit.historical.requests-per-second:3}")
+        private int historicalRequestsPerSecond = 3;
+
+        @Value("${provider.angelone.limit.instrument-master.requests-per-second:1}")
+        private int instrumentMasterRequestsPerSecond = 1;
+
+        @Value("${provider.angelone.limit.quote.requests-per-second:1}")
+        private int quoteRequestsPerSecond = 1;
+
+        @Value("${provider.angelone.limit.auth.requests-per-minute:30}")
+        private int authRequestsPerMinute = 30;
+
+        @Value("${provider.angelone.limit.search.requests-per-minute:60}")
+        private int searchRequestsPerMinute = 60;
+
+        @Value("${provider.angelone.limit.historical.requests-per-minute:150}")
+        private int historicalRequestsPerMinute = 150;
+
+        @Value("${provider.angelone.limit.instrument-master.requests-per-minute:30}")
+        private int instrumentMasterRequestsPerMinute = 30;
+
+        @Value("${provider.angelone.limit.quote.requests-per-minute:60}")
+        private int quoteRequestsPerMinute = 60;
+
+        @Value("${provider.angelone.retry.auth.max-attempts:2}")
+        private int authMaxAttempts = 2;
+
+        @Value("${provider.angelone.retry.search.max-attempts:3}")
+        private int searchMaxAttempts = 3;
+
+        @Value("${provider.angelone.retry.historical.max-attempts:5}")
+        private int historicalMaxAttempts = 5;
+
+        @Value("${provider.angelone.retry.instrument-master.max-attempts:3}")
+        private int instrumentMasterMaxAttempts = 3;
+
+        @Value("${provider.angelone.retry.quote.max-attempts:3}")
+        private int quoteMaxAttempts = 3;
+
+        private final HttpClient httpClient = HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(20))
+                        .build();
+
+        private final Object throttleLock = new Object();
+
+        private final Map<ApiEndpoint, Deque<Long>> requestTimes = new EnumMap<>(ApiEndpoint.class);
+
+        private final Map<ApiEndpoint, Long> lastRequestAt = new EnumMap<>(ApiEndpoint.class);
+
+        public <T> T postJson(
+                        ApiEndpoint endpoint,
+                        String url,
+                        Map<String, String> headers,
+                        Object requestBody,
+                        Class<T> responseType) {
+
+                String body = postJsonForBody(
+                                endpoint,
+                                url,
+                                headers,
+                                requestBody);
+
+                String trimmed = body == null ? "" : body.trim();
+
+                if (trimmed.isBlank()) {
+                        throw new ProviderException(
+                                        "Angel One API returned empty response");
                 }
 
-            } catch (ProviderException ex) {
-                throw ex;
-
-            } catch (Exception ex) {
-                lastException = ex;
-
-                if (attempt < attempts) {
-                    sleepQuietly(
-                            backoffForAttempt(attempt));
-                }
-            }
-        }
-
-        throw new ProviderException(
-                "Angel One API request failed after retries for endpoint="
-                        + endpoint,
-                lastException);
-    }
-
-    public String getJsonForBody(
-            ApiEndpoint endpoint,
-            String url,
-            Map<String, String> headers) {
-
-        Exception lastException = null;
-
-        int attempts = Math.max(
-                1,
-                maxAttemptsFor(endpoint));
-
-        for (int attempt = 1; attempt <= attempts; attempt++) {
-
-            try {
-                throttleBeforeRequest(endpoint);
-
-                return executeGetOnce(
-                        url,
-                        headers);
-
-            } catch (RetryableProviderException ex) {
-                lastException = ex;
-
-                if (attempt < attempts) {
-                    sleepQuietly(
-                            Math.max(
-                                    backoffForAttempt(attempt),
-                                    ex.retryAfterMs()));
+                if (!trimmed.startsWith("{")) {
+                        throw new ProviderException(
+                                        "Unexpected non-JSON response: "
+                                                        + abbreviate(trimmed, 200));
                 }
 
-            } catch (ProviderException ex) {
-                throw ex;
-
-            } catch (Exception ex) {
-                lastException = ex;
-
-                if (attempt < attempts) {
-                    sleepQuietly(
-                            backoffForAttempt(attempt));
+                try {
+                        return objectMapper.readValue(
+                                        trimmed,
+                                        responseType);
+                } catch (Exception ex) {
+                        throw new ProviderException(
+                                        "Failed to parse Angel One API JSON response",
+                                        ex);
                 }
-            }
         }
 
-        throw new ProviderException(
-                "Angel One API request failed after retries for endpoint="
-                        + endpoint,
-                lastException);
-    }
+        public String postJsonForBody(
+                        ApiEndpoint endpoint,
+                        String url,
+                        Map<String, String> headers,
+                        Object requestBody) {
 
-    private String executePostOnce(
-            String url,
-            Map<String, String> headers,
-            Object requestBody) throws Exception {
+                Exception lastException = null;
 
-        HttpRequest.Builder request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(
-                        Duration.ofMillis(timeoutMs))
-                .POST(
-                        HttpRequest.BodyPublishers
-                                .ofString(
-                                        objectMapper
-                                                .writeValueAsString(
-                                                        requestBody)));
+                int attempts = Math.max(
+                                1,
+                                maxAttemptsFor(endpoint));
 
-        if (headers != null) {
-            headers.forEach(request::header);
-        }
+                for (int attempt = 1; attempt <= attempts; attempt++) {
 
-        return executeRequest(request);
-    }
+                        try {
+                                throttleBeforeRequest(endpoint);
 
-    private String executeGetOnce(
-            String url,
-            Map<String, String> headers) throws Exception {
+                                return executePostOnce(
+                                                url,
+                                                headers,
+                                                requestBody);
 
-        HttpRequest.Builder request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(
-                        Duration.ofMillis(timeoutMs))
-                .GET();
+                        } catch (RetryableProviderException ex) {
+                                lastException = ex;
 
-        if (headers != null) {
-            headers.forEach(request::header);
-        }
+                                if (attempt < attempts) {
+                                        sleepQuietly(
+                                                        Math.max(
+                                                                        Math.max(
+                                                                                        rateMsFor(endpoint),
+                                                                                        backoffForAttempt(attempt)),
+                                                                        ex.retryAfterMs()));
+                                }
 
-        return executeRequest(request);
-    }
+                        } catch (ProviderException ex) {
+                                throw ex;
 
-    private String executeRequest(
-            HttpRequest.Builder requestBuilder)
-            throws Exception {
+                        } catch (Exception ex) {
+                                lastException = ex;
 
-        HttpResponse<String> response = httpClient.send(
-                requestBuilder.build(),
-                HttpResponse.BodyHandlers.ofString());
-
-        int status = response.statusCode();
-
-        String body = response.body() == null
-                ? ""
-                : response.body().trim();
-
-        String lowerBody = body.toLowerCase(Locale.ROOT);
-
-        long retryAfterMs = retryAfterMillis(
-                response.headers());
-
-        if (status == 429
-                || lowerBody.contains(
-                        "exceeding access rate")) {
-
-            throw new RetryableProviderException(
-                    "Angel One rate limit exceeded",
-                    retryAfterMs);
-        }
-
-        if (status >= 500) {
-            throw new RetryableProviderException(
-                    "Angel One server error: HTTP "
-                            + status,
-                    retryAfterMs);
-        }
-
-        if (status >= 400) {
-            throw new ProviderException(
-                    "Angel One API request failed. status="
-                            + status
-                            + ", body="
-                            + abbreviate(body, 200));
-        }
-
-        return body;
-    }
-
-    private void throttleBeforeRequest(
-            ApiEndpoint endpoint) {
-
-        while (true) {
-            long waitMs;
-
-            synchronized (throttleLock) {
-                long now = System.currentTimeMillis();
-
-                Deque<Long> times = requestTimes.computeIfAbsent(
-                        endpoint,
-                        ignored -> new ArrayDeque<>());
-
-                while (!times.isEmpty()
-                        && times.peekFirst() <= now - 60_000L) {
-                    times.removeFirst();
+                                if (attempt < attempts) {
+                                        sleepQuietly(
+                                                        Math.max(
+                                                                        rateMsFor(endpoint),
+                                                                        backoffForAttempt(attempt)));
+                                }
+                        }
                 }
 
-                long intervalWait = Math.max(
-                        0L,
-                        rateMsFor(endpoint)
-                                - (now
-                                        - lastRequestAt
-                                                .getOrDefault(
+                throw new ProviderException(
+                                "Angel One API request failed after retries for endpoint="
+                                                + endpoint
+                                                + (lastException != null ? " (" + lastException.getMessage() + ")"
+                                                                : ""),
+                                lastException);
+        }
+
+        public String getJsonForBody(
+                        ApiEndpoint endpoint,
+                        String url,
+                        Map<String, String> headers) {
+
+                Exception lastException = null;
+
+                int attempts = Math.max(
+                                1,
+                                maxAttemptsFor(endpoint));
+
+                for (int attempt = 1; attempt <= attempts; attempt++) {
+
+                        try {
+                                throttleBeforeRequest(endpoint);
+
+                                return executeGetOnce(
+                                                url,
+                                                headers);
+
+                        } catch (RetryableProviderException ex) {
+                                lastException = ex;
+
+                                if (attempt < attempts) {
+                                        sleepQuietly(
+                                                        Math.max(
+                                                                        Math.max(
+                                                                                        rateMsFor(endpoint),
+                                                                                        backoffForAttempt(attempt)),
+                                                                        ex.retryAfterMs()));
+                                }
+
+                        } catch (ProviderException ex) {
+                                throw ex;
+
+                        } catch (Exception ex) {
+                                lastException = ex;
+
+                                if (attempt < attempts) {
+                                        sleepQuietly(
+                                                        Math.max(
+                                                                        rateMsFor(endpoint),
+                                                                        backoffForAttempt(attempt)));
+                                }
+                        }
+                }
+
+                throw new ProviderException(
+                                "Angel One API request failed after retries for endpoint="
+                                                + endpoint
+                                                + (lastException != null ? " (" + lastException.getMessage() + ")"
+                                                                : ""),
+                                lastException);
+        }
+
+        public record RawApiResponse(
+                        int statusCode,
+                        String body,
+                        Map<String, java.util.List<String>> headers) {
+        }
+
+        public RawApiResponse executeRawRequest(
+                        String httpMethod,
+                        String url,
+                        Map<String, String> headers,
+                        String requestBody) {
+
+                try {
+                        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                                        .uri(URI.create(url))
+                                        .timeout(Duration.ofMillis(timeoutMs));
+
+                        String method = (httpMethod != null && !httpMethod.isBlank())
+                                        ? httpMethod.trim().toUpperCase(Locale.ROOT)
+                                        : "POST";
+
+                        if ("GET".equalsIgnoreCase(method)) {
+                                builder.GET();
+                        } else if ("DELETE".equalsIgnoreCase(method)) {
+                                builder.DELETE();
+                        } else {
+                                HttpRequest.BodyPublisher publisher = (requestBody != null && !requestBody.isBlank())
+                                                ? HttpRequest.BodyPublishers.ofString(requestBody)
+                                                : HttpRequest.BodyPublishers.noBody();
+                                builder.method(method, publisher);
+                        }
+
+                        if (headers != null) {
+                                headers.forEach(builder::header);
+                        }
+
+                        HttpResponse<String> response = httpClient.send(
+                                        builder.build(),
+                                        HttpResponse.BodyHandlers.ofString());
+
+                        return new RawApiResponse(
+                                        response.statusCode(),
+                                        response.body() != null ? response.body() : "",
+                                        response.headers().map());
+                } catch (Exception ex) {
+                        throw new ProviderException("HTTP request execution failed: " + ex.getMessage(), ex);
+                }
+        }
+
+        private String executePostOnce(
+                        String url,
+                        Map<String, String> headers,
+                        Object requestBody) throws Exception {
+
+                HttpRequest.Builder request = HttpRequest.newBuilder()
+                                .uri(URI.create(url))
+                                .timeout(
+                                                Duration.ofMillis(timeoutMs))
+                                .POST(
+                                                HttpRequest.BodyPublishers
+                                                                .ofString(
+                                                                                objectMapper
+                                                                                                .writeValueAsString(
+                                                                                                                requestBody)));
+
+                if (headers != null) {
+                        headers.forEach(request::header);
+                }
+
+                return executeRequest(request);
+        }
+
+        private String executeGetOnce(
+                        String url,
+                        Map<String, String> headers) throws Exception {
+
+                HttpRequest.Builder request = HttpRequest.newBuilder()
+                                .uri(URI.create(url))
+                                .timeout(
+                                                Duration.ofMillis(timeoutMs))
+                                .GET();
+
+                if (headers != null) {
+                        headers.forEach(request::header);
+                }
+
+                return executeRequest(request);
+        }
+
+        private String executeRequest(
+                        HttpRequest.Builder requestBuilder)
+                        throws Exception {
+
+                HttpResponse<String> response = httpClient.send(
+                                requestBuilder.build(),
+                                HttpResponse.BodyHandlers.ofString());
+
+                int status = response.statusCode();
+
+                String body = response.body() == null
+                                ? ""
+                                : response.body().trim();
+
+                String lowerBody = body.toLowerCase(Locale.ROOT);
+
+                long retryAfterMs = retryAfterMillis(
+                                response.headers());
+
+                if (status == 429
+                                || lowerBody.contains(
+                                                "exceeding access rate")
+                                || lowerBody.contains(
+                                                "too many requests")
+                                || lowerBody.contains(
+                                                "ab1021")) {
+
+                        throw new RetryableProviderException(
+                                        "Angel One rate limit exceeded",
+                                        retryAfterMs);
+                }
+
+                if (status >= 500) {
+                        throw new RetryableProviderException(
+                                        "Angel One server error: HTTP "
+                                                        + status,
+                                        retryAfterMs);
+                }
+
+                if (status >= 400) {
+                        throw new ProviderException(
+                                        "Angel One API request failed. status="
+                                                        + status
+                                                        + ", body="
+                                                        + abbreviate(body, 200));
+                }
+
+                return body;
+        }
+
+        private void throttleBeforeRequest(
+                        ApiEndpoint endpoint) {
+
+                while (true) {
+                        long waitMs;
+
+                        synchronized (throttleLock) {
+                                long now = System.currentTimeMillis();
+
+                                Deque<Long> times = requestTimes.computeIfAbsent(
+                                                endpoint,
+                                                ignored -> new ArrayDeque<>());
+
+                                while (!times.isEmpty()
+                                                && times.peekFirst() <= now - 60_000L) {
+                                        times.removeFirst();
+                                }
+
+                                long intervalWait = Math.max(
+                                                0L,
+                                                rateMsFor(endpoint)
+                                                                - (now
+                                                                                - lastRequestAt
+                                                                                                .getOrDefault(
+                                                                                                                endpoint,
+                                                                                                                0L)));
+
+                                long secondWait = windowWait(
+                                                times,
+                                                now,
+                                                1_000L,
+                                                requestsPerSecondFor(
+                                                                endpoint));
+
+                                long minuteWait = windowWait(
+                                                times,
+                                                now,
+                                                60_000L,
+                                                requestsPerMinuteFor(
+                                                                endpoint));
+
+                                waitMs = Math.max(
+                                                intervalWait,
+                                                Math.max(
+                                                                secondWait,
+                                                                minuteWait));
+
+                                if (waitMs <= 0L) {
+                                        times.addLast(now);
+                                        lastRequestAt.put(
                                                         endpoint,
-                                                        0L)));
+                                                        now);
+                                        return;
+                                }
+                        }
 
-                long secondWait = windowWait(
-                        times,
-                        now,
-                        1_000L,
-                        requestsPerSecondFor(
-                                endpoint));
-
-                long minuteWait = windowWait(
-                        times,
-                        now,
-                        60_000L,
-                        requestsPerMinuteFor(
-                                endpoint));
-
-                waitMs = Math.max(
-                        intervalWait,
-                        Math.max(
-                                secondWait,
-                                minuteWait));
-
-                if (waitMs <= 0L) {
-                    times.addLast(now);
-                    lastRequestAt.put(
-                            endpoint,
-                            now);
-                    return;
+                        sleepQuietly(waitMs);
                 }
-            }
-
-            sleepQuietly(waitMs);
-        }
-    }
-
-    private long windowWait(
-            Deque<Long> times,
-            long now,
-            long windowMs,
-            int limit) {
-
-        if (limit <= 0) {
-            return windowMs;
         }
 
-        long cutoff = now - windowMs;
+        private long windowWait(
+                        Deque<Long> times,
+                        long now,
+                        long windowMs,
+                        int limit) {
 
-        int count = 0;
-        long first = Long.MAX_VALUE;
+                if (limit <= 0) {
+                        return windowMs;
+                }
 
-        for (Long time : times) {
-            if (time > cutoff) {
-                count++;
-                first = Math.min(
-                        first,
-                        time);
-            }
+                long cutoff = now - windowMs;
+
+                int count = 0;
+                long first = Long.MAX_VALUE;
+
+                for (Long time : times) {
+                        if (time > cutoff) {
+                                count++;
+                                first = Math.min(
+                                                first,
+                                                time);
+                        }
+                }
+
+                return count >= limit
+                                ? Math.max(
+                                                1L,
+                                                first + windowMs - now)
+                                : 0L;
         }
 
-        return count >= limit
-                ? Math.max(
-                        1L,
-                        first + windowMs - now)
-                : 0L;
-    }
+        private long retryAfterMillis(
+                        HttpHeaders headers) {
 
-    private long retryAfterMillis(
-            HttpHeaders headers) {
+                String value = headers.firstValue("Retry-After")
+                                .orElse(null);
 
-        String value = headers.firstValue("Retry-After")
-                .orElse(null);
+                if (value == null
+                                || value.isBlank()) {
+                        return 0L;
+                }
 
-        if (value == null
-                || value.isBlank()) {
-            return 0L;
+                try {
+                        return Math.max(
+                                        0L,
+                                        Long.parseLong(
+                                                        value.trim())
+                                                        * 1000L);
+                } catch (NumberFormatException ignored) {
+                }
+
+                try {
+                        long target = ZonedDateTime.parse(
+                                        value,
+                                        DateTimeFormatter.RFC_1123_DATE_TIME)
+                                        .toInstant()
+                                        .toEpochMilli();
+
+                        return Math.max(
+                                        0L,
+                                        target
+                                                        - System.currentTimeMillis());
+
+                } catch (Exception ignored) {
+                        return 0L;
+                }
         }
 
-        try {
-            return Math.max(
-                    0L,
-                    Long.parseLong(
-                            value.trim())
-                            * 1000L);
-        } catch (NumberFormatException ignored) {
+        private long rateMsFor(
+                        ApiEndpoint endpoint) {
+
+                return switch (endpoint) {
+                        case AUTH_LOGIN -> authRateMs;
+                        case SEARCH_SCRIP -> searchRateMs;
+                        case HISTORICAL_CANDLE -> historicalRateMs;
+                        case INSTRUMENT_MASTER ->
+                                instrumentMasterRateMs;
+                        case MARKET_DATA_QUOTE -> quoteRateMs;
+                };
         }
 
-        try {
-            long target = ZonedDateTime.parse(
-                    value,
-                    DateTimeFormatter.RFC_1123_DATE_TIME)
-                    .toInstant()
-                    .toEpochMilli();
+        private int requestsPerSecondFor(
+                        ApiEndpoint endpoint) {
 
-            return Math.max(
-                    0L,
-                    target
-                            - System.currentTimeMillis());
-
-        } catch (Exception ignored) {
-            return 0L;
-        }
-    }
-
-    private long rateMsFor(
-            ApiEndpoint endpoint) {
-
-        return switch (endpoint) {
-            case AUTH_LOGIN -> authRateMs;
-            case SEARCH_SCRIP -> searchRateMs;
-            case HISTORICAL_CANDLE -> historicalRateMs;
-            case INSTRUMENT_MASTER ->
-                instrumentMasterRateMs;
-        };
-    }
-
-    private int requestsPerSecondFor(
-            ApiEndpoint endpoint) {
-
-        return switch (endpoint) {
-            case AUTH_LOGIN ->
-                authRequestsPerSecond;
-            case SEARCH_SCRIP ->
-                searchRequestsPerSecond;
-            case HISTORICAL_CANDLE ->
-                historicalRequestsPerSecond;
-            case INSTRUMENT_MASTER ->
-                instrumentMasterRequestsPerSecond;
-        };
-    }
-
-    private int requestsPerMinuteFor(
-            ApiEndpoint endpoint) {
-
-        return switch (endpoint) {
-            case AUTH_LOGIN ->
-                authRequestsPerMinute;
-            case SEARCH_SCRIP ->
-                searchRequestsPerMinute;
-            case HISTORICAL_CANDLE ->
-                historicalRequestsPerMinute;
-            case INSTRUMENT_MASTER ->
-                instrumentMasterRequestsPerMinute;
-        };
-    }
-
-    private int maxAttemptsFor(
-            ApiEndpoint endpoint) {
-
-        return switch (endpoint) {
-            case AUTH_LOGIN ->
-                authMaxAttempts;
-            case SEARCH_SCRIP ->
-                searchMaxAttempts;
-            case HISTORICAL_CANDLE ->
-                historicalMaxAttempts;
-            case INSTRUMENT_MASTER ->
-                instrumentMasterMaxAttempts;
-        };
-    }
-
-    private long backoffForAttempt(
-            int attempt) {
-
-        long jitter = jitterMaxMs <= 0L
-                ? 0L
-                : ThreadLocalRandom.current()
-                        .nextLong(
-                                jitterMaxMs + 1L);
-
-        long multiplier = 1L << Math.max(0, Math.min(attempt - 1, 10));
-        return (baseBackoffMs * multiplier) + jitter;
-    }
-
-    private void sleepQuietly(
-            long millis) {
-
-        try {
-            Thread.sleep(
-                    Math.max(
-                            1L,
-                            millis));
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-
-            throw new ProviderException(
-                    "Interrupted during Angel One API throttling/retry",
-                    ex);
-        }
-    }
-
-    private String abbreviate(
-            String value,
-            int maxLength) {
-
-        return value == null
-                || value.length() <= maxLength
-                        ? value
-                        : value.substring(
-                                0,
-                                maxLength);
-    }
-
-    private static final class RetryableProviderException
-            extends RuntimeException {
-
-        private final long retryAfterMs;
-
-        private RetryableProviderException(
-                String message,
-                long retryAfterMs) {
-            super(message);
-            this.retryAfterMs = retryAfterMs;
+                return switch (endpoint) {
+                        case AUTH_LOGIN ->
+                                authRequestsPerSecond;
+                        case SEARCH_SCRIP ->
+                                searchRequestsPerSecond;
+                        case HISTORICAL_CANDLE ->
+                                historicalRequestsPerSecond;
+                        case INSTRUMENT_MASTER ->
+                                instrumentMasterRequestsPerSecond;
+                        case MARKET_DATA_QUOTE ->
+                                quoteRequestsPerSecond;
+                };
         }
 
-        private long retryAfterMs() {
-            return retryAfterMs;
+        private int requestsPerMinuteFor(
+                        ApiEndpoint endpoint) {
+
+                return switch (endpoint) {
+                        case AUTH_LOGIN ->
+                                authRequestsPerMinute;
+                        case SEARCH_SCRIP ->
+                                searchRequestsPerMinute;
+                        case HISTORICAL_CANDLE ->
+                                historicalRequestsPerMinute;
+                        case INSTRUMENT_MASTER ->
+                                instrumentMasterRequestsPerMinute;
+                        case MARKET_DATA_QUOTE ->
+                                quoteRequestsPerMinute;
+                };
         }
-    }
+
+        private int maxAttemptsFor(
+                        ApiEndpoint endpoint) {
+
+                return switch (endpoint) {
+                        case AUTH_LOGIN ->
+                                authMaxAttempts;
+                        case SEARCH_SCRIP ->
+                                searchMaxAttempts;
+                        case HISTORICAL_CANDLE ->
+                                historicalMaxAttempts;
+                        case INSTRUMENT_MASTER ->
+                                instrumentMasterMaxAttempts;
+                        case MARKET_DATA_QUOTE ->
+                                quoteMaxAttempts;
+                };
+        }
+
+        private long backoffForAttempt(
+                        int attempt) {
+
+                long jitter = jitterMaxMs <= 0L
+                                ? 0L
+                                : ThreadLocalRandom.current()
+                                                .nextLong(
+                                                                jitterMaxMs + 1L);
+
+                long multiplier = 1L << Math.max(0, Math.min(attempt - 1, 10));
+                return (baseBackoffMs * multiplier) + jitter;
+        }
+
+        private void sleepQuietly(
+                        long millis) {
+
+                try {
+                        Thread.sleep(
+                                        Math.max(
+                                                        1L,
+                                                        millis));
+                } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+
+                        throw new ProviderException(
+                                        "Interrupted during Angel One API throttling/retry",
+                                        ex);
+                }
+        }
+
+        private String abbreviate(
+                        String value,
+                        int maxLength) {
+
+                return value == null
+                                || value.length() <= maxLength
+                                                ? value
+                                                : value.substring(
+                                                                0,
+                                                                maxLength);
+        }
+
+        private static final class RetryableProviderException
+                        extends RuntimeException {
+
+                private final long retryAfterMs;
+
+                private RetryableProviderException(
+                                String message,
+                                long retryAfterMs) {
+                        super(message);
+                        this.retryAfterMs = retryAfterMs;
+                }
+
+                private long retryAfterMs() {
+                        return retryAfterMs;
+                }
+        }
 }

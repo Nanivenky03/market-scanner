@@ -31,8 +31,8 @@ public class InstrumentMasterSyncService {
                     .companyName("NIFTY 50")
                     .instrumentType("INDEX")
                     .segment("INDEX")
-                    .brokerSymbol(null)
-                    .brokerToken(null)
+                    .brokerSymbol("Nifty 50")
+                    .brokerToken("99926000")
                     .isin(null)
                     .metadataSource("REQUIRED_MARKET_REFERENCE")
                     .isActive(true)
@@ -45,6 +45,16 @@ public class InstrumentMasterSyncService {
 
         InstrumentMaster nifty = existing.get();
         boolean changed = false;
+
+        if (!"99926000".equals(nifty.getBrokerToken())) {
+            nifty.setBrokerToken("99926000");
+            changed = true;
+        }
+
+        if (!"Nifty 50".equals(nifty.getBrokerSymbol())) {
+            nifty.setBrokerSymbol("Nifty 50");
+            changed = true;
+        }
 
         if (!"NIFTY 50".equals(nifty.getCompanyName())) {
             nifty.setCompanyName("NIFTY 50");

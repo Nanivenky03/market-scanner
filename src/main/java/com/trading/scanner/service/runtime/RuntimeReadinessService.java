@@ -90,9 +90,12 @@ public class RuntimeReadinessService {
         long dailyPriceRowCount = stockPriceRepository.count();
 
         long historicalOneMinuteCount = marketCandleRepository.countByTimeframe(CandleTimeframe.ONE_MINUTE);
-        long liveOneMinuteCount = marketCandleRepository.countByTimeframeAndSource(CandleTimeframe.ONE_MINUTE, "LIVE_WEBSOCKET");
-        long liveDerivedFiveMinuteCount = marketCandleRepository.countByTimeframeAndSource(CandleTimeframe.FIVE_MINUTE, "DERIVED_FROM_LIVE_ONE_MINUTE");
-        long liveDerivedFifteenMinuteCount = marketCandleRepository.countByTimeframeAndSource(CandleTimeframe.FIFTEEN_MINUTE, "DERIVED_FROM_LIVE_ONE_MINUTE");
+        long liveOneMinuteCount = marketCandleRepository.countByTimeframeAndSource(CandleTimeframe.ONE_MINUTE,
+                "LIVE_WEBSOCKET");
+        long liveDerivedFiveMinuteCount = marketCandleRepository.countByTimeframeAndSource(CandleTimeframe.FIVE_MINUTE,
+                "DERIVED_FROM_LIVE_ONE_MINUTE");
+        long liveDerivedFifteenMinuteCount = marketCandleRepository
+                .countByTimeframeAndSource(CandleTimeframe.FIFTEEN_MINUTE, "DERIVED_FROM_LIVE_ONE_MINUTE");
         long liveSignalCount = liveSimulationSignalRepository.count();
 
         List<MissingBrokerToken> missingBrokerTokens = new ArrayList<>();
@@ -108,15 +111,19 @@ public class RuntimeReadinessService {
 
         AngelOneWebSocketService.Status websocketStatus = angelOneWebSocketService.status();
         boolean bootstrapStatusComplete = workflowStatusService != null
-                && workflowStatusService.isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE);
+                && workflowStatusService
+                        .isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE);
 
         String bootstrapStatus = bootstrapStatusComplete ? "COMPLETE" : "REQUIRED";
 
-        boolean baseDataComplete = bootstrapStatusComplete && requiredPreviousDayEodComplete(today, tradingDay, activeUniverse);
+        boolean baseDataComplete = bootstrapStatusComplete
+                && requiredPreviousDayEodComplete(today, tradingDay, activeUniverse);
         boolean bootstrapReady = bootstrapStatusComplete && baseDataComplete;
 
-        boolean readyForHistoricalData = activeUniverseCount > 0 && instrumentMasterCount > 0 && missingBrokerTokens.isEmpty() && bootstrapReady;
-        boolean readyForLiveRuntime = activeUniverseCount > 0 && instrumentMasterCount > 0 && missingBrokerTokens.isEmpty() && bootstrapReady;
+        boolean readyForHistoricalData = activeUniverseCount > 0 && instrumentMasterCount > 0
+                && missingBrokerTokens.isEmpty() && bootstrapReady;
+        boolean readyForLiveRuntime = activeUniverseCount > 0 && instrumentMasterCount > 0
+                && missingBrokerTokens.isEmpty() && bootstrapReady;
         boolean readyForCloudDeployment = readyForLiveRuntime && runtimeAutomationProperties.getLive().isAutoRun();
 
         return new ReadinessStatus(
@@ -148,7 +155,8 @@ public class RuntimeReadinessService {
 
     @Transactional(readOnly = true)
     public boolean bootstrapReady() {
-        if (workflowStatusService == null || !workflowStatusService.isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE)) {
+        if (workflowStatusService == null || !workflowStatusService
+                .isSuccessfulActiveStartupWorkflow(WorkflowStatusService.RUNTIME_BOOTSTRAP_COMPLETE)) {
             return false;
         }
 
@@ -181,7 +189,8 @@ public class RuntimeReadinessService {
         return !currentTime.isBefore(marketOpen) && currentTime.isBefore(marketClose);
     }
 
-    private boolean requiredPreviousDayEodComplete(LocalDate today, boolean tradingDay, List<StockUniverse> activeUniverse) {
+    private boolean requiredPreviousDayEodComplete(LocalDate today, boolean tradingDay,
+            List<StockUniverse> activeUniverse) {
         if (eodDataEntryService == null) {
             return true;
         }
@@ -195,10 +204,13 @@ public class RuntimeReadinessService {
         }
 
         LocalDate previousTradingDay = tradingCalendar.previousTradingDay(today);
-        Map<String, RequiredSymbol> requiredSymbols = requiredSymbols(activeUniverse);
 
-        for (RequiredSymbol required : requiredSymbols.values()) {
-            if (!eodDataEntryService.isSuccessful(required.symbol(), required.exchange(), previousTradingDay)) {
+        for (StockUniverse stock : activeUniverse) {
+            if (stock == null || stock.getSymbol() == null || stock.getExchange() == null) {
+                return false;
+            }
+            String exchange = stock.getExchange().name();
+            if (!eodDataEntryService.isSuccessful(stock.getSymbol(), exchange, previousTradingDay)) {
                 return false;
             }
         }
@@ -228,8 +240,11 @@ public class RuntimeReadinessService {
         return result;
     }
 
-    public record MissingBrokerToken(String symbol, String exchange) {}
-    private record RequiredSymbol(String symbol, String exchange) {}
+    public record MissingBrokerToken(String symbol, String exchange) {
+    }
+
+    private record RequiredSymbol(String symbol, String exchange) {
+    }
 
     public record ReadinessStatus(
             LocalDate businessDate,
@@ -255,5 +270,6 @@ public class RuntimeReadinessService {
             boolean bootstrapReady,
             boolean readyForHistoricalData,
             boolean readyForLiveRuntime,
-            boolean readyForCloudDeployment) {}
+            boolean readyForCloudDeployment) {
+    }
 }

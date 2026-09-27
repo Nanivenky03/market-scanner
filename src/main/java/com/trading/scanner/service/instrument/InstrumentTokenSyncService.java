@@ -24,601 +24,618 @@ import java.util.Map;
 @Service
 public class InstrumentTokenSyncService {
 
-    private static final String NIFTY_SYMBOL = "NIFTY";
-    private static final String NSE = "NSE";
+        private static final String NIFTY_SYMBOL = "NIFTY";
+        private static final String NSE = "NSE";
 
-    private final InstrumentMasterRepository instrumentMasterRepository;
+        private final InstrumentMasterRepository instrumentMasterRepository;
 
-    private final StockUniverseRepository stockUniverseRepository;
+        private final StockUniverseRepository stockUniverseRepository;
 
-    private final AngelOneProperties angelOneProperties;
+        private final AngelOneProperties angelOneProperties;
 
-    private final AngelOneSessionService angelOneSessionService;
+        private final AngelOneSessionService angelOneSessionService;
 
-    private final AngelOneApiExecutor angelOneApiExecutor;
+        private final AngelOneApiExecutor angelOneApiExecutor;
 
-    private final SymbolAliasService symbolAliasService;
+        private final SymbolAliasService symbolAliasService;
 
-    private final com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService;
+        private final com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService;
 
-    @Autowired
-    public InstrumentTokenSyncService(
-            InstrumentMasterRepository instrumentMasterRepository,
-            StockUniverseRepository stockUniverseRepository,
-            AngelOneProperties angelOneProperties,
-            AngelOneSessionService angelOneSessionService,
-            AngelOneApiExecutor angelOneApiExecutor,
-            SymbolAliasService symbolAliasService,
-            @Autowired(required = false) com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService) {
+        @Autowired
+        public InstrumentTokenSyncService(
+                        InstrumentMasterRepository instrumentMasterRepository,
+                        StockUniverseRepository stockUniverseRepository,
+                        AngelOneProperties angelOneProperties,
+                        AngelOneSessionService angelOneSessionService,
+                        AngelOneApiExecutor angelOneApiExecutor,
+                        SymbolAliasService symbolAliasService,
+                        @Autowired(required = false) com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService) {
 
-        this.instrumentMasterRepository = instrumentMasterRepository;
-        this.stockUniverseRepository = stockUniverseRepository;
-        this.angelOneProperties = angelOneProperties;
-        this.angelOneSessionService = angelOneSessionService;
-        this.angelOneApiExecutor = angelOneApiExecutor;
-        this.symbolAliasService = symbolAliasService;
-        this.angelOneTickParserService = angelOneTickParserService;
-    }
-
-    /*
-     * Backward-compatible constructor for existing tests.
-     */
-    public InstrumentTokenSyncService(
-            InstrumentMasterRepository instrumentMasterRepository,
-            AngelOneProperties angelOneProperties,
-            AngelOneSessionService angelOneSessionService,
-            AngelOneApiExecutor angelOneApiExecutor,
-            SymbolAliasService symbolAliasService) {
-
-        this(
-                instrumentMasterRepository,
-                null,
-                angelOneProperties,
-                angelOneSessionService,
-                angelOneApiExecutor,
-                symbolAliasService,
-                null);
-    }
-
-    @Transactional
-    public TokenSyncResult syncActiveInstruments() {
-        if (!angelOneProperties.enabled()) {
-            return new TokenSyncResult(
-                    0,
-                    0,
-                    0,
-                    0,
-                    List.of(),
-                    "Angel One provider is disabled");
+                this.instrumentMasterRepository = instrumentMasterRepository;
+                this.stockUniverseRepository = stockUniverseRepository;
+                this.angelOneProperties = angelOneProperties;
+                this.angelOneSessionService = angelOneSessionService;
+                this.angelOneApiExecutor = angelOneApiExecutor;
+                this.symbolAliasService = symbolAliasService;
+                this.angelOneTickParserService = angelOneTickParserService;
         }
 
-        return syncAngelOneTokens(false);
-    }
+        /*
+         * Backward-compatible constructor for existing tests.
+         */
+        public InstrumentTokenSyncService(
+                        InstrumentMasterRepository instrumentMasterRepository,
+                        AngelOneProperties angelOneProperties,
+                        AngelOneSessionService angelOneSessionService,
+                        AngelOneApiExecutor angelOneApiExecutor,
+                        SymbolAliasService symbolAliasService) {
 
-    @Transactional
-    public TokenSyncResult syncAngelOneTokens(
-            boolean onlyMissing) {
-
-        if (!angelOneProperties.enabled()) {
-            throw new ProviderException(
-                    "Angel One provider is disabled. Set ANGELONE_ENABLED=true");
+                this(
+                                instrumentMasterRepository,
+                                null,
+                                angelOneProperties,
+                                angelOneSessionService,
+                                angelOneApiExecutor,
+                                symbolAliasService,
+                                null);
         }
 
-        List<InstrumentMaster> requiredInstruments = requiredInstruments();
-
-        List<InstrumentMaster> targets = requiredInstruments.stream()
-                .filter(instrument -> !onlyMissing
-                        || isBlank(
-                                instrument.getBrokerToken()))
-                .toList();
-
-        if (targets.isEmpty()) {
-            return new TokenSyncResult(
-                    requiredInstruments.size(),
-                    0,
-                    0,
-                    0,
-                    List.of(),
-                    "All required instruments already have broker tokens");
-        }
-
-        String jwt = angelOneSessionService
-                .createSessionTokens()
-                .jwtToken();
-
-        int mapped = 0;
-        int failed = 0;
-        int unchanged = 0;
-
-        List<String> unmapped = new ArrayList<>();
-
-        for (InstrumentMaster instrument : targets) {
-            try {
-                SearchResult resolved = resolveWithRetry(
-                        jwt,
-                        instrument);
-
-                if (resolved == null) {
-                    failed++;
-                    unmapped.add(
-                            instrument.getSymbol());
-                    continue;
+        @Transactional
+        public TokenSyncResult syncActiveInstruments() {
+                if (!angelOneProperties.enabled()) {
+                        return new TokenSyncResult(
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        List.of(),
+                                        "Angel One provider is disabled");
                 }
 
-                if (apply(
-                        instrument,
-                        resolved)) {
+                return syncAngelOneTokens(true);
+        }
 
-                    instrumentMasterRepository.save(
-                            instrument);
+        @Transactional
+        public TokenSyncResult syncAngelOneTokens(
+                        boolean onlyMissing) {
 
-                    mapped++;
-                } else {
-                    unchanged++;
+                if (!angelOneProperties.enabled()) {
+                        throw new ProviderException(
+                                        "Angel One provider is disabled. Set ANGELONE_ENABLED=true");
                 }
 
-                sleepQuietly(200L);
+                List<InstrumentMaster> requiredInstruments = requiredInstruments();
 
-            } catch (Exception ex) {
-                failed++;
+                List<InstrumentMaster> targets = requiredInstruments.stream()
+                                .filter(instrument -> !onlyMissing
+                                                || isBlank(
+                                                                instrument.getBrokerToken()))
+                                .toList();
 
-                unmapped.add(
-                        instrument.getSymbol());
-
-                log.warn(
-                        "Token sync failed for symbol={} exchange={}: {}",
-                        instrument.getSymbol(),
-                        instrument.getExchange(),
-                        ex.getMessage());
-            }
-        }
-
-        if (mapped > 0 && angelOneTickParserService != null) {
-            angelOneTickParserService.refreshCache();
-        }
-
-        log.info(
-                "Angel One required-token sync completed. total={} attempted={} mapped={} unchanged={} failed={}",
-                requiredInstruments.size(),
-                targets.size(),
-                mapped,
-                unchanged,
-                failed);
-
-        return new TokenSyncResult(
-                requiredInstruments.size(),
-                targets.size(),
-                mapped,
-                failed,
-                unmapped,
-                "Required instrument token sync completed");
-    }
-
-    private List<InstrumentMaster> requiredInstruments() {
-        if (stockUniverseRepository == null) {
-            return instrumentMasterRepository
-                    .findByIsActiveTrueOrderBySymbolAsc();
-        }
-
-        Map<String, InstrumentMaster> result = new LinkedHashMap<>();
-
-        List<StockUniverse> activeStocks = stockUniverseRepository
-                .findByIsActiveTrueOrderBySymbolAsc();
-
-        if (activeStocks != null) {
-            for (StockUniverse stock : activeStocks) {
-                if (stock == null
-                        || stock.getSymbol() == null
-                        || stock.getExchange() == null) {
-                    continue;
+                if (targets.isEmpty()) {
+                        return new TokenSyncResult(
+                                        requiredInstruments.size(),
+                                        0,
+                                        0,
+                                        0,
+                                        List.of(),
+                                        "All required instruments already have broker tokens");
                 }
 
-                String symbol = normalize(stock.getSymbol());
+                String jwt = angelOneSessionService
+                                .createSessionTokens()
+                                .jwtToken();
 
-                String exchange = normalize(
-                        stock.getExchange().name());
+                int mapped = 0;
+                int failed = 0;
+                int unchanged = 0;
+
+                List<String> unmapped = new ArrayList<>();
+
+                for (InstrumentMaster instrument : targets) {
+                        try {
+                                SearchResult resolved = resolveWithRetry(
+                                                jwt,
+                                                instrument);
+
+                                if (resolved == null) {
+                                        if (isBlank(instrument.getBrokerToken())) {
+                                                failed++;
+                                                unmapped.add(instrument.getSymbol());
+                                                log.warn("Token resolution failed (no existing token) for symbol={} exchange={}",
+                                                                instrument.getSymbol(), instrument.getExchange());
+                                        } else {
+                                                unchanged++;
+                                                log.info("Token search returned no match for symbol={} exchange={}, retaining existing token={}",
+                                                                instrument.getSymbol(), instrument.getExchange(),
+                                                                instrument.getBrokerToken());
+                                        }
+                                        continue;
+                                }
+
+                                if (apply(
+                                                instrument,
+                                                resolved)) {
+
+                                        instrumentMasterRepository.save(
+                                                        instrument);
+
+                                        mapped++;
+                                } else {
+                                        unchanged++;
+                                }
+
+                                sleepQuietly(200L);
+
+                        } catch (Exception ex) {
+                                if (isBlank(instrument.getBrokerToken())) {
+                                        failed++;
+                                        unmapped.add(instrument.getSymbol());
+                                        log.warn("Token sync failed for symbol={} exchange={}: {}",
+                                                        instrument.getSymbol(), instrument.getExchange(),
+                                                        ex.getMessage());
+                                } else {
+                                        unchanged++;
+                                        log.info("Token search exception for symbol={} exchange={}, retaining existing token={}: {}",
+                                                        instrument.getSymbol(), instrument.getExchange(),
+                                                        instrument.getBrokerToken(), ex.getMessage());
+                                }
+                        }
+                }
+
+                if (mapped > 0 && angelOneTickParserService != null) {
+                        angelOneTickParserService.refreshCache();
+                }
+
+                log.info(
+                                "Angel One required-token sync completed. total={} attempted={} mapped={} unchanged={} failed={}",
+                                requiredInstruments.size(),
+                                targets.size(),
+                                mapped,
+                                unchanged,
+                                failed);
+
+                return new TokenSyncResult(
+                                requiredInstruments.size(),
+                                targets.size(),
+                                mapped,
+                                failed,
+                                unmapped,
+                                "Required instrument token sync completed");
+        }
+
+        private List<InstrumentMaster> requiredInstruments() {
+                if (stockUniverseRepository == null) {
+                        return instrumentMasterRepository
+                                        .findByIsActiveTrueOrderBySymbolAsc();
+                }
+
+                Map<String, InstrumentMaster> result = new LinkedHashMap<>();
+
+                List<StockUniverse> activeStocks = stockUniverseRepository
+                                .findByIsActiveTrueOrderBySymbolAsc();
+
+                if (activeStocks != null) {
+                        for (StockUniverse stock : activeStocks) {
+                                if (stock == null
+                                                || stock.getSymbol() == null
+                                                || stock.getExchange() == null) {
+                                        continue;
+                                }
+
+                                String symbol = normalize(stock.getSymbol());
+
+                                String exchange = normalize(
+                                                stock.getExchange().name());
+
+                                instrumentMasterRepository
+                                                .findBySymbolAndExchange(
+                                                                symbol,
+                                                                exchange)
+                                                .ifPresent(instrument -> result.putIfAbsent(
+                                                                exchange + "|" + symbol,
+                                                                instrument));
+                        }
+                }
 
                 instrumentMasterRepository
-                        .findBySymbolAndExchange(
-                                symbol,
-                                exchange)
-                        .ifPresent(instrument -> result.putIfAbsent(
-                                exchange + "|" + symbol,
-                                instrument));
-            }
+                                .findBySymbolAndExchange(
+                                                NIFTY_SYMBOL,
+                                                NSE)
+                                .ifPresent(instrument -> result.putIfAbsent(
+                                                NSE + "|" + NIFTY_SYMBOL,
+                                                instrument));
+
+                return new ArrayList<>(
+                                result.values());
         }
 
-        instrumentMasterRepository
-                .findBySymbolAndExchange(
-                        NIFTY_SYMBOL,
-                        NSE)
-                .ifPresent(instrument -> result.putIfAbsent(
-                        NSE + "|" + NIFTY_SYMBOL,
-                        instrument));
+        private SearchResult resolveWithRetry(
+                        String jwt,
+                        InstrumentMaster instrument) {
 
-        return new ArrayList<>(
-                result.values());
-    }
+                for (int attempt = 1; attempt <= 3; attempt++) {
 
-    private SearchResult resolveWithRetry(
-            String jwt,
-            InstrumentMaster instrument) {
+                        SearchResult result = searchAndResolve(
+                                        jwt,
+                                        instrument);
 
-        for (int attempt = 1; attempt <= 3; attempt++) {
+                        if (result != null) {
+                                return result;
+                        }
 
-            SearchResult result = searchAndResolve(
-                    jwt,
-                    instrument);
+                        sleepQuietly(
+                                        250L * attempt);
+                }
 
-            if (result != null) {
-                return result;
-            }
-
-            sleepQuietly(
-                    250L * attempt);
+                return null;
         }
 
-        return null;
-    }
+        private SearchResult searchAndResolve(
+                        String jwt,
+                        InstrumentMaster instrument) {
 
-    private SearchResult searchAndResolve(
-            String jwt,
-            InstrumentMaster instrument) {
+                String lookup = symbolAliasService
+                                .resolveLookupSymbol(
+                                                instrument.getSymbol());
 
-        String lookup = symbolAliasService
-                .resolveLookupSymbol(
-                        instrument.getSymbol());
+                AngelOneMarketDtos.AngelOneSearchScripResponse response = callSearchScrip(
+                                jwt,
+                                instrument.getExchange(),
+                                lookup);
 
-        AngelOneMarketDtos.AngelOneSearchScripResponse response = callSearchScrip(
-                jwt,
-                instrument.getExchange(),
-                lookup);
+                if (response == null
+                                || !Boolean.TRUE.equals(
+                                                response.status())
+                                || response.data() == null) {
+                        return null;
+                }
 
-        if (response == null
-                || !Boolean.TRUE.equals(
-                        response.status())
-                || response.data() == null) {
-            return null;
+                String expected = normalizeComparison(lookup);
+
+                return response.data()
+                                .stream()
+                                .filter(item -> item != null
+                                                && instrument
+                                                                .getExchange()
+                                                                .equalsIgnoreCase(
+                                                                                item.exchange()))
+                                .filter(item -> matchesInstrument(
+                                                instrument,
+                                                expected,
+                                                item))
+                                .findFirst()
+                                .map(SearchResult::new)
+                                .orElse(null);
         }
 
-        String expected = normalizeComparison(lookup);
+        private boolean matchesInstrument(
+                        InstrumentMaster instrument,
+                        String expected,
+                        AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem item) {
 
-        return response.data()
-                .stream()
-                .filter(item -> item != null
-                        && instrument
-                                .getExchange()
-                                .equalsIgnoreCase(
-                                        item.exchange()))
-                .filter(item -> matchesInstrument(
-                        instrument,
-                        expected,
-                        item))
-                .findFirst()
-                .map(SearchResult::new)
-                .orElse(null);
-    }
+                String tradingSymbol = normalizeComparison(
+                                item.tradingsymbol());
 
-    private boolean matchesInstrument(
-            InstrumentMaster instrument,
-            String expected,
-            AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem item) {
+                boolean exactMatch = expected.equals(tradingSymbol)
+                                || (expected + "EQ")
+                                                .equals(tradingSymbol);
 
-        String tradingSymbol = normalizeComparison(
-                item.tradingsymbol());
+                if (exactMatch) {
+                        return true;
+                }
 
-        boolean exactMatch = expected.equals(tradingSymbol)
-                || (expected + "EQ")
-                        .equals(tradingSymbol);
+                if (NIFTY_SYMBOL.equalsIgnoreCase(instrument.getSymbol())) {
+                        return "99926000".equals(item.symboltoken())
+                                        || "NIFTY 50".equalsIgnoreCase(item.tradingsymbol())
+                                        || "Nifty 50".equalsIgnoreCase(item.tradingsymbol())
+                                        || "NIFTY".equalsIgnoreCase(item.tradingsymbol());
+                }
 
-        if (exactMatch) {
-            return true;
+                boolean indexInstrument = "INDEX".equalsIgnoreCase(
+                                instrument.getInstrumentType())
+                                || "INDEX".equalsIgnoreCase(
+                                                instrument.getSegment());
+
+                return indexInstrument
+                                && (tradingSymbol.contains(expected)
+                                                || expected.contains(tradingSymbol));
         }
 
-        boolean indexInstrument = "INDEX".equalsIgnoreCase(
-                instrument.getInstrumentType())
-                || "INDEX".equalsIgnoreCase(
-                        instrument.getSegment());
+        private boolean apply(
+                        InstrumentMaster instrument,
+                        SearchResult result) {
 
-        return indexInstrument
-                && (tradingSymbol.contains(expected)
-                        || expected.contains(tradingSymbol));
-    }
+                AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem item = result.item();
 
-    private boolean apply(
-            InstrumentMaster instrument,
-            SearchResult result) {
+                boolean changed = false;
 
-        AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem item = result.item();
+                changed |= set(
+                                instrument.getBrokerSymbol(),
+                                item.tradingsymbol(),
+                                instrument::setBrokerSymbol);
 
-        boolean changed = false;
+                changed |= set(
+                                instrument.getBrokerToken(),
+                                item.symboltoken(),
+                                instrument::setBrokerToken);
 
-        changed |= set(
-                instrument.getBrokerSymbol(),
-                item.tradingsymbol(),
-                instrument::setBrokerSymbol);
+                if (!isBlank(item.instrumentType())
+                                && !item.instrumentType()
+                                                .equals(
+                                                                instrument.getInstrumentType())) {
 
-        changed |= set(
-                instrument.getBrokerToken(),
-                item.symboltoken(),
-                instrument::setBrokerToken);
+                        instrument.setInstrumentType(
+                                        item.instrumentType());
 
-        if (!isBlank(item.instrumentType())
-                && !item.instrumentType()
-                        .equals(
-                                instrument.getInstrumentType())) {
+                        changed = true;
+                }
 
-            instrument.setInstrumentType(
-                    item.instrumentType());
+                Integer lotSize = integerValue(
+                                item.lotSize());
 
-            changed = true;
+                if (lotSize != null
+                                && !lotSize.equals(
+                                                instrument.getLotSize())) {
+
+                        instrument.setLotSize(lotSize);
+                        changed = true;
+                }
+
+                Double tickSize = doubleValue(
+                                item.tickSize());
+
+                if (tickSize != null
+                                && !tickSize.equals(
+                                                instrument.getTickSize())) {
+
+                        instrument.setTickSize(tickSize);
+                        changed = true;
+                }
+
+                Double strike = doubleValue(
+                                item.strike());
+
+                if (strike != null
+                                && !strike.equals(
+                                                instrument.getStrikePrice())) {
+
+                        instrument.setStrikePrice(strike);
+                        changed = true;
+                }
+
+                if (!isBlank(item.expiry())
+                                && !item.expiry().equals(
+                                                instrument.getExpiry())) {
+
+                        instrument.setExpiry(
+                                        item.expiry());
+
+                        changed = true;
+                }
+
+                if (!"ANGEL_ONE_SEARCH_SCRIP".equals(
+                                instrument.getMetadataSource())) {
+
+                        instrument.setMetadataSource(
+                                        "ANGEL_ONE_SEARCH_SCRIP");
+
+                        changed = true;
+                }
+
+                return changed;
         }
 
-        Integer lotSize = integerValue(
-                item.lotSize());
+        private AngelOneMarketDtos.AngelOneSearchScripResponse callSearchScrip(
+                        String jwtToken,
+                        String exchange,
+                        String symbol) {
 
-        if (lotSize != null
-                && !lotSize.equals(
-                        instrument.getLotSize())) {
+                String url = angelOneProperties.baseUrl()
+                                + "/rest/secure/angelbroking/order/v1/searchScrip";
 
-            instrument.setLotSize(lotSize);
-            changed = true;
+                Map<String, String> headers = new LinkedHashMap<>();
+
+                headers.put(
+                                "Content-Type",
+                                "application/json");
+
+                headers.put(
+                                "Accept",
+                                "application/json");
+
+                headers.put(
+                                "Authorization",
+                                "Bearer " + jwtToken);
+
+                headers.put(
+                                "X-UserType",
+                                "USER");
+
+                headers.put(
+                                "X-SourceID",
+                                "WEB");
+
+                headers.put(
+                                "X-ClientLocalIP",
+                                angelOneProperties.clientLocalIp());
+
+                headers.put(
+                                "X-ClientPublicIP",
+                                angelOneProperties.clientPublicIp());
+
+                headers.put(
+                                "X-MACAddress",
+                                angelOneProperties.macAddress());
+
+                headers.put(
+                                "X-PrivateKey",
+                                angelOneProperties.apiKey());
+
+                return angelOneApiExecutor.postJson(
+                                AngelOneApiExecutor.ApiEndpoint.SEARCH_SCRIP,
+                                url,
+                                headers,
+                                new AngelOneMarketDtos.AngelOneSearchScripRequest(
+                                                exchange,
+                                                symbol),
+                                AngelOneMarketDtos.AngelOneSearchScripResponse.class);
         }
 
-        Double tickSize = doubleValue(
-                item.tickSize());
+        @Transactional(readOnly = true)
+        public String debugSearchScrip(
+                        String exchange,
+                        String symbol) {
 
-        if (tickSize != null
-                && !tickSize.equals(
-                        instrument.getTickSize())) {
+                if (!angelOneProperties.enabled()) {
+                        throw new ProviderException(
+                                        "Angel One provider is disabled. Set ANGELONE_ENABLED=true");
+                }
 
-            instrument.setTickSize(tickSize);
-            changed = true;
+                String jwt = angelOneSessionService
+                                .createSessionTokens()
+                                .jwtToken();
+
+                String lookup = symbolAliasService
+                                .resolveLookupSymbol(symbol);
+
+                Map<String, String> headers = new LinkedHashMap<>();
+
+                headers.put(
+                                "Content-Type",
+                                "application/json");
+
+                headers.put(
+                                "Accept",
+                                "application/json");
+
+                headers.put(
+                                "Authorization",
+                                "Bearer " + jwt);
+
+                headers.put(
+                                "X-UserType",
+                                "USER");
+
+                headers.put(
+                                "X-SourceID",
+                                "WEB");
+
+                headers.put(
+                                "X-ClientLocalIP",
+                                angelOneProperties.clientLocalIp());
+
+                headers.put(
+                                "X-ClientPublicIP",
+                                angelOneProperties.clientPublicIp());
+
+                headers.put(
+                                "X-MACAddress",
+                                angelOneProperties.macAddress());
+
+                headers.put(
+                                "X-PrivateKey",
+                                angelOneProperties.apiKey());
+
+                return angelOneApiExecutor.postJsonForBody(
+                                AngelOneApiExecutor.ApiEndpoint.SEARCH_SCRIP,
+                                angelOneProperties.baseUrl()
+                                                + "/rest/secure/angelbroking/order/v1/searchScrip",
+                                headers,
+                                new AngelOneMarketDtos.AngelOneSearchScripRequest(
+                                                exchange,
+                                                lookup));
         }
 
-        Double strike = doubleValue(
-                item.strike());
+        private boolean set(
+                        String current,
+                        String next,
+                        java.util.function.Consumer<String> setter) {
 
-        if (strike != null
-                && !strike.equals(
-                        instrument.getStrikePrice())) {
+                if (isBlank(next)
+                                || next.equals(current)) {
+                        return false;
+                }
 
-            instrument.setStrikePrice(strike);
-            changed = true;
+                setter.accept(next);
+                return true;
         }
 
-        if (!isBlank(item.expiry())
-                && !item.expiry().equals(
-                        instrument.getExpiry())) {
+        private boolean isBlank(
+                        String value) {
 
-            instrument.setExpiry(
-                    item.expiry());
-
-            changed = true;
+                return value == null
+                                || value.isBlank();
         }
 
-        if (!"ANGEL_ONE_SEARCH_SCRIP".equals(
-                instrument.getMetadataSource())) {
+        private Integer integerValue(
+                        String value) {
 
-            instrument.setMetadataSource(
-                    "ANGEL_ONE_SEARCH_SCRIP");
-
-            changed = true;
+                try {
+                        return isBlank(value)
+                                        ? null
+                                        : Integer.valueOf(
+                                                        value.trim());
+                } catch (NumberFormatException ex) {
+                        return null;
+                }
         }
 
-        return changed;
-    }
+        private Double doubleValue(
+                        String value) {
 
-    private AngelOneMarketDtos.AngelOneSearchScripResponse callSearchScrip(
-            String jwtToken,
-            String exchange,
-            String symbol) {
-
-        String url = angelOneProperties.baseUrl()
-                + "/rest/secure/angelbroking/order/v1/searchScrip";
-
-        Map<String, String> headers = new LinkedHashMap<>();
-
-        headers.put(
-                "Content-Type",
-                "application/json");
-
-        headers.put(
-                "Accept",
-                "application/json");
-
-        headers.put(
-                "Authorization",
-                "Bearer " + jwtToken);
-
-        headers.put(
-                "X-UserType",
-                "USER");
-
-        headers.put(
-                "X-SourceID",
-                "WEB");
-
-        headers.put(
-                "X-ClientLocalIP",
-                angelOneProperties.clientLocalIp());
-
-        headers.put(
-                "X-ClientPublicIP",
-                angelOneProperties.clientPublicIp());
-
-        headers.put(
-                "X-MACAddress",
-                angelOneProperties.macAddress());
-
-        headers.put(
-                "X-PrivateKey",
-                angelOneProperties.apiKey());
-
-        return angelOneApiExecutor.postJson(
-                AngelOneApiExecutor.ApiEndpoint.SEARCH_SCRIP,
-                url,
-                headers,
-                new AngelOneMarketDtos.AngelOneSearchScripRequest(
-                        exchange,
-                        symbol),
-                AngelOneMarketDtos.AngelOneSearchScripResponse.class);
-    }
-
-    @Transactional(readOnly = true)
-    public String debugSearchScrip(
-            String exchange,
-            String symbol) {
-
-        if (!angelOneProperties.enabled()) {
-            throw new ProviderException(
-                    "Angel One provider is disabled. Set ANGELONE_ENABLED=true");
+                try {
+                        return isBlank(value)
+                                        ? null
+                                        : Double.valueOf(
+                                                        value.trim());
+                } catch (NumberFormatException ex) {
+                        return null;
+                }
         }
 
-        String jwt = angelOneSessionService
-                .createSessionTokens()
-                .jwtToken();
+        private String normalize(
+                        String value) {
 
-        String lookup = symbolAliasService
-                .resolveLookupSymbol(symbol);
-
-        Map<String, String> headers = new LinkedHashMap<>();
-
-        headers.put(
-                "Content-Type",
-                "application/json");
-
-        headers.put(
-                "Accept",
-                "application/json");
-
-        headers.put(
-                "Authorization",
-                "Bearer " + jwt);
-
-        headers.put(
-                "X-UserType",
-                "USER");
-
-        headers.put(
-                "X-SourceID",
-                "WEB");
-
-        headers.put(
-                "X-ClientLocalIP",
-                angelOneProperties.clientLocalIp());
-
-        headers.put(
-                "X-ClientPublicIP",
-                angelOneProperties.clientPublicIp());
-
-        headers.put(
-                "X-MACAddress",
-                angelOneProperties.macAddress());
-
-        headers.put(
-                "X-PrivateKey",
-                angelOneProperties.apiKey());
-
-        return angelOneApiExecutor.postJsonForBody(
-                AngelOneApiExecutor.ApiEndpoint.SEARCH_SCRIP,
-                angelOneProperties.baseUrl()
-                        + "/rest/secure/angelbroking/order/v1/searchScrip",
-                headers,
-                new AngelOneMarketDtos.AngelOneSearchScripRequest(
-                        exchange,
-                        lookup));
-    }
-
-    private boolean set(
-            String current,
-            String next,
-            java.util.function.Consumer<String> setter) {
-
-        if (isBlank(next)
-                || next.equals(current)) {
-            return false;
+                return value == null
+                                ? null
+                                : value.trim()
+                                                .toUpperCase(Locale.ROOT);
         }
 
-        setter.accept(next);
-        return true;
-    }
+        private String normalizeComparison(
+                        String value) {
 
-    private boolean isBlank(
-            String value) {
-
-        return value == null
-                || value.isBlank();
-    }
-
-    private Integer integerValue(
-            String value) {
-
-        try {
-            return isBlank(value)
-                    ? null
-                    : Integer.valueOf(
-                            value.trim());
-        } catch (NumberFormatException ex) {
-            return null;
+                return normalize(value)
+                                .replaceAll(
+                                                "[^A-Z0-9]",
+                                                "");
         }
-    }
 
-    private Double doubleValue(
-            String value) {
+        private void sleepQuietly(
+                        long millis) {
 
-        try {
-            return isBlank(value)
-                    ? null
-                    : Double.valueOf(
-                            value.trim());
-        } catch (NumberFormatException ex) {
-            return null;
+                try {
+                        Thread.sleep(millis);
+                } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+
+                        throw new ProviderException(
+                                        "Interrupted during Angel One token sync delay",
+                                        ex);
+                }
         }
-    }
 
-    private String normalize(
-            String value) {
-
-        return value == null
-                ? null
-                : value.trim()
-                        .toUpperCase(Locale.ROOT);
-    }
-
-    private String normalizeComparison(
-            String value) {
-
-        return normalize(value)
-                .replaceAll(
-                        "[^A-Z0-9]",
-                        "");
-    }
-
-    private void sleepQuietly(
-            long millis) {
-
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-
-            throw new ProviderException(
-                    "Interrupted during Angel One token sync delay",
-                    ex);
+        private record SearchResult(
+                        AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem item) {
         }
-    }
 
-    private record SearchResult(
-            AngelOneMarketDtos.AngelOneSearchScripResponse.AngelOneSearchScripItem item) {
-    }
-
-    public record TokenSyncResult(
-            int totalActiveInstruments,
-            int attempted,
-            int mapped,
-            int failed,
-            List<String> unmappedSymbols,
-            String message) {
-    }
+        public record TokenSyncResult(
+                        int totalActiveInstruments,
+                        int attempted,
+                        int mapped,
+                        int failed,
+                        List<String> unmappedSymbols,
+                        String message) {
+        }
 }
