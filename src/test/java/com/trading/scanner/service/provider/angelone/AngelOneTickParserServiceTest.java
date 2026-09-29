@@ -216,6 +216,34 @@ class AngelOneTickParserServiceTest {
                 verify(instrumentMasterRepository, never()).findByBrokerToken("16675");
         }
 
+        @Test
+        void tryParseBinary_shouldClampCorruptTimestamp() {
+                byte[] payload = new byte[379];
+                payload[0] = 1; // subscription mode
+                payload[1] = 1; // exchange type
+                writeAsciiToken(payload, 2, 25, "16675");
+                writeLittleEndianLong(payload, 27, 100L); // sequence
+                writeLittleEndianLong(payload, 35, 4330202930293029L); // corrupt epoch timestamp in year 15693!
+                writeLittleEndianLong(payload, 43, 177090L); // last price
+
+                when(instrumentMasterRepository.findByBrokerToken("16675"))
+                                .thenReturn(Optional.of(
+                                                InstrumentMaster.builder()
+                                                                .symbol("WIPRO")
+                                                                .exchange("NSE")
+                                                                .brokerToken("16675")
+                                                                .build()));
+
+                Optional<AngelOneTickParserService.NormalizedTick> parsed = angelOneTickParserService
+                                .tryParseBinary(payload);
+
+                assertTrue(parsed.isPresent());
+                AngelOneTickParserService.NormalizedTick tick = parsed.get();
+                assertNotNull(tick.tickTime());
+                // Clamped to current year (~2026), NOT year 15693!
+                assertTrue(tick.tickTime().getYear() <= 2030 && tick.tickTime().getYear() >= 2025);
+        }
+
         private void writeAsciiToken(byte[] payload, int offset, int length, String token) {
                 byte[] bytes = token.getBytes(StandardCharsets.US_ASCII);
                 int max = Math.min(bytes.length, length);

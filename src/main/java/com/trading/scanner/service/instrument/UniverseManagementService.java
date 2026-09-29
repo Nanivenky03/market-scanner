@@ -1,15 +1,12 @@
 package com.trading.scanner.service.instrument;
 
 import com.trading.scanner.calendar.TradingCalendar;
-import com.trading.scanner.config.HistoricalBackfillProperties;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.repository.InstrumentMasterRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
-import com.trading.scanner.service.data.HistoricalBackfillResult;
-import com.trading.scanner.service.data.HistoricalBackfillService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,8 +23,6 @@ public class UniverseManagementService {
 
     private final InstrumentMasterRepository instrumentMasterRepository;
     private final StockUniverseRepository stockUniverseRepository;
-    private final HistoricalBackfillService historicalBackfillService;
-    private final HistoricalBackfillProperties historicalBackfillProperties;
     private final TimeProvider timeProvider;
     private final TradingCalendar tradingCalendar;
 
@@ -71,11 +66,6 @@ public class UniverseManagementService {
                 stockUniverseRepository.save(existing);
             }
 
-            HistoricalBackfillResult backfillResult = null;
-            if (reactivated && historicalBackfillProperties.enabledOnUniverseAdd()) {
-                backfillResult = historicalBackfillService.backfillSymbolUsingDefaultWindow(instrument.getSymbol());
-            }
-
             return new AddToUniverseResult(
                     instrument.getId(),
                     instrument.getSymbol(),
@@ -83,9 +73,7 @@ public class UniverseManagementService {
                     reactivated,
                     reactivated
                             ? "Instrument reactivated in stock_universe"
-                            : "Instrument already exists in stock_universe",
-                    backfillResult
-            );
+                            : "Instrument already exists in stock_universe");
         }
 
         StockUniverse newUniverseRow = StockUniverse.builder()
@@ -99,19 +87,12 @@ public class UniverseManagementService {
 
         stockUniverseRepository.save(newUniverseRow);
 
-        HistoricalBackfillResult backfillResult = null;
-        if (historicalBackfillProperties.enabledOnUniverseAdd()) {
-            backfillResult = historicalBackfillService.backfillSymbolUsingDefaultWindow(instrument.getSymbol());
-        }
-
         return new AddToUniverseResult(
                 instrument.getId(),
                 instrument.getSymbol(),
                 true,
                 false,
-                "Instrument added to stock_universe",
-                backfillResult
-        );
+                "Instrument added to stock_universe");
     }
 
     private LocalDate resolveActiveFromDate() {
@@ -131,7 +112,8 @@ public class UniverseManagementService {
 
         StockUniverse existing = stockUniverseRepository.findBySymbolAndExchange(normalizedSymbol, normalizedExchange)
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Instrument not found in stock_universe for symbol=" + normalizedSymbol + ", exchange=" + normalizedExchange));
+                        "Instrument not found in stock_universe for symbol=" + normalizedSymbol + ", exchange="
+                                + normalizedExchange));
 
         if (Boolean.FALSE.equals(existing.getIsActive())) {
             return new RemoveFromUniverseResult(existing.getSymbol(), false, "Instrument already inactive");
@@ -162,8 +144,7 @@ public class UniverseManagementService {
                 instrument.getSegment(),
                 instrument.getBrokerToken(),
                 alreadyInUniverse,
-                activeInUniverse
-        );
+                activeInUniverse);
     }
 
     private String normalizeExchange(String exchange) {
@@ -182,8 +163,7 @@ public class UniverseManagementService {
             String segment,
             String brokerToken,
             boolean alreadyInUniverse,
-            boolean activeInUniverse
-    ) {
+            boolean activeInUniverse) {
     }
 
     public record AddToUniverseResult(
@@ -191,15 +171,12 @@ public class UniverseManagementService {
             String symbol,
             boolean created,
             boolean reactivated,
-            String message,
-            HistoricalBackfillResult backfill
-    ) {
+            String message) {
     }
 
     public record RemoveFromUniverseResult(
             String symbol,
             boolean changed,
-            String message
-    ) {
+            String message) {
     }
 }

@@ -722,11 +722,11 @@ class LiveMarketCandleServiceTest {
 
                 assertEquals(1, result.rolledOver());
                 assertEquals(0, service.openCandles().size());
-                verify(marketCandleRepository, atLeastOnce()).save(argThat(candle ->
-                                "RELIANCE".equals(candle.getSymbol())
-                                && LocalDateTime.of(2026, 9, 23, 9, 15, 0).equals(candle.getCandleTime())
-                                && Boolean.TRUE.equals(candle.getIsFinalized())
-                ));
+                verify(marketCandleRepository, atLeastOnce())
+                                .save(argThat(candle -> "RELIANCE".equals(candle.getSymbol())
+                                                && LocalDateTime.of(2026, 9, 23, 9, 15, 0)
+                                                                .equals(candle.getCandleTime())
+                                                && Boolean.TRUE.equals(candle.getIsFinalized())));
         }
 
         @Test
@@ -748,7 +748,8 @@ class LiveMarketCandleServiceTest {
 
         @Test
         void applyCandleStructure_shouldHandleZeroRangeAndNonPositivePrices() {
-                MarketCandle zeroRange = oneMinuteCandle(LocalDateTime.of(2026, 9, 23, 9, 15), CandleProcessingStatus.RELEASED);
+                MarketCandle zeroRange = oneMinuteCandle(LocalDateTime.of(2026, 9, 23, 9, 15),
+                                CandleProcessingStatus.RELEASED);
                 zeroRange.setHighPrice(100.0);
                 zeroRange.setLowPrice(100.0);
                 zeroRange.setOpenPrice(100.0);
@@ -762,7 +763,8 @@ class LiveMarketCandleServiceTest {
                 assertFalse(zeroRange.getStrongBullish());
                 assertFalse(zeroRange.getStrongBearish());
 
-                MarketCandle nonPositiveLow = oneMinuteCandle(LocalDateTime.of(2026, 9, 23, 9, 16), CandleProcessingStatus.RELEASED);
+                MarketCandle nonPositiveLow = oneMinuteCandle(LocalDateTime.of(2026, 9, 23, 9, 16),
+                                CandleProcessingStatus.RELEASED);
                 nonPositiveLow.setHighPrice(100.0);
                 nonPositiveLow.setLowPrice(0.0);
                 nonPositiveLow.setOpenPrice(50.0);
@@ -775,7 +777,8 @@ class LiveMarketCandleServiceTest {
 
         @Test
         void applyCandleStructure_shouldClassifyStrongBullishCandle() {
-                MarketCandle bullish = oneMinuteCandle(LocalDateTime.of(2026, 9, 23, 9, 17), CandleProcessingStatus.RELEASED);
+                MarketCandle bullish = oneMinuteCandle(LocalDateTime.of(2026, 9, 23, 9, 17),
+                                CandleProcessingStatus.RELEASED);
                 bullish.setOpenPrice(100.0);
                 bullish.setLowPrice(99.9);
                 bullish.setHighPrice(101.0);
@@ -785,6 +788,110 @@ class LiveMarketCandleServiceTest {
                 assertTrue(bullish.getStrongBullish());
                 assertFalse(bullish.getStrongBearish());
                 assertEquals(CandleDirection.BULLISH, bullish.getDirection());
+        }
+
+        @Test
+        void ingestTick_shouldComputeMinuteVolumeFromCumulativeDayVolumeDelta() {
+                LocalDateTime tick1Time = LocalDateTime.of(2026, 9, 23, 9, 15, 5);
+                LocalDateTime tick2Time = LocalDateTime.of(2026, 9, 23, 9, 15, 30);
+                LocalDateTime nextMinuteTick = LocalDateTime.of(2026, 9, 23, 9, 16, 5);
+
+                when(marketCandleRepository.findBySymbolAndExchangeAndTimeframeAndCandleTime(anyString(), anyString(),
+                                any(), any()))
+                                .thenReturn(Optional.empty());
+                when(marketCandleRepository.save(any(MarketCandle.class)))
+                                .thenAnswer(inv -> inv.getArgument(0));
+
+                service.ingestTick(
+                                new LiveMarketCandleService.TickInput("INFY", "NSE", tick1Time, 1500.0, 10L, 50000L));
+                service.ingestTick(
+                                new LiveMarketCandleService.TickInput("INFY", "NSE", tick2Time, 1502.0, 20L, 51250L));
+
+                // Finalize 09:15 candle by sending tick for 09:16
+                service.ingestTick(new LiveMarketCandleService.TickInput("INFY", "NSE", nextMinuteTick, 1503.0, 5L,
+                                51300L));
+
+                ArgumentCaptor<MarketCandle> captor = ArgumentCaptor.forClass(MarketCandle.class);
+                verify(marketCandleRepository, atLeastOnce()).save(captor.capture());
+
+                MarketCandle saved0915 = captor.getAllValues().stream()
+                                .filter(c -> c.getCandleTime().equals(LocalDateTime.of(2026, 9, 23, 9, 15)))
+                                .findFirst()
+                                .orElseThrow();
+
+                assertEquals(1250L, saved0915.getVolume()); // 51250 - 50000 = 1250
+        }
+
+        @Test
+        void ingestTick_shouldFallbackToIncrementalQuantityWhenCumulativeDayVolumeIsNull() {
+                LocalDateTime tick1Time = LocalDateTime.of(2026, 9, 23, 9, 15, 5);
+                LocalDateTime tick2Time = LocalDateTime.of(2026, 9, 23, 9, 15, 30);
+                LocalDateTime nextMinuteTick = LocalDateTime.of(2026, 9, 23, 9, 16, 5);
+
+                when(marketCandleRepository.findBySymbolAndExchangeAndTimeframeAndCandleTime(anyString(), anyString(),
+                                any(), any()))
+                                .thenReturn(Optional.empty());
+                when(marketCandleRepository.save(any(MarketCandle.class)))
+                                .thenAnswer(inv -> inv.getArgument(0));
+
+                service.ingestTick(new LiveMarketCandleService.TickInput("INFY", "NSE", tick1Time, 1500.0, 15L, null));
+                service.ingestTick(new LiveMarketCandleService.TickInput("INFY", "NSE", tick2Time, 1502.0, 35L, null));
+
+                // Finalize 09:15 candle by sending tick for 09:16
+                service.ingestTick(
+                                new LiveMarketCandleService.TickInput("INFY", "NSE", nextMinuteTick, 1503.0, 5L, null));
+
+                ArgumentCaptor<MarketCandle> captor = ArgumentCaptor.forClass(MarketCandle.class);
+                verify(marketCandleRepository, atLeastOnce()).save(captor.capture());
+
+                MarketCandle saved0915 = captor.getAllValues().stream()
+                                .filter(c -> c.getCandleTime().equals(LocalDateTime.of(2026, 9, 23, 9, 15)))
+                                .findFirst()
+                                .orElseThrow();
+
+                assertEquals(50L, saved0915.getVolume()); // 15 + 35 = 50
+        }
+
+        @Test
+        void ingestTick_shouldIgnorePreMarketTicksPriorTo0908Uncrossing() {
+                LocalDateTime earlyTick = LocalDateTime.of(2026, 9, 23, 8, 55, 30);
+                LiveMarketCandleService.IngestResult result = service.ingestTick(
+                                new LiveMarketCandleService.TickInput("INFY", "NSE", earlyTick, 1500.0, 10L, 0L));
+
+                assertFalse(result.accepted());
+                assertEquals("Ignored pre-market tick prior to 09:08 uncrossing", result.message());
+                assertEquals(0, service.openCandles().size());
+        }
+
+        @Test
+        void ingestTick_0908PreMarketCandleShouldHaveIdenticalOHLCEqualToUncrossedPrice() {
+                when(marketCandleRepository.save(any(MarketCandle.class))).thenAnswer(inv -> inv.getArgument(0));
+                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 9, 23, 9, 15, 0));
+
+                LocalDateTime tick1 = LocalDateTime.of(2026, 9, 23, 9, 8, 10);
+                LocalDateTime tick2 = LocalDateTime.of(2026, 9, 23, 9, 8, 45); // Uncrossed price = 1520.0
+                LocalDateTime tick0915 = LocalDateTime.of(2026, 9, 23, 9, 15, 5);
+
+                service.ingestTick(new LiveMarketCandleService.TickInput("INFY", "NSE", tick1, 1515.0, 100L, 100L));
+                service.ingestTick(new LiveMarketCandleService.TickInput("INFY", "NSE", tick2, 1520.0, 200L, 300L));
+
+                // Finalize 09:08 candle by sending 09:15 continuous session tick
+                service.ingestTick(new LiveMarketCandleService.TickInput("INFY", "NSE", tick0915, 1522.0, 50L, 350L));
+
+                ArgumentCaptor<MarketCandle> captor = ArgumentCaptor.forClass(MarketCandle.class);
+                verify(marketCandleRepository, atLeastOnce()).save(captor.capture());
+
+                MarketCandle saved0908 = captor.getAllValues().stream()
+                                .filter(c -> c.getCandleTime().equals(LocalDateTime.of(2026, 9, 23, 9, 8)))
+                                .findFirst()
+                                .orElseThrow();
+
+                // For 09:08 pre-market candle, all OHLC must equal the final uncrossed price
+                // (1520.0)
+                assertEquals(1520.0, saved0908.getOpenPrice());
+                assertEquals(1520.0, saved0908.getHighPrice());
+                assertEquals(1520.0, saved0908.getLowPrice());
+                assertEquals(1520.0, saved0908.getClosePrice());
         }
 
         private MarketCandle oneMinuteCandle(

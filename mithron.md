@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-09-27  
-Status: **Version 1.0 Complete** (Data & Market Lifecycle Foundation — 314 unit tests passing).
+Last audited: 2026-09-29  
+Status: **Version 1.0 Complete** (Data & Market Lifecycle Foundation — 320 unit tests passing).
 
 ---
 
@@ -78,12 +78,12 @@ Version 1.0 is the production-grade market data, candle materialization, indicat
 
 ### Verified Capabilities:
 - **Phase 1 (Startup Bootstrap):** 6 fail-closed stages verifying catalog, active NIFTY index, universe seed, runtime settings, and previous-day EOD readiness.
-- **Phase 2 (Pre-Market Pipeline):** 07:00 AM morning maintenance, 08:00 AM catalog & token sync, universe validation, and reference baseline calculation.
-- **Phase 3 (Live Streaming & Ingestion):** Binary SmartStream WebSocket parser, tick deduplication, 1M candle accumulation, and **400ms (2.5 RPS / 150 RPM) paced background queue worker** intercepting `AB1021` in-memory.
+- **Phase 2 (Pre-Market Pipeline):** 07:00 AM morning maintenance, 08:00 AM catalog & token sync, universe validation, reference baseline calculation, and 09:10 AM pre-market uncrossed price locking ($\text{Open} = \text{High} = \text{Low} = \text{Close} = \text{last uncrossed tick}$).
+- **Phase 3 (Live Streaming & Ingestion):** Binary SmartStream WebSocket parser (filtering pre-09:08 ticks), tick deduplication, 1M candle accumulation, and **400ms (2.5 RPS / 150 RPM) paced background queue worker** intercepting `AB1021` in-memory.
 - **Phase 4 (Shared Indicators):** Wilder's RSI-14 ($\ge 42$ clean 1M candles), Wilder's ATR-14 ($\ge 14$ clean 1M candles + `prevDayClose`), Session VWAP (09:15 reset), 375-minute volume baseline curves, runtime $\text{VOL\_X}$, and candle structure ratios.
-- **Phase 5 (Quiescence, Archiving & EOD):** Post-16:00 quiescence disconnect ($\ge 3$ min silence), raw JSON disk archiving (`data/raw-eod/YYYY-MM-DD/SYMBOL.json`), **unified 4-test provider data integrity verification**, **Attempt 1 (17:01 PM) zero-trade confirmation**, hourly retry deferrals (17:00-22:00), and 23:45 session token teardown.
+- **Phase 5 (Quiescence, Archiving & EOD):** Post-16:00 quiescence disconnect ($\ge 3$ min silence), **Upfront batch raw historical 1M candle archival (`data/raw-eod/YYYY-MM-DD/SYMBOL.json`) & Market Quotes**, **DB-first authoritative reconciliation against Market Quote**, upsert of official `MarketQuote` into `stock_prices` for historical reference, in-memory candidate repair gating, bi-hourly retry deferrals (17:00, 19:00, 21:00), 23:00 final attempt fallback alignment with quote, and 23:45 session token teardown.
 - **Runtime Admin & Developer Tools:** Swagger UI OpenAPI inspector (`/swagger-ui/index.html`), authenticated SmartAPI proxy (`POST /admin/runtime/broker/smartapi/proxy`), and on-demand EOD reconciliation (`/admin/runtime/eod/reconcile`).
-- **Test Baseline:** **314 unit tests passing** (0 failures, 0 errors, 1 skipped).
+- **Test Baseline:** **320 unit tests passing** (0 failures, 0 errors, 1 skipped).
 
 ---
 
@@ -93,10 +93,10 @@ Version 1.0 is the production-grade market data, candle materialization, indicat
 MITHRON MASTER ROADMAP
 
 V1.0 — Market Data & Daily Session Foundation          [COMPLETE ✅]
-  ✓ SmartStream WebSocket ingestion, 1M/5M/15M candles, 400ms paced backfill
-  ✓ Indicators (VWAP, RSI-14, ATR-14, VOL_X, 375m Baselines, Structure)
-  ✓ 4-Test EOD integrity verification & raw JSON disk archiving
-  ✓ 314 passing unit tests & Swagger SmartAPI inspector proxy
+  ✓ SmartStream WebSocket ingestion, 1M/5M/15M candles, 450ms paced historical queue
+  ✓ Shared Indicators (VWAP, RSI-14, ATR-14, VOL_X, 375m Baselines, Structure)
+  ✓ 4-Test EOD integrity verification, raw JSON disk archiving & stock_prices daily upsert
+  ✓ 320 passing unit tests & Swagger SmartAPI inspector proxy
 
   └─► IMMEDIATE POST-V1 ACTION:
       Expand Universe to Nifty 500 (Starts daily 500-stock data accumulation)

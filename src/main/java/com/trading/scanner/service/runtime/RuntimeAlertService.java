@@ -131,7 +131,14 @@ public class RuntimeAlertService {
                 int parserFailureThreshold = runtimeSettingService
                                 .parserFailuresThreshold();
 
-                if (runtimeStatus.parserFailures() >= parserFailureThreshold) {
+                long totalMessages = runtimeStatus.messagesReceived();
+                long failures = runtimeStatus.parserFailures();
+                double failurePct = totalMessages > 0 ? ((double) failures / totalMessages) * 100.0 : 0.0;
+
+                boolean parserAlarmActive = failures >= parserFailureThreshold
+                                && (totalMessages < 100L || failurePct >= 1.0);
+
+                if (parserAlarmActive) {
 
                         upsertOpen(
                                         "runtime.parser_failures_high",
@@ -139,7 +146,11 @@ public class RuntimeAlertService {
                                         "Parser failures crossed threshold",
                                         nullableDetails(
                                                         "parserFailures",
-                                                        runtimeStatus.parserFailures(),
+                                                        failures,
+                                                        "totalMessages",
+                                                        totalMessages,
+                                                        "failurePercentage",
+                                                        String.format(java.util.Locale.ROOT, "%.4f%%", failurePct),
                                                         "threshold",
                                                         parserFailureThreshold));
 

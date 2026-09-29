@@ -53,7 +53,7 @@ This document is the authoritative developer, tester, and architecture guide for
   - Production vs Backtest validation.
 
 ### Status Legend
-- `[IMPLEMENTED + TESTED]`: Complete, verified in code, database, and test suite (314 unit tests passing).
+- `[IMPLEMENTED + TESTED]`: Complete, verified in code, database, and test suite (320 unit tests passing).
 - `[PLANNED]`: Architectural design finalized, scheduled for upcoming version release.
 
 ---
@@ -152,8 +152,9 @@ flowchart LR
    - **`premarket-catalog-sync`:** Downloads master catalog (143k scrips), maps 2,747 NSE Cash instruments & NIFTY (`99926000`), authenticates broker session early, and verifies broker tokens directly from DB.
    - **`premarket-universe-sync`:** Reconciles active universe. Checks `eod_data_entry` for the previous trading day; if missing/incomplete for any symbol, demotes `is_tradable = false` while keeping `is_active = true`.
    - **`premarket-morning-reference`:** Authoritative computation of CPR, ADR, 15-day resistance, 20-day ADV, and 375m volume baseline curves for previous trading day into `DailyStockContext`.
-3. **08:55 AM Live Start Gate:**
+3. **08:55 AM Live Start Gate & 09:10 AM Pre-Market Uncrossed Price Lock:**
    - **`premarket-live-start`:** Strictly verifies all 5 prior daily steps are `SUCCESS` for today's date before connecting the WebSocket and starting the `market-hours` stage.
+   - **09:08-09:10 AM Pre-Market Price Locking:** Order uncrossing concludes by 09:08:00 AM (price frozen 09:08:00 to 09:14:59). The last tick price received for the 09:08 candle defines the uncrossed equilibrium price. By 09:10 AM, the `09:08:00` pre-market candle in `market_candles` is locked with $\text{Open} = \text{High} = \text{Low} = \text{Close} = \text{uncrossed price}$. All downstream gap analysis and daily context tables consume this canonical Day Open price.
 
 ---
 
@@ -162,8 +163,8 @@ flowchart LR
 **Purpose:** Connects to Angel One SmartStream WebSocket, ingests real-time binary ticks, constructs canonical 1-minute candles, tracks feed health, and triggers live gap repair.
 
 ### Workflow & Ingestion Rules
-1. **08:55 AM - Pre-Open Feed Connect:** Connects WebSocket and subscribes to active universe equities and `NIFTY`.
-2. **09:15 AM - Market Open Event:** VWAP resets strictly to 0. Day Type latched at 09:15 (`GAP_UP` > +0.75%, `GAP_DOWN` < -0.75%, `NORMAL`).
+1. **08:55 AM - Pre-Open Feed Connect:** Connects WebSocket and subscribes to active universe equities and `NIFTY`. Ignores pre-09:08 order collection ticks to prevent stale data pollution.
+2. **09:15 AM - Market Open Event:** Continuous session begins. VWAP resets strictly to 0. Day Type latched at 09:15 (`GAP_UP` > +0.75%, `GAP_DOWN` < -0.75%, `NORMAL`) using the 09:08 uncrossed Day Open.
 3. **Continuous Binary Tick Processing:** `AngelOneTickParserService` decodes high-throughput packets; deduplicates duplicate ticks.
 4. **1-Minute Candle Construction & DB Persistence:** `LiveMarketCandleService` accumulates ticks into 1M bars ($xx:xx:00 \dots xx:xx:59$), persists to `market_candles`, and updates `market_minute_snapshot`.
 5. **Real-Time Gap Detection & Continuous Queue Worker Backfill:** Missing minute detected $\rightarrow$ enqueues job into `BackfillQueueService`. The background daemon worker continuously drains jobs at a paced rate of **400ms (2.5 RPS / 150 RPM)**, intercepting `AB1021` in-memory, confirming un-traded minutes as `NO_TRADE_CONFIRMED` on Attempt 1, and recomputing indicators in **~20.4 seconds flat** for all 51 symbols.
@@ -186,25 +187,27 @@ flowchart LR
 
 ## Phase 5: Post-Market Shutdown, Archiving, EOD Reconciliation & Teardown `[IMPLEMENTED + TESTED]`
 
-**Purpose:** Quiescence shutdown, raw REST archiving, 4-test provider integrity verification, 375-minute candle reconciliation, alert management, and daily session teardown.
+**Purpose:** Quiescence shutdown, upfront raw historical REST archiving, DB-first authoritative comparison against Market Quote, surgical in-memory candidate repair, 375-minute candle reconciliation, alert management, and daily session teardown.
 
 ```mermaid
 flowchart TD
     A["16:00-17:00 PM: Conditional Quiescence Check<br/>(Runs every 5 min. If idle >= 3 min, disconnect WebSocket)"] --> B["Mark market-hours Workflow SUCCESS"]
-    B --> C["17:00, 18:00, 19:00, 20:00, 21:00, 22:00, 23:00 PM: Scheduled Hourly EOD Reconciliation"]
-    C --> D["Batch Market Quote Fetch (50 Tokens/sec) & 1M Historical Candle Fetch<br/>Save Clean Raw JSON to data/raw-eod/YYYY-MM-DD/SYMBOL.json"]
-    D --> E["4-Test Provider Integrity Verification<br/>(1. Boundary 09:15-15:29, 2. Quote OHLC, 3. Volume Ceiling <=, 4. Index handling)"]
-    E -- Integrity Passed --> F["Reconcile & Repair Minutes, Confirm NO_TRADE on Omissions<br/>Complete Symbol on Attempt 1 (17:01 PM)"]
-    E -- Integrity Failed / Broker Lag --> G{"Is Final Attempt (>= 23:00)?"}
-    G -- No --> H["Retain PARTIAL Status & Defer Alerts (Hourly Retry 18:00-22:00)"]
-    G -- Yes --> I["Final Attempt Fallback & Evaluation"]
-    F --> J["Recompute Derived Data (RSI, ATR, VWAP, 5M/15M)"]
-    I --> J
-    J --> K{"Any Remaining PARTIAL Symbol?"}
-    K -- Yes (Final Attempt) --> L["Dispatch HIGH-Priority Alert & Mark eod-reconciliation FAILED"]
-    K -- No --> M["Resolve EOD Alert & Mark eod-reconciliation SUCCESS"]
-    M --> N["23:45 PM Session Teardown: Invalidate Angel One Tokens"]
-    N --> O["Mark daily-cycle-complete SUCCESS"]
+    B --> C["17:00, 19:00, 21:00, 23:00 PM: Scheduled Bi-Hourly EOD Reconciliation"]
+    C --> D["Step 1 & 2: Upfront Fetch for Partial Symbols<br/>• Pull 1M Historical Candles & Save Raw to data/raw-eod/YYYY-MM-DD/SYMBOL.json<br/>• Pull Batch Market Quotes & Save to market-quotes.json"]
+    D --> E["Step 3 Check 1: Primary DB Data vs Market Quote<br/>• Open = 09:08 price<br/>• High = max(Continuous, 09:08)<br/>• Low = min(Continuous, 09:08)<br/>• Close = 15:29 Close, Volume consistent"]
+    E -- DB Complete (375 bars) & Matches Quote --> F["Finalize Symbol as RECONCILED (SUCCESS)<br/>• Upsert official Market Quote to stock_prices<br/>• (SmartAPI Historical API does not touch DB)"]
+    E -- DB Gaps or Mismatch --> G["Step 3 Check 2: In-Memory Candidate Day Construction<br/>(Combine DB Candles + Raw Historical Candles)"]
+    G -- Candidate Matches Quote --> H["Surgically Repair Missing DB Candles<br/>• Upsert official Market Quote to stock_prices<br/>• Recompute Derived Data (RSI, ATR, VWAP, 5M/15M)<br/>• Finalize Symbol as REPAIRED (SUCCESS)"]
+    G -- Candidate Fails Quote Check --> I{"Is Final Attempt (>= 23:00)?"}
+    I -- No --> J["Leave DB Untouched & Retain PARTIAL Status<br/>(Defer Alerts to Next Retry 19:00-21:00)"]
+    I -- Yes --> K["Step 4: Final Attempt Fallback<br/>Patch Missing DB Candles from Historical Data<br/>Upsert Official Market Quote into stock_prices<br/>Dispatch Alert if Defect Persists"]
+    F --> L["Check Remaining Partial Symbols"]
+    H --> L
+    K --> L
+    L -- All Complete (0 Partial) --> M["Resolve EOD Alert & Mark eod-reconciliation SUCCESS"]
+    L -- Partial > 0 on Final Run --> N["Dispatch HIGH-Priority Alert & Mark eod-reconciliation FAILED"]
+    M --> O["23:45 PM Session Teardown: Invalidate Broker Tokens"]
+    O --> P["Mark daily-cycle-complete SUCCESS"]
 ```
 
 ---

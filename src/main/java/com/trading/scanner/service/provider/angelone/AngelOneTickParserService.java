@@ -173,9 +173,23 @@ public class AngelOneTickParserService {
                 tokenCache.put(brokerToken, instrument);
             }
 
-            LocalDateTime tickTime = exchangeTimestamp > 0
-                    ? Instant.ofEpochMilli(exchangeTimestamp).atZone(INDIA_ZONE).toLocalDateTime()
-                    : LocalDateTime.now(INDIA_ZONE);
+            LocalDateTime now = LocalDateTime.now(INDIA_ZONE);
+            LocalDateTime tickTime = now;
+            if (exchangeTimestamp > 0) {
+                try {
+                    LocalDateTime parsed = Instant.ofEpochMilli(exchangeTimestamp).atZone(INDIA_ZONE).toLocalDateTime();
+                    if (parsed.isAfter(now.minusDays(2)) && parsed.isBefore(now.plusDays(2))) {
+                        tickTime = parsed;
+                    } else {
+                        // Corrupt binary timestamp detected (e.g. year +15693), clamp to system time
+                        tickTime = now;
+                        exchangeTimestamp = System.currentTimeMillis();
+                    }
+                } catch (Exception ex) {
+                    tickTime = now;
+                    exchangeTimestamp = System.currentTimeMillis();
+                }
+            }
 
             Double lastPrice = scaledPrice(lastPriceRaw);
 
