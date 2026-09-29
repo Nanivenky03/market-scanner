@@ -83,7 +83,8 @@ class AngelOneWebSocketServiceTest {
                         "NSE",
                         LocalDateTime.of(2026, 7, 10, 10, 0),
                         1770.90,
-                        25L));
+                        25L,
+                        100000L));
         assertEquals(1L, angelOneWebSocketService.status().parsedTicksReceived());
         assertEquals(0L, angelOneWebSocketService.status().parserFailures());
     }

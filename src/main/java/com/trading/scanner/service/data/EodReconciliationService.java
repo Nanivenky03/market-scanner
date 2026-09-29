@@ -10,10 +10,12 @@ import com.trading.scanner.model.DataStatus;
 import com.trading.scanner.model.LiveMinuteResolution;
 import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.model.MinuteResolutionStatus;
+import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.model.WorkflowStatus;
 import com.trading.scanner.repository.LiveMinuteResolutionRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
+import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.service.engine.DailyDataStatusService;
 import com.trading.scanner.service.provider.ProviderException;
@@ -40,6 +42,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 @Slf4j
@@ -75,6 +78,7 @@ public class EodReconciliationService {
         private final RuntimeAlertService runtimeAlertService;
         private final AngelOneSessionService angelOneSessionService;
         private final AngelOneWebSocketService angelOneWebSocketService;
+        private final StockPriceRepository stockPriceRepository;
 
         private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -100,7 +104,8 @@ public class EodReconciliationService {
                         WorkflowStatusService workflowStatusService,
                         RuntimeAlertService runtimeAlertService,
                         AngelOneSessionService angelOneSessionService,
-                        AngelOneWebSocketService angelOneWebSocketService) {
+                        AngelOneWebSocketService angelOneWebSocketService,
+                        @Autowired(required = false) StockPriceRepository stockPriceRepository) {
 
                 this.marketDataProvider = marketDataProvider;
                 this.marketCandleRepository = marketCandleRepository;
@@ -115,6 +120,42 @@ public class EodReconciliationService {
                 this.runtimeAlertService = runtimeAlertService;
                 this.angelOneSessionService = angelOneSessionService;
                 this.angelOneWebSocketService = angelOneWebSocketService;
+                this.stockPriceRepository = stockPriceRepository;
+        }
+
+        /*
+         * Backward-compatible constructor for existing tests.
+         */
+        public EodReconciliationService(
+                        AngelOneMarketDataProvider marketDataProvider,
+                        MarketCandleRepository marketCandleRepository,
+                        LiveMinuteResolutionRepository resolutionRepository,
+                        DailyDataStatusService dailyDataStatusService,
+                        StockUniverseRepository stockUniverseRepository,
+                        TradingCalendar tradingCalendar,
+                        TimeProvider timeProvider,
+                        EodDataEntryService eodDataEntryService,
+                        LiveMarketCandleService liveMarketCandleService,
+                        WorkflowStatusService workflowStatusService,
+                        RuntimeAlertService runtimeAlertService,
+                        AngelOneSessionService angelOneSessionService,
+                        AngelOneWebSocketService angelOneWebSocketService) {
+
+                this(
+                                marketDataProvider,
+                                marketCandleRepository,
+                                resolutionRepository,
+                                dailyDataStatusService,
+                                stockUniverseRepository,
+                                tradingCalendar,
+                                timeProvider,
+                                eodDataEntryService,
+                                liveMarketCandleService,
+                                workflowStatusService,
+                                runtimeAlertService,
+                                angelOneSessionService,
+                                angelOneWebSocketService,
+                                null);
         }
 
         /*
@@ -141,6 +182,7 @@ public class EodReconciliationService {
                                 timeProvider,
                                 eodDataEntryService,
                                 liveMarketCandleService,
+                                null,
                                 null,
                                 null,
                                 null,
@@ -180,13 +222,13 @@ public class EodReconciliationService {
         }
 
         public ReconciliationBatchResult reconcileTradingDay(LocalDate tradingDate) {
-                if (tradingDate == null) {
-                        tradingDate = tradingCalendar.previousTradingDay(timeProvider.today());
-                }
+                final LocalDate targetDate = tradingDate != null
+                                ? tradingDate
+                                : tradingCalendar.previousTradingDay(timeProvider.today());
 
-                if (!tradingCalendar.isTradingDay(tradingDate)) {
+                if (!tradingCalendar.isTradingDay(targetDate)) {
                         return new ReconciliationBatchResult(
-                                        tradingDate,
+                                        targetDate,
                                         0,
                                         0,
                                         0,
@@ -196,14 +238,14 @@ public class EodReconciliationService {
 
                 if (!reconciliationLock.tryLock()) {
                         log.warn("EOD reconciliation is already running for date {}. Skipping concurrent execution.",
-                                        tradingDate);
+                                        targetDate);
                         return new ReconciliationBatchResult(
-                                        tradingDate,
+                                        targetDate,
                                         0,
                                         0,
                                         0,
                                         0,
-                                        "EOD reconciliation is already running for date: " + tradingDate);
+                                        "EOD reconciliation is already running for date: " + targetDate);
                 }
 
                 try {
@@ -216,8 +258,8 @@ public class EodReconciliationService {
 
                         UUID marketHoursWorkflowId = null;
                         if (workflowStatusService != null) {
-                                String dateStr = tradingDate.toString();
-                                if (tradingDate.equals(timeProvider.today())) {
+                                String dateStr = targetDate.toString();
+                                if (targetDate.equals(timeProvider.today())) {
                                         if (!workflowStatusService.isSuccessfulActiveDailyWorkflow(
                                                         WorkflowStatusService.MARKET_HOURS,
                                                         WorkflowStatusService.MARKET_HOURS_GROUP,
@@ -245,18 +287,18 @@ public class EodReconciliationService {
                                 eodWorkflow = workflowStatusService.prepareForDaily(
                                                 WorkflowStatusService.EOD_RECONCILIATION,
                                                 WorkflowStatusService.EOD_GROUP,
-                                                tradingDate.toString(),
+                                                targetDate.toString(),
                                                 marketHoursWorkflowId);
                                 if (eodWorkflow.getStatus() == WorkflowStatus.Status.SUCCESS) {
-                                        log.info("EOD reconciliation already succeeded for date: {}", tradingDate);
+                                        log.info("EOD reconciliation already succeeded for date: {}", targetDate);
                                         return new ReconciliationBatchResult(
-                                                        tradingDate,
+                                                        targetDate,
                                                         0,
                                                         0,
                                                         0,
                                                         0,
                                                         "EOD reconciliation already succeeded for date: "
-                                                                        + tradingDate);
+                                                                        + targetDate);
                                 }
                                 eodWorkflow = workflowStatusService.markRunning(eodWorkflow.getWorkflowId());
                         }
@@ -295,51 +337,78 @@ public class EodReconciliationService {
                                                                 exchange));
                         }
 
-                        int processed = 0;
-                        int reconciled = 0;
+                        int processed = targets.size();
+                        List<ReconciliationTarget> pendingTargets = targets.values().stream()
+                                        .filter(t -> eodDataEntryService == null || !eodDataEntryService.isSuccessful(
+                                                        t.symbol(),
+                                                        t.exchange(),
+                                                        targetDate))
+                                        .toList();
+
+                        int reconciled = targets.size() - pendingTargets.size();
                         int repaired = 0;
                         int partial = 0;
 
                         LocalDate today = timeProvider != null ? timeProvider.today() : null;
                         LocalDateTime now = timeProvider != null ? timeProvider.nowDateTime() : null;
-                        boolean isFinalAttempt = (today != null && tradingDate.isBefore(today))
+                        boolean isFinalAttempt = (today != null && targetDate.isBefore(today))
                                         || (now != null && now.getHour() >= 23);
 
-                        // Batch fetch market quotes for all target symbols in one go (chunked by 50)
-                        List<String> targetSymbols = targets.values().stream()
+                        // Step 1: Upfront batch pull of 1-minute historical candles from SmartAPI for
+                        // all pending symbols and save to raw archive
+                        Map<String, List<MarketCandle>> historicalCandlesBySymbol = new HashMap<>();
+                        if (marketDataProvider != null) {
+                                for (ReconciliationTarget target : pendingTargets) {
+                                        try {
+                                                List<MarketCandle> providerCandles = marketDataProvider
+                                                                .fetchHistoricalOneMinuteCandles(
+                                                                                target.symbol(),
+                                                                                targetDate,
+                                                                                targetDate);
+                                                if (providerCandles != null && !providerCandles.isEmpty()) {
+                                                        saveRawResponseToArchive(
+                                                                        target.symbol(),
+                                                                        target.exchange(),
+                                                                        targetDate,
+                                                                        providerCandles);
+                                                        historicalCandlesBySymbol.put(target.symbol(), providerCandles);
+                                                }
+                                        } catch (Exception ex) {
+                                                log.warn("Failed to fetch upfront historical candles for symbol={} date={}: {}",
+                                                                target.symbol(), targetDate, ex.getMessage());
+                                        }
+                                }
+                        }
+
+                        // Step 2: Batch fetch market quotes ONLY for pending target symbols
+                        List<String> pendingSymbols = pendingTargets.stream()
                                         .map(ReconciliationTarget::symbol)
                                         .toList();
                         Map<String, AngelOneMarketDtos.AngelOneMarketQuoteItem> marketQuotes = Map.of();
-                        if (marketDataProvider != null) {
+                        if (marketDataProvider != null && !pendingSymbols.isEmpty()) {
                                 try {
-                                        marketQuotes = marketDataProvider.fetchMarketQuotes(targetSymbols, "NSE");
+                                        marketQuotes = marketDataProvider.fetchMarketQuotes(pendingSymbols, "NSE");
+                                        saveQuotesToArchive(targetDate, marketQuotes);
                                 } catch (Exception ex) {
-                                        log.warn("Failed to fetch batch market quotes for date {}: {}", tradingDate,
+                                        log.warn("Failed to fetch batch market quotes for date {}: {}", targetDate,
                                                         ex.getMessage());
                                 }
                         }
 
-                        for (ReconciliationTarget target : targets.values()) {
-
-                                processed++;
-
-                                if (eodDataEntryService != null && eodDataEntryService.isSuccessful(
-                                                target.symbol(),
-                                                target.exchange(),
-                                                tradingDate)) {
-                                        reconciled++;
-                                        continue;
-                                }
-
+                        // Step 3: Reconcile each target symbol
+                        for (ReconciliationTarget target : pendingTargets) {
                                 try {
                                         AngelOneMarketDtos.AngelOneMarketQuoteItem quote = marketQuotes
+                                                        .get(target.symbol());
+                                        List<MarketCandle> preFetchedCandles = historicalCandlesBySymbol
                                                         .get(target.symbol());
                                         ReconciliationResult result = reconcile(
                                                         target.symbol(),
                                                         target.exchange(),
-                                                        tradingDate,
+                                                        targetDate,
                                                         isFinalAttempt,
-                                                        quote);
+                                                        quote,
+                                                        preFetchedCandles);
 
                                         if (result.status() == DataStatus.RECONCILED) {
                                                 reconciled++;
@@ -356,7 +425,7 @@ public class EodReconciliationService {
                                                         "EOD reconciliation failed symbol={} exchange={} date={}: {}",
                                                         target.symbol(),
                                                         target.exchange(),
-                                                        tradingDate,
+                                                        targetDate,
                                                         ex.getMessage(),
                                                         ex);
                                 }
@@ -371,13 +440,13 @@ public class EodReconciliationService {
                                 if (isFinalAttempt) {
                                         if (runtimeAlertService != null) {
                                                 runtimeAlertService.reportEodReconciliationFailure(
-                                                                tradingDate,
+                                                                targetDate,
                                                                 partial,
                                                                 "EOD reconciliation found incomplete or missing candles for "
                                                                                 + partial
-                                                                                + " symbol(s) on " + tradingDate,
+                                                                                + " symbol(s) on " + targetDate,
                                                                 Map.of(
-                                                                                "tradingDate", tradingDate.toString(),
+                                                                                "tradingDate", targetDate.toString(),
                                                                                 "symbolsProcessed", processed,
                                                                                 "reconciledSymbols", reconciled,
                                                                                 "repairedSymbols", repaired,
@@ -395,16 +464,16 @@ public class EodReconciliationService {
                                 }
                         } else {
                                 if (runtimeAlertService != null) {
-                                        runtimeAlertService.resolveEodReconciliation(tradingDate);
+                                        runtimeAlertService.resolveEodReconciliation(targetDate);
                                 }
                                 if (workflowStatusService != null && eodWorkflow != null) {
                                         workflowStatusService.markSuccess(eodWorkflow.getWorkflowId(), message);
-                                        executeDailyCycleComplete(tradingDate, eodWorkflow.getWorkflowId());
+                                        executeDailyCycleComplete(targetDate, eodWorkflow.getWorkflowId());
                                 }
                         }
 
                         return new ReconciliationBatchResult(
-                                        tradingDate,
+                                        targetDate,
                                         processed,
                                         reconciled,
                                         repaired,
@@ -473,6 +542,17 @@ public class EodReconciliationService {
                         LocalDate tradingDate,
                         boolean isFinalAttempt,
                         AngelOneMarketDtos.AngelOneMarketQuoteItem quote) {
+                return reconcile(symbol, exchange, tradingDate, isFinalAttempt, quote, null);
+        }
+
+        @Transactional
+        public ReconciliationResult reconcile(
+                        String symbol,
+                        String exchange,
+                        LocalDate tradingDate,
+                        boolean isFinalAttempt,
+                        AngelOneMarketDtos.AngelOneMarketQuoteItem quote,
+                        List<MarketCandle> preFetchedHistoricalCandles) {
 
                 LocalDate today = timeProvider != null ? timeProvider.today() : null;
                 LocalDateTime now = timeProvider != null ? timeProvider.nowDateTime() : null;
@@ -515,23 +595,100 @@ public class EodReconciliationService {
                                                         from,
                                                         to);
 
-                        // 1. Fetch official 1-minute historical candles from SmartAPI
-                        List<MarketCandle> providerCandles = marketDataProvider
-                                        .fetchHistoricalOneMinuteCandles(
+                        ensurePreMarketCandle(symbol, exchange, tradingDate, quote);
+
+                        // 1. Primary DB Authoritative Check against Market Quote
+                        boolean localComplete = localCandles != null && localCandles.size() == expected;
+                        boolean localValidAgainstQuote = localCandles != null && !localCandles.isEmpty()
+                                        && validateCandlesAgainstQuote(
                                                         symbol,
+                                                        exchange,
                                                         tradingDate,
+                                                        expected,
+                                                        localCandles,
+                                                        quote);
+
+                        if (localComplete && localValidAgainstQuote) {
+                                // Local DB data is authoritative and fully sound against market quote!
+                                for (MarketCandle candle : localCandles) {
+                                        markMatchedCandle(candle);
+                                }
+
+                                if (liveMarketCandleService != null) {
+                                        liveMarketCandleService.recomputeDerivedData(
+                                                        symbol,
+                                                        exchange,
                                                         tradingDate);
+                                }
 
-                        saveRawResponseToArchive(
-                                        symbol,
-                                        exchange,
-                                        tradingDate,
-                                        providerCandles);
+                                DailyDataStatusService.CompletenessResult completeness = dailyDataStatusService
+                                                .checkCompleteness(
+                                                                symbol,
+                                                                exchange,
+                                                                tradingDate);
 
-                        if (providerCandles == null
-                                        || providerCandles.isEmpty()) {
+                                DataStatus finalStatus = DataStatus.RECONCILED;
+                                String reason = "EOD reconciliation verified local DB candles against market quote";
+
+                                eodDataEntryService.complete(
+                                                symbol,
+                                                exchange,
+                                                tradingDate,
+                                                finalStatus,
+                                                completeness.expectedCandleCount(),
+                                                completeness.actualCandleCount(),
+                                                0,
+                                                0,
+                                                0,
+                                                localCandles.size(),
+                                                RECONCILIATION_SOURCE,
+                                                reason);
+
+                                dailyDataStatusService.markStatus(
+                                                symbol,
+                                                exchange,
+                                                tradingDate,
+                                                finalStatus,
+                                                completeness.expectedCandleCount(),
+                                                completeness.actualCandleCount(),
+                                                0,
+                                                reason);
+
+                                upsertDailyStockPrice(symbol, tradingDate, quote);
+
+                                return new ReconciliationResult(
+                                                symbol,
+                                                exchange,
+                                                tradingDate,
+                                                finalStatus,
+                                                localCandles.size(),
+                                                0,
+                                                0,
+                                                0,
+                                                reason);
+                        }
+
+                        // 2. DB has gaps or failed quote check -> fetch historical candles from
+                        // SmartAPI as repair patch (or use pre-fetched candles)
+                        List<MarketCandle> providerCandles = preFetchedHistoricalCandles;
+                        if (providerCandles == null && marketDataProvider != null) {
+                                providerCandles = marketDataProvider.fetchHistoricalOneMinuteCandles(
+                                                symbol,
+                                                tradingDate,
+                                                tradingDate);
+                                if (providerCandles != null && !providerCandles.isEmpty()) {
+                                        saveRawResponseToArchive(
+                                                        symbol,
+                                                        exchange,
+                                                        tradingDate,
+                                                        providerCandles);
+                                }
+                        }
+
+                        if ((providerCandles == null || providerCandles.isEmpty())
+                                        && (localCandles == null || localCandles.isEmpty())) {
                                 throw new ProviderException(
-                                                "Provider returned no candles; "
+                                                "Provider returned no candles and local DB has no candles; "
                                                                 + "no-trade cannot be inferred"
                                                                 + "; symbol="
                                                                 + symbol
@@ -539,25 +696,41 @@ public class EodReconciliationService {
                                                                 + tradingDate);
                         }
 
-                        // 2. Validate historical provider data integrity (Boundary, Quote OHLC, Volume
-                        // Ceiling)
-                        boolean providerValid = validateProviderDataIntegrity(
+                        Map<LocalDateTime, MarketCandle> providerByTime = indexCandles(providerCandles);
+                        Map<LocalDateTime, MarketCandle> localByTime = indexCandles(localCandles);
+
+                        // 3. Build Candidate Day = provider candles (repair) + local candles
+                        List<MarketCandle> candidateCandles = new java.util.ArrayList<>();
+                        for (int i = 0; i < expected; i++) {
+                                LocalDateTime minute = from.plusMinutes(i);
+                                MarketCandle providerCandle = providerByTime.get(minute);
+                                MarketCandle localCandle = localByTime.get(minute);
+                                if (providerCandle != null) {
+                                        candidateCandles.add(providerCandle);
+                                } else if (localCandle != null) {
+                                        candidateCandles.add(localCandle);
+                                }
+                        }
+
+                        // Pre-Commit Sanity Gate against Golden Market Quote
+                        boolean candidateValid = validateCandlesAgainstQuote(
                                         symbol,
+                                        exchange,
                                         tradingDate,
                                         expected,
-                                        providerCandles,
+                                        candidateCandles,
                                         quote);
 
-                        if (!providerValid && !effectiveFinalAttempt) {
-                                int unres = Math.max(1, expected - providerCandles.size());
-                                String reason = "EOD provider data integrity check failed (data may be lagging/truncated). Retrying hourly.";
+                        if (!candidateValid && !effectiveFinalAttempt) {
+                                int unres = Math.max(1, expected - candidateCandles.size());
+                                String reason = "EOD candle integrity check failed (candidate day mismatch with quote). Retrying hourly.";
                                 dailyDataStatusService.markStatus(
                                                 symbol,
                                                 exchange,
                                                 tradingDate,
                                                 DataStatus.PARTIAL,
                                                 expected,
-                                                providerCandles.size(),
+                                                candidateCandles.size(),
                                                 unres,
                                                 reason);
                                 return new ReconciliationResult(
@@ -578,10 +751,6 @@ public class EodReconciliationService {
                                                         exchange,
                                                         from,
                                                         to);
-
-                        Map<LocalDateTime, MarketCandle> providerByTime = indexCandles(providerCandles);
-
-                        Map<LocalDateTime, MarketCandle> localByTime = indexCandles(localCandles);
 
                         Map<LocalDateTime, LiveMinuteResolution> resolutionByTime = new HashMap<>();
 
@@ -664,18 +833,18 @@ public class EodReconciliationService {
                                         continue;
                                 }
 
+                                if (localCandle != null) {
+                                        markMatchedCandle(localCandle);
+                                        matched++;
+                                        continue;
+                                }
+
                                 LiveMinuteResolution resolution = resolutionByTime.get(minute);
 
                                 if (resolution != null
                                                 && resolution.getStatus() == MinuteResolutionStatus.NO_TRADE_CONFIRMED) {
-                                        if (localCandle != null) {
-                                                marketCandleRepository.delete(localCandle);
-                                        }
                                         noTrade++;
-                                } else if (providerValid || effectiveFinalAttempt) {
-                                        if (localCandle != null) {
-                                                marketCandleRepository.delete(localCandle);
-                                        }
+                                } else if (candidateValid || effectiveFinalAttempt) {
                                         markNoTradeResolution(
                                                         symbol,
                                                         exchange,
@@ -752,6 +921,10 @@ public class EodReconciliationService {
                                         completeness.missingCandleCount(),
                                         reason);
 
+                        if (finalStatus == DataStatus.RECONCILED || finalStatus == DataStatus.REPAIRED) {
+                                upsertDailyStockPrice(symbol, tradingDate, quote);
+                        }
+
                         return new ReconciliationResult(
                                         symbol,
                                         exchange,
@@ -818,75 +991,90 @@ public class EodReconciliationService {
                                                 provider.getVolume());
         }
 
-        private boolean validateProviderDataIntegrity(
+        private boolean validateCandlesAgainstQuote(
                         String symbol,
+                        String exchange,
                         LocalDate tradingDate,
                         int expected,
-                        List<MarketCandle> providerCandles,
+                        List<MarketCandle> candles,
                         AngelOneMarketDtos.AngelOneMarketQuoteItem quote) {
 
-                if (providerCandles == null || providerCandles.isEmpty()) {
+                if (candles == null || candles.isEmpty()) {
                         return false;
                 }
 
-                MarketCandle firstCandle = providerCandles.get(0);
+                MarketCandle firstCandle = candles.get(0);
                 if (firstCandle.getCandleTime() == null
                                 || !firstCandle.getCandleTime().toLocalTime().equals(MARKET_OPEN)) {
-                        log.warn("EOD provider integrity check failed for symbol={} on {}: first candle is not at 09:15 ({})",
+                        log.warn("EOD candle integrity check failed for symbol={} on {}: first candle is not at 09:15 ({})",
                                         symbol, tradingDate, firstCandle.getCandleTime());
                         return false;
                 }
 
-                MarketCandle lastCandle = providerCandles.get(providerCandles.size() - 1);
+                MarketCandle lastCandle = candles.get(candles.size() - 1);
                 LocalTime lastTime = lastCandle.getCandleTime() != null ? lastCandle.getCandleTime().toLocalTime()
                                 : null;
 
                 if (quote != null) {
-                        if (quote.open() != null && quote.open() > 0.0) {
-                                if (!close(firstCandle.getOpenPrice(), quote.open())) {
-                                        log.warn("EOD provider integrity check failed for symbol={} on {}: Open price mismatch (provider={}, quote={})",
-                                                        symbol, tradingDate, firstCandle.getOpenPrice(), quote.open());
-                                        return false;
-                                }
+                        // 1. Day Open (09:15 continuous session candle must have valid positive open
+                        // price)
+                        if (firstCandle.getOpenPrice() == null || firstCandle.getOpenPrice() <= 0.0) {
+                                log.warn("EOD candle integrity check failed for symbol={} on {}: 09:15 continuous open invalid ({})",
+                                                symbol, tradingDate, firstCandle.getOpenPrice());
+                                return false;
                         }
 
+                        // 2. Day High (across continuous 09:15-15:29 + pre-market 09:08 auction)
                         if (quote.high() != null && quote.high() > 0.0) {
-                                double providerHigh = providerCandles.stream()
+                                double continuousHigh = candles.stream()
                                                 .mapToDouble(c -> c.getHighPrice() != null ? c.getHighPrice() : 0.0)
                                                 .max().orElse(0.0);
-                                if (!close(providerHigh, quote.high())) {
-                                        log.warn("EOD provider integrity check failed for symbol={} on {}: High price mismatch (provider={}, quote={})",
-                                                        symbol, tradingDate, providerHigh, quote.high());
+                                double dayHigh = quote.open() != null && quote.open() > 0.0
+                                                ? Math.max(continuousHigh, quote.open())
+                                                : continuousHigh;
+
+                                if (!close(dayHigh, quote.high())) {
+                                        log.warn("EOD candle integrity check failed for symbol={} on {}: High price mismatch (dayHigh={}, quote={})",
+                                                        symbol, tradingDate, dayHigh, quote.high());
                                         return false;
                                 }
                         }
 
+                        // 3. Day Low (across continuous 09:15-15:29 + pre-market 09:08 auction)
                         if (quote.low() != null && quote.low() > 0.0) {
-                                double providerLow = providerCandles.stream()
-                                                .mapToDouble(c -> c.getLowPrice() != null ? c.getLowPrice() : 0.0)
-                                                .min().orElse(0.0);
-                                if (!close(providerLow, quote.low())) {
-                                        log.warn("EOD provider integrity check failed for symbol={} on {}: Low price mismatch (provider={}, quote={})",
-                                                        symbol, tradingDate, providerLow, quote.low());
+                                double continuousLow = candles.stream()
+                                                .mapToDouble(c -> c.getLowPrice() != null ? c.getLowPrice()
+                                                                : Double.MAX_VALUE)
+                                                .min().orElse(Double.MAX_VALUE);
+                                double dayLow = quote.open() != null && quote.open() > 0.0
+                                                ? Math.min(continuousLow, quote.open())
+                                                : continuousLow;
+
+                                if (dayLow == Double.MAX_VALUE || !close(dayLow, quote.low())) {
+                                        log.warn("EOD candle integrity check failed for symbol={} on {}: Low price mismatch (dayLow={}, quote={})",
+                                                        symbol, tradingDate, dayLow, quote.low());
                                         return false;
                                 }
                         }
 
+                        // 4. Day Close / LTP (15:29 continuous candle close)
                         if (quote.ltp() != null && quote.ltp() > 0.0) {
                                 if (!close(lastCandle.getClosePrice(), quote.ltp())) {
-                                        log.warn("EOD provider integrity check failed for symbol={} on {}: Close/LTP mismatch (provider={}, quote={})",
+                                        log.warn("EOD candle integrity check failed for symbol={} on {}: Close/LTP mismatch (candle={}, quote={})",
                                                         symbol, tradingDate, lastCandle.getClosePrice(), quote.ltp());
                                         return false;
                                 }
                         }
 
+                        // 5. Volume check: Sum of 1-minute candle volumes should not be less than quote
+                        // volume
                         if (quote.tradeVolume() != null && quote.tradeVolume() > 0L) {
-                                long providerTotalVolume = providerCandles.stream()
+                                long totalVolume = candles.stream()
                                                 .mapToLong(c -> c.getVolume() != null ? c.getVolume() : 0L)
                                                 .sum();
-                                if (providerTotalVolume > quote.tradeVolume()) {
-                                        log.warn("EOD provider integrity check failed for symbol={} on {}: Volume exceeded ceiling (provider={}, quote={})",
-                                                        symbol, tradingDate, providerTotalVolume, quote.tradeVolume());
+                                if (totalVolume < quote.tradeVolume()) {
+                                        log.warn("EOD candle integrity check failed for symbol={} on {}: Volume sum less than quote volume (candles={}, quote={})",
+                                                        symbol, tradingDate, totalVolume, quote.tradeVolume());
                                         return false;
                                 }
                         }
@@ -894,13 +1082,105 @@ public class EodReconciliationService {
                         LocalTime expectedSessionClose = MARKET_OPEN.plusMinutes(Math.max(0, expected - 1));
                         LocalTime earliestAcceptableLast = expectedSessionClose.minusMinutes(Math.min(5, expected / 2));
                         if (lastTime == null || lastTime.isBefore(earliestAcceptableLast)) {
-                                log.warn("EOD provider integrity check failed for symbol={} on {}: last candle too early ({}) without quote confirmation",
+                                log.warn("EOD candle integrity check failed for symbol={} on {}: last candle too early ({}) without quote confirmation",
                                                 symbol, tradingDate, lastTime);
                                 return false;
                         }
                 }
 
                 return true;
+        }
+
+        private void upsertDailyStockPrice(
+                        String symbol,
+                        LocalDate tradingDate,
+                        AngelOneMarketDtos.AngelOneMarketQuoteItem quote) {
+
+                if (stockPriceRepository == null || quote == null) {
+                        return;
+                }
+
+                try {
+                        StockPrice price = stockPriceRepository.findBySymbolAndDate(symbol, tradingDate)
+                                        .orElseGet(() -> StockPrice.builder()
+                                                        .symbol(symbol)
+                                                        .date(tradingDate)
+                                                        .build());
+
+                        if (quote.open() != null && quote.open() > 0.0) {
+                                price.setOpenPrice(quote.open());
+                        }
+                        if (quote.high() != null && quote.high() > 0.0) {
+                                price.setHighPrice(quote.high());
+                        }
+                        if (quote.low() != null && quote.low() > 0.0) {
+                                price.setLowPrice(quote.low());
+                        }
+                        Double closeVal = quote.ltp() != null && quote.ltp() > 0.0
+                                        ? quote.ltp()
+                                        : (quote.close() != null && quote.close() > 0.0 ? quote.close() : null);
+                        if (closeVal != null) {
+                                price.setClosePrice(closeVal);
+                                price.setAdjClose(closeVal);
+                        }
+                        if (quote.tradeVolume() != null && quote.tradeVolume() >= 0L) {
+                                price.setVolume((int) Math.min((long) Integer.MAX_VALUE, quote.tradeVolume()));
+                        }
+
+                        stockPriceRepository.save(price);
+                } catch (Exception ex) {
+                        log.warn("Failed to upsert stock_prices for symbol={} date={}: {}", symbol, tradingDate,
+                                        ex.getMessage());
+                }
+        }
+
+        private void ensurePreMarketCandle(
+                        String symbol,
+                        String exchange,
+                        LocalDate tradingDate,
+                        AngelOneMarketDtos.AngelOneMarketQuoteItem quote) {
+
+                if (quote == null || quote.open() == null || quote.open() <= 0.0) {
+                        return;
+                }
+
+                LocalDateTime preMarketTime = tradingDate.atTime(9, 8);
+                Optional<MarketCandle> existingOpt = marketCandleRepository
+                                .findBySymbolAndExchangeAndTimeframeAndCandleTime(
+                                                symbol,
+                                                exchange,
+                                                CandleTimeframe.ONE_MINUTE,
+                                                preMarketTime);
+
+                MarketCandle candle = existingOpt.orElseGet(() -> MarketCandle.builder()
+                                .symbol(symbol)
+                                .exchange(exchange)
+                                .timeframe(CandleTimeframe.ONE_MINUTE)
+                                .candleTime(preMarketTime)
+                                .createdAt(timeProvider.nowDateTime())
+                                .build());
+
+                candle.setOpenPrice(quote.open());
+                candle.setHighPrice(quote.open());
+                candle.setLowPrice(quote.open());
+                candle.setClosePrice(quote.open());
+                if (candle.getVolume() == null) {
+                        candle.setVolume(0L);
+                }
+                candle.setSource(RECONCILIATION_SOURCE);
+                candle.setIsFinalized(true);
+                candle.setQualityStatus(CandleQualityStatus.RECONCILED);
+                candle.setProcessingStatus(CandleProcessingStatus.RELEASED);
+                candle.setUpdatedAt(timeProvider.nowDateTime());
+                LiveMarketCandleService.applyCandleStructure(candle);
+
+                try {
+                        marketCandleRepository.save(candle);
+                } catch (Exception ex) {
+                        log.warn("Failed to ensure 09:08 pre-market candle for symbol={} date={}: {}", symbol,
+                                        tradingDate,
+                                        ex.getMessage());
+                }
         }
 
         private boolean close(
@@ -1093,6 +1373,54 @@ public class EodReconciliationService {
                         log.warn(
                                         "Failed to archive raw broker response for symbol={} date={}: {}",
                                         symbol,
+                                        tradingDate,
+                                        ex.getMessage());
+                }
+        }
+
+        private void saveQuotesToArchive(
+                        LocalDate tradingDate,
+                        Map<String, AngelOneMarketDtos.AngelOneMarketQuoteItem> newQuotes) {
+
+                if (rawArchiveDir == null
+                                || rawArchiveDir.isBlank()
+                                || newQuotes == null
+                                || newQuotes.isEmpty()) {
+                        return;
+                }
+
+                try {
+                        Path dateDir = Path.of(
+                                        rawArchiveDir,
+                                        tradingDate.toString());
+
+                        Files.createDirectories(dateDir);
+
+                        Path quoteFile = dateDir.resolve("market-quotes.json");
+                        Map<String, Object> mergedQuotes = new LinkedHashMap<>();
+
+                        if (Files.exists(quoteFile)) {
+                                try {
+                                        Map<String, Object> loaded = objectMapper.readValue(quoteFile.toFile(),
+                                                        Map.class);
+                                        if (loaded != null) {
+                                                mergedQuotes.putAll(loaded);
+                                        }
+                                } catch (Exception ex) {
+                                        log.warn("Failed to read existing market-quotes.json for date {}: {}",
+                                                        tradingDate, ex.getMessage());
+                                }
+                        }
+
+                        mergedQuotes.putAll(newQuotes);
+
+                        objectMapper.writerWithDefaultPrettyPrinter().writeValue(
+                                        quoteFile.toFile(),
+                                        mergedQuotes);
+
+                } catch (Exception ex) {
+                        log.warn(
+                                        "Failed to archive market quotes for date {}: {}",
                                         tradingDate,
                                         ex.getMessage());
                 }

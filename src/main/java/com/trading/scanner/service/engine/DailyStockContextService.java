@@ -306,13 +306,36 @@ public class DailyStockContextService {
                         context.setDistFromResistancePct(null);
                 }
 
-                if (firstTodayCandle != null
-                                && firstTodayCandle.getOpenPrice() != null
+                Double officialDayOpen = null;
+                if (marketCandleRepository != null && context.getSymbol() != null && context.getExchange() != null) {
+                        try {
+                                List<MarketCandle> preMarket = marketCandleRepository
+                                                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                                                                context.getSymbol(),
+                                                                context.getExchange(),
+                                                                CandleTimeframe.ONE_MINUTE,
+                                                                tradingDate.atTime(9, 8),
+                                                                tradingDate.atTime(9, 14));
+                                if (preMarket != null && !preMarket.isEmpty()) {
+                                        MarketCandle lastPreMarket = preMarket.get(preMarket.size() - 1);
+                                        officialDayOpen = lastPreMarket.getClosePrice() != null
+                                                        ? lastPreMarket.getClosePrice()
+                                                        : lastPreMarket.getOpenPrice();
+                                }
+                        } catch (Exception ignored) {
+                        }
+                }
+
+                if (officialDayOpen == null && firstTodayCandle != null) {
+                        officialDayOpen = firstTodayCandle.getOpenPrice();
+                }
+
+                if (officialDayOpen != null
                                 && previousDay.getClosePrice() != null
                                 && previousDay.getClosePrice() != 0.0) {
 
                         context.setGapPct(
-                                        (firstTodayCandle.getOpenPrice()
+                                        (officialDayOpen
                                                         - previousDay.getClosePrice())
                                                         / previousDay.getClosePrice()
                                                         * 100.0);

@@ -15,6 +15,7 @@ import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.service.data.IntradayGapDetectedEvent;
 import com.trading.scanner.service.engine.DailyDataStatusService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
@@ -35,6 +36,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class LiveMarketSnapshotService {
@@ -750,7 +752,13 @@ public class LiveMarketSnapshotService {
                 row.setIsFinalized(false);
                 row.setUpdatedAt(now);
 
-                snapshotRepository.save(row);
+                try {
+                        snapshotRepository.save(row);
+                } catch (Exception ex) {
+                        // Safe ignore on concurrent unique constraint collision
+                        log.debug("Concurrent snapshot collision for symbol={} minute={}: {}", snapshot.symbol(),
+                                        minuteTime, ex.getMessage());
+                }
         }
 
         private boolean markUnresolved(

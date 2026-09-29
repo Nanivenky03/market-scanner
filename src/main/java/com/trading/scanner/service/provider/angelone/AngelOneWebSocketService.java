@@ -221,27 +221,32 @@ public class AngelOneWebSocketService {
     }
 
     void handleParsedTick(AngelOneTickParserService.NormalizedTick tick) {
+        if (tick.symbol() == null || tick.exchange() == null || tick.tickTime() == null
+                || tick.lastPrice() == null) {
+            parserFailures++;
+            return;
+        }
+
         try {
-            if (tick.symbol() == null || tick.exchange() == null || tick.tickTime() == null
-                    || tick.lastPrice() == null) {
-                parserFailures++;
-                return;
-            }
-
             liveMarketSnapshotService.update(tick);
+        } catch (Exception ex) {
+            log.debug("Failed to update snapshot for tick symbol={}: {}", tick.symbol(), ex.getMessage());
+        }
 
+        try {
             liveMarketCandleService.ingestTick(
                     new LiveMarketCandleService.TickInput(
                             tick.symbol(),
                             tick.exchange(),
                             tick.tickTime(),
                             tick.lastPrice(),
-                            tick.lastTradedQuantity()));
+                            tick.lastTradedQuantity(),
+                            tick.volumeTradedForDay()));
 
             parsedTicksReceived++;
         } catch (Exception ex) {
             parserFailures++;
-            log.warn("Failed to ingest parsed websocket tick: {}", ex.getMessage());
+            log.warn("Failed to ingest parsed websocket tick for symbol={}: {}", tick.symbol(), ex.getMessage());
         }
     }
 

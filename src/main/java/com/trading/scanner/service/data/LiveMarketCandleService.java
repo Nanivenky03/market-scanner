@@ -17,6 +17,7 @@ import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.engine.IntradayIndicatorService;
 import com.trading.scanner.service.runtime.LiveSignalService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -34,8 +35,11 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Slf4j
 @Service
 public class LiveMarketCandleService {
+
+        private static final LocalTime PRE_MARKET_UNCROSS = LocalTime.of(9, 8);
 
         private static final LocalTime MARKET_OPEN = LocalTime.of(9, 15);
 
@@ -144,6 +148,16 @@ public class LiveMarketCandleService {
 
                 LocalDateTime tickTime = truncateToMinute(input.tickTime());
 
+                if (tickTime.toLocalTime().isBefore(PRE_MARKET_UNCROSS)) {
+                        return new IngestResult(
+                                        symbol,
+                                        exchange,
+                                        tickTime,
+                                        false,
+                                        false,
+                                        "Ignored pre-market tick prior to 09:08 uncrossing");
+                }
+
                 String key = exchange + "|" + symbol;
 
                 synchronized (key.intern()) {
@@ -162,7 +176,8 @@ public class LiveMarketCandleService {
                                                                 exchange,
                                                                 tickTime,
                                                                 input.lastPrice(),
-                                                                input.lastTradedQuantity()));
+                                                                input.lastTradedQuantity(),
+                                                                input.volumeTradedForDay()));
 
                                 return new IngestResult(
                                                 symbol,
@@ -190,7 +205,8 @@ public class LiveMarketCandleService {
 
                                 existing.applyTick(
                                                 input.lastPrice(),
-                                                input.lastTradedQuantity());
+                                                input.lastTradedQuantity(),
+                                                input.volumeTradedForDay());
 
                                 return new IngestResult(
                                                 symbol,
@@ -226,7 +242,8 @@ public class LiveMarketCandleService {
                                                         exchange,
                                                         tickTime,
                                                         input.lastPrice(),
-                                                        input.lastTradedQuantity()));
+                                                        input.lastTradedQuantity(),
+                                                        input.volumeTradedForDay()));
 
                         return new IngestResult(
                                         symbol,
@@ -597,17 +614,26 @@ public class LiveMarketCandleService {
                                                 timeProvider.nowDateTime())
                                 .build());
 
-                result.setOpenPrice(
-                                candle.openPrice());
+                Double openPrice = candle.openPrice();
+                Double highPrice = candle.highPrice();
+                Double lowPrice = candle.lowPrice();
+                Double closePrice = candle.closePrice();
 
-                result.setHighPrice(
-                                candle.highPrice());
+                // For pre-market 09:08 uncrossed candle, all OHLC equal the final equilibrium
+                // uncrossed price (closePrice)
+                if (candle.candleTime().toLocalTime().equals(PRE_MARKET_UNCROSS)
+                                || candle.candleTime().toLocalTime().isBefore(MARKET_OPEN)) {
+                        Double uncrossedPrice = candle.closePrice();
+                        openPrice = uncrossedPrice;
+                        highPrice = uncrossedPrice;
+                        lowPrice = uncrossedPrice;
+                        closePrice = uncrossedPrice;
+                }
 
-                result.setLowPrice(
-                                candle.lowPrice());
-
-                result.setClosePrice(
-                                candle.closePrice());
+                result.setOpenPrice(openPrice);
+                result.setHighPrice(highPrice);
+                result.setLowPrice(lowPrice);
+                result.setClosePrice(closePrice);
 
                 result.setVolume(
                                 candle.volume());
@@ -630,28 +656,10 @@ public class LiveMarketCandleService {
 
                 try {
                         return marketCandleRepository.save(result);
-                } catch (org.springframework.dao.DataIntegrityViolationException ex) {
-                        MarketCandle reload = marketCandleRepository
-                                        .findBySymbolAndExchangeAndTimeframeAndCandleTime(
-                                                        candle.symbol(),
-                                                        candle.exchange(),
-                                                        CandleTimeframe.ONE_MINUTE,
-                                                        candle.candleTime())
-                                        .orElse(result);
-                        reload.setOpenPrice(candle.openPrice());
-                        reload.setHighPrice(candle.highPrice());
-                        reload.setLowPrice(candle.lowPrice());
-                        reload.setClosePrice(candle.closePrice());
-                        reload.setVolume(candle.volume());
-                        reload.setSource("LIVE_WEBSOCKET");
-                        reload.setIsFinalized(true);
-                        reload.setQualityStatus(CandleQualityStatus.LIVE);
-                        reload.setProcessingStatus(
-                                        blocked
-                                                        ? CandleProcessingStatus.PROVISIONAL
-                                                        : CandleProcessingStatus.RELEASED);
-                        reload.setUpdatedAt(timeProvider.nowDateTime());
-                        return marketCandleRepository.save(reload);
+                } catch (Exception ex) {
+                        log.debug("Concurrent candle collision for symbol={} minute={}: {}", candle.symbol(),
+                                        candle.candleTime(), ex.getMessage());
+                        return result;
                 }
         }
 
@@ -1320,7 +1328,17 @@ public class LiveMarketCandleService {
                         String exchange,
                         LocalDateTime tickTime,
                         Double lastPrice,
-                        Long lastTradedQuantity) {
+                        Long lastTradedQuantity,
+                        Long volumeTradedForDay) {
+
+                public TickInput(
+                                String symbol,
+                                String exchange,
+                                LocalDateTime tickTime,
+                                Double lastPrice,
+                                Long lastTradedQuantity) {
+                        this(symbol, exchange, tickTime, lastPrice, lastTradedQuantity, null);
+                }
         }
 
         public record IngestResult(
@@ -1363,7 +1381,9 @@ public class LiveMarketCandleService {
                 private Double highPrice;
                 private Double lowPrice;
                 private Double closePrice;
-                private Long volume;
+                private Long incrementalVolume;
+                private Long startDayVolume;
+                private Long latestDayVolume;
 
                 private OpenMinuteCandle(
                                 String symbol,
@@ -1373,7 +1393,9 @@ public class LiveMarketCandleService {
                                 Double highPrice,
                                 Double lowPrice,
                                 Double closePrice,
-                                Long volume) {
+                                Long incrementalVolume,
+                                Long startDayVolume,
+                                Long latestDayVolume) {
 
                         this.symbol = symbol;
                         this.exchange = exchange;
@@ -1382,7 +1404,9 @@ public class LiveMarketCandleService {
                         this.highPrice = highPrice;
                         this.lowPrice = lowPrice;
                         this.closePrice = closePrice;
-                        this.volume = volume;
+                        this.incrementalVolume = incrementalVolume;
+                        this.startDayVolume = startDayVolume;
+                        this.latestDayVolume = latestDayVolume;
                 }
 
                 static OpenMinuteCandle start(
@@ -1390,7 +1414,8 @@ public class LiveMarketCandleService {
                                 String exchange,
                                 LocalDateTime time,
                                 Double price,
-                                Long volume) {
+                                Long tickVolume,
+                                Long volumeTradedForDay) {
 
                         return new OpenMinuteCandle(
                                         symbol,
@@ -1400,14 +1425,24 @@ public class LiveMarketCandleService {
                                         price,
                                         price,
                                         price,
-                                        volume == null
-                                                        ? 0L
-                                                        : volume);
+                                        tickVolume == null ? 0L : tickVolume,
+                                        volumeTradedForDay,
+                                        volumeTradedForDay);
+                }
+
+                static OpenMinuteCandle start(
+                                String symbol,
+                                String exchange,
+                                LocalDateTime time,
+                                Double price,
+                                Long volume) {
+                        return start(symbol, exchange, time, price, volume, null);
                 }
 
                 void applyTick(
                                 Double price,
-                                Long tickVolume) {
+                                Long tickVolume,
+                                Long volumeTradedForDay) {
 
                         if (price != null) {
                                 highPrice = Math.max(
@@ -1421,12 +1456,25 @@ public class LiveMarketCandleService {
                                 closePrice = price;
                         }
 
-                        volume = (volume == null
+                        incrementalVolume = (incrementalVolume == null
                                         ? 0L
-                                        : volume)
+                                        : incrementalVolume)
                                         + (tickVolume == null
                                                         ? 0L
                                                         : tickVolume);
+
+                        if (volumeTradedForDay != null && volumeTradedForDay >= 0L) {
+                                if (startDayVolume == null) {
+                                        startDayVolume = volumeTradedForDay;
+                                }
+                                latestDayVolume = volumeTradedForDay;
+                        }
+                }
+
+                void applyTick(
+                                Double price,
+                                Long tickVolume) {
+                        applyTick(price, tickVolume, null);
                 }
 
                 String symbol() {
@@ -1458,7 +1506,10 @@ public class LiveMarketCandleService {
                 }
 
                 Long volume() {
-                        return volume;
+                        if (latestDayVolume != null && startDayVolume != null && latestDayVolume >= startDayVolume) {
+                                return latestDayVolume - startDayVolume;
+                        }
+                        return incrementalVolume == null ? 0L : incrementalVolume;
                 }
         }
 }

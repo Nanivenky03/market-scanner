@@ -149,6 +149,22 @@ public class BackfillQueueService {
                         return 0;
                 }
 
+                LocalDateTime now = timeProvider != null && timeProvider.nowDateTime() != null
+                                ? timeProvider.nowDateTime()
+                                : LocalDateTime.now();
+
+                LocalDate today = resolveToday(now);
+                if (tradingDate.isAfter(today) || tradingDate.getYear() < 2020 || tradingDate.getYear() > 2050) {
+                        log.warn("Rejected backfill enqueue with invalid tradingDate: {} for symbol={}", tradingDate,
+                                        symbol);
+                        return 0;
+                }
+
+                if (fromTime.toLocalDate().isAfter(today) || fromTime.getYear() < 2020 || fromTime.getYear() > 2050) {
+                        log.warn("Rejected backfill enqueue with invalid fromTime: {} for symbol={}", fromTime, symbol);
+                        return 0;
+                }
+
                 LocalDateTime marketOpen = tradingDate.atTime(MARKET_OPEN);
                 LocalDateTime marketClose = tradingDate.atTime(MARKET_CLOSE);
 
@@ -158,8 +174,6 @@ public class BackfillQueueService {
                 if (clampedFrom.isAfter(clampedTo)) {
                         return 0;
                 }
-
-                LocalDateTime now = timeProvider.nowDateTime();
 
                 BackfillJob job = backfillJobRepository
                                 .findBySymbolAndExchangeAndTradingDate(
@@ -258,6 +272,20 @@ public class BackfillQueueService {
                 }
 
                 BackfillJob job = jobOpt.get();
+
+                LocalDate today = resolveToday(now);
+                if (job.getTradingDate() == null
+                                || job.getTradingDate().isAfter(today)
+                                || job.getTradingDate().getYear() < 2020
+                                || job.getTradingDate().getYear() > 2050) {
+                        log.warn("Quarantining corrupt backfill job with invalid tradingDate: id={} date={}",
+                                        job.getId(), job.getTradingDate());
+                        job.setStatus(BackfillJobStatus.DEAD_LETTER);
+                        job.setLastError("Corrupt/future tradingDate rejected by safety guard");
+                        job.setUpdatedAt(now);
+                        backfillJobRepository.save(job);
+                        return new ProcessResult(true, job.getId(), "DEAD_LETTER: Invalid tradingDate");
+                }
 
                 LocalDateTime fromTime = job.getFromTime() != null
                                 ? job.getFromTime()
@@ -435,6 +463,19 @@ public class BackfillQueueService {
                 return left == null
                                 ? right == null
                                 : left.equals(right);
+        }
+
+        private LocalDate resolveToday(LocalDateTime fallbackNow) {
+                if (timeProvider != null) {
+                        try {
+                                LocalDate d = timeProvider.today();
+                                if (d != null) {
+                                        return d;
+                                }
+                        } catch (Exception ignored) {
+                        }
+                }
+                return fallbackNow != null ? fallbackNow.toLocalDate() : LocalDate.now();
         }
 
         public record ProcessResult(
