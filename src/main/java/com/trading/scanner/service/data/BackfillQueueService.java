@@ -246,11 +246,27 @@ public class BackfillQueueService {
                         backfillJobRepository.save(job);
                 }
 
-                if (!staleJobs.isEmpty()) {
-                        log.warn("Recovered stale backfill jobs count={}", staleJobs.size());
+                List<BackfillJob> deadLetterJobs = backfillJobRepository.findByStatusAndTradingDate(
+                                BackfillJobStatus.DEAD_LETTER,
+                                resolveToday(now));
+
+                for (BackfillJob job : deadLetterJobs) {
+                        job.setStatus(BackfillJobStatus.PENDING);
+                        job.setAttempts(0);
+                        job.setLeaseUntil(null);
+                        job.setNextAttemptAt(now);
+                        job.setLastError("Recovered dead-letter job for retry with zero-trade resolution");
+                        job.setUpdatedAt(now);
+                        backfillJobRepository.save(job);
                 }
 
-                return staleJobs.size();
+                int totalRecovered = staleJobs.size() + deadLetterJobs.size();
+                if (totalRecovered > 0) {
+                        log.info("Recovered backfill jobs count={} (stale={}, deadLetter={})",
+                                        totalRecovered, staleJobs.size(), deadLetterJobs.size());
+                }
+
+                return totalRecovered;
         }
 
         @Transactional
@@ -324,7 +340,9 @@ public class BackfillQueueService {
                         if (!released) {
                                 return retry(
                                                 job,
-                                                "Repaired range is still incomplete or unresolved");
+                                                "Repaired range is still incomplete or unresolved",
+                                                fromTime,
+                                                toTime);
                         }
 
                         boolean fullDay = fromTime.equals(
@@ -343,7 +361,9 @@ public class BackfillQueueService {
                                         return retry(
                                                         job,
                                                         "Full-day backfill incomplete: "
-                                                                        + result.message());
+                                                                        + result.message(),
+                                                        fromTime,
+                                                        toTime);
                                 }
 
                                 dailyDataStatusService.markStatus(
@@ -369,7 +389,7 @@ public class BackfillQueueService {
                                         "Backfill job completed");
 
                 } catch (Exception ex) {
-                        return retry(job, ex.getMessage());
+                        return retry(job, ex.getMessage(), fromTime, toTime);
                 }
         }
 
@@ -403,7 +423,9 @@ public class BackfillQueueService {
 
         private ProcessResult retry(
                         BackfillJob job,
-                        String error) {
+                        String error,
+                        LocalDateTime fromTime,
+                        LocalDateTime toTime) {
 
                 LocalDateTime now = timeProvider.nowDateTime();
 
@@ -416,6 +438,41 @@ public class BackfillQueueService {
                 job.setUpdatedAt(now);
 
                 if (job.getAttempts() >= maxAttempts) {
+                        // On final retry attempt: if provider returned no candles for the range,
+                        // confirm zero-trade minutes and unblock symbol
+                        boolean isNoCandlesResponse = message.contains("no-trade cannot be inferred")
+                                        || message.contains("returned no candles")
+                                        || message.contains("incomplete or unresolved");
+
+                        if (isNoCandlesResponse && fromTime != null && toTime != null) {
+                                liveMarketCandleService.confirmNoTradeForUnresolvedRange(
+                                                job.getSymbol(),
+                                                job.getExchange(),
+                                                fromTime,
+                                                toTime);
+
+                                boolean released = liveMarketCandleService.releaseRepairedRange(
+                                                job.getSymbol(),
+                                                job.getExchange(),
+                                                fromTime,
+                                                toTime);
+
+                                if (released) {
+                                        job.setStatus(BackfillJobStatus.DONE);
+                                        job.setLastError(null);
+                                        job.setUpdatedAt(now);
+                                        backfillJobRepository.save(job);
+
+                                        log.info("Backfill job id={} symbol={} marked DONE after confirming zero-trade range on final retry",
+                                                        job.getId(), job.getSymbol());
+
+                                        return new ProcessResult(
+                                                        true,
+                                                        job.getId(),
+                                                        "Backfill job completed (confirmed zero-trade range on final retry)");
+                                }
+                        }
+
                         job.setStatus(BackfillJobStatus.DEAD_LETTER);
 
                         dailyDataStatusService.markStatus(

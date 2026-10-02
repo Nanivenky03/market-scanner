@@ -124,7 +124,6 @@ public class LiveMarketCandleService {
                                 null);
         }
 
-        @Transactional
         public IngestResult ingestTick(
                         TickInput input) {
 
@@ -468,19 +467,22 @@ public class LiveMarketCandleService {
                                 .toList();
         }
 
-        @Transactional
         public FlushResult flushOpenCandles() {
                 int flushed = 0;
 
                 for (OpenMinuteCandle candle : new ArrayList<>(
                                 openCandles.values())) {
 
-                        finalizeAndPersist(
-                                        candle,
-                                        blocked(
-                                                        candle.exchange()
-                                                                        + "|"
-                                                                        + candle.symbol()));
+                        try {
+                                finalizeAndPersist(
+                                                candle,
+                                                blocked(
+                                                                candle.exchange()
+                                                                                + "|"
+                                                                                + candle.symbol()));
+                        } catch (Exception ex) {
+                                log.debug("Flush open candle collision for {}: {}", candle.symbol(), ex.getMessage());
+                        }
 
                         flushed++;
                 }
@@ -492,7 +494,6 @@ public class LiveMarketCandleService {
                                 "Flushed open candles");
         }
 
-        @Transactional
         public RolloverResult rolloverCompletedMinutes() {
                 LocalDateTime now = timeProvider.nowDateTime();
                 LocalDateTime currentMinute = truncateToMinute(now);
@@ -505,7 +506,12 @@ public class LiveMarketCandleService {
                                 synchronized (key.intern()) {
                                         OpenMinuteCandle current = openCandles.get(key);
                                         if (current != null && current.candleTime().isBefore(currentMinute)) {
-                                                finalizeAndPersist(current, blocked(key));
+                                                try {
+                                                        finalizeAndPersist(current, blocked(key));
+                                                } catch (Exception ex) {
+                                                        log.debug("Minute rollover persist collision for {}: {}", key,
+                                                                        ex.getMessage());
+                                                }
                                                 openCandles.remove(key, current);
                                                 rolledOver++;
                                         }
@@ -659,7 +665,13 @@ public class LiveMarketCandleService {
                 } catch (Exception ex) {
                         log.debug("Concurrent candle collision for symbol={} minute={}: {}", candle.symbol(),
                                         candle.candleTime(), ex.getMessage());
-                        return result;
+                        return marketCandleRepository
+                                        .findBySymbolAndExchangeAndTimeframeAndCandleTime(
+                                                        candle.symbol(),
+                                                        candle.exchange(),
+                                                        CandleTimeframe.ONE_MINUTE,
+                                                        candle.candleTime())
+                                        .orElse(result);
                 }
         }
 
@@ -955,7 +967,19 @@ public class LiveMarketCandleService {
                 result.setUpdatedAt(
                                 timeProvider.nowDateTime());
 
-                return marketCandleRepository.save(result);
+                try {
+                        return marketCandleRepository.save(result);
+                } catch (Exception ex) {
+                        log.debug("Derived candle save collision for {} {}: {}", result.getSymbol(), timeframe,
+                                        ex.getMessage());
+                        return marketCandleRepository
+                                        .findBySymbolAndExchangeAndTimeframeAndCandleTime(
+                                                        oneMinute.getSymbol(),
+                                                        oneMinute.getExchange(),
+                                                        timeframe,
+                                                        bucket)
+                                        .orElse(result);
+                }
         }
 
         private MarketCandle applyCommonIndicators(
@@ -998,7 +1022,13 @@ public class LiveMarketCandleService {
                         candle.setUpdatedAt(
                                         timeProvider.nowDateTime());
 
-                        return marketCandleRepository.save(candle);
+                        try {
+                                return marketCandleRepository.save(candle);
+                        } catch (Exception ex) {
+                                log.debug("Indicator save collision for {} {}: {}", candle.getSymbol(),
+                                                candle.getTimeframe(), ex.getMessage());
+                                return candle;
+                        }
                 }
 
                 /*
@@ -1056,7 +1086,13 @@ public class LiveMarketCandleService {
                 candle.setUpdatedAt(
                                 timeProvider.nowDateTime());
 
-                return marketCandleRepository.save(candle);
+                try {
+                        return marketCandleRepository.save(candle);
+                } catch (Exception ex) {
+                        log.debug("Indicator save collision for {} {}: {}", candle.getSymbol(), candle.getTimeframe(),
+                                        ex.getMessage());
+                        return candle;
+                }
         }
 
         private Double previousTradingDayClose(

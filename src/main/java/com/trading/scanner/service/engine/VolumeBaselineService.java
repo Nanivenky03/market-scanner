@@ -120,7 +120,7 @@ public class VolumeBaselineService {
                                         context.getSymbol(),
                                         completedTradingDate);
 
-                        if (dailyWindow.sampleDays() <= 0) {
+                        if (dailyWindow.sampleDays() < LOOKBACK_DAYS) {
                                 skippedSymbols++;
                                 continue;
                         }
@@ -439,7 +439,7 @@ public class VolumeBaselineService {
                                         .add(cumulative);
                 }
 
-                int upsertedRows = 0;
+                List<VolumeTimeWindowBaseline> rowsToSave = new ArrayList<>();
 
                 for (int minute = 0; minute < MARKET_SESSION_MINUTES; minute++) {
 
@@ -479,11 +479,14 @@ public class VolumeBaselineService {
 
                         row.setComputedAt(computedAt);
 
-                        volumeTimeWindowBaselineRepository.save(row);
-                        upsertedRows++;
+                        rowsToSave.add(row);
                 }
 
-                return upsertedRows;
+                if (!rowsToSave.isEmpty()) {
+                        volumeTimeWindowBaselineRepository.saveAll(rowsToSave);
+                }
+
+                return rowsToSave.size();
         }
 
         private boolean isUsableCandle(

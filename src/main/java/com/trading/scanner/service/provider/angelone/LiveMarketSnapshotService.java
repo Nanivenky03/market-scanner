@@ -63,7 +63,6 @@ public class LiveMarketSnapshotService {
         @Value("${runtime.feed-health.recovery-ticks:2}")
         private int recoveryTicks = 2;
 
-        @Transactional
         public void update(
                         AngelOneTickParserService.NormalizedTick tick) {
 
@@ -109,47 +108,55 @@ public class LiveMarketSnapshotService {
                                 tick.fiftyTwoWeekLowPrice(),
                                 now);
 
-                updateFeedState(
-                                snapshot,
-                                now);
+                String symbolKey = exchange + "|" + symbol;
 
-                String key = snapshotKey(
-                                snapshot.symbol(),
-                                snapshot.exchange(),
-                                snapshot.brokerToken());
+                synchronized (symbolKey.intern()) {
+                        updateFeedState(
+                                        snapshot,
+                                        now);
 
-                SnapshotView previous = latestSnapshots.get(key);
+                        String key = snapshotKey(
+                                        snapshot.symbol(),
+                                        snapshot.exchange(),
+                                        snapshot.brokerToken());
 
-                if (previous != null
-                                && !minuteBucket(previous.tickTime())
-                                                .equals(
-                                                                minuteBucket(snapshot.tickTime()))) {
+                        SnapshotView previous = latestSnapshots.get(key);
 
-                        snapshotRepository
-                                        .findBySymbolAndExchangeAndMinuteTime(
-                                                        symbol,
-                                                        exchange,
-                                                        minuteBucket(
-                                                                        previous.tickTime()))
-                                        .ifPresent(row -> {
-                                                row.setIsFinalized(true);
-                                                row.setUpdatedAt(now);
-                                                snapshotRepository.save(row);
-                                        });
+                        if (previous != null
+                                        && !minuteBucket(previous.tickTime())
+                                                        .equals(
+                                                                        minuteBucket(snapshot.tickTime()))) {
+
+                                try {
+                                        snapshotRepository
+                                                        .findBySymbolAndExchangeAndMinuteTime(
+                                                                        symbol,
+                                                                        exchange,
+                                                                        minuteBucket(
+                                                                                        previous.tickTime()))
+                                                        .ifPresent(row -> {
+                                                                row.setIsFinalized(true);
+                                                                row.setUpdatedAt(now);
+                                                                snapshotRepository.save(row);
+                                                        });
+                                } catch (Exception ex) {
+                                        log.debug("Concurrent snapshot finalization ignore for symbol={}: {}", symbol,
+                                                        ex.getMessage());
+                                }
+                        }
+
+                        latestSnapshots.put(key, snapshot);
+
+                        upsertMinuteSnapshot(
+                                        snapshot,
+                                        now);
+
+                        markTickReceived(
+                                        snapshot,
+                                        now);
                 }
-
-                latestSnapshots.put(key, snapshot);
-
-                upsertMinuteSnapshot(
-                                snapshot,
-                                now);
-
-                markTickReceived(
-                                snapshot,
-                                now);
         }
 
-        @Transactional
         public int checkForClosedMinuteGaps() {
                 LocalDateTime now = timeProvider.nowDateTime()
                                 .withSecond(0)
@@ -195,125 +202,135 @@ public class LiveMarketSnapshotService {
                         String exchange = normalize(
                                         stock.getExchange().name());
 
-                        LiveFeedState feedState = getOrCreateFeedState(
-                                        symbol,
-                                        exchange,
-                                        date,
-                                        now);
+                        String key = exchange + "|" + symbol;
 
-                        LocalDateTime from = feedState.getLastCheckedMinute() == null
-                                        ? date.atTime(MARKET_OPEN)
-                                        : feedState
-                                                        .getLastCheckedMinute()
-                                                        .plusMinutes(1);
-
-                        if (from.isBefore(
-                                        date.atTime(MARKET_OPEN))) {
-                                from = date.atTime(MARKET_OPEN);
-                        }
-
-                        if (from.isAfter(
-                                        latestClosedMinute)) {
-                                continue;
-                        }
-
-                        Set<LocalDateTime> tickMinutes = snapshotRepository
-                                        .findBySymbolAndExchangeAndMinuteTimeBetweenOrderByMinuteTimeAsc(
+                        synchronized (key.intern()) {
+                                try {
+                                        LiveFeedState feedState = getOrCreateFeedState(
                                                         symbol,
                                                         exchange,
-                                                        from,
-                                                        latestClosedMinute)
-                                        .stream()
-                                        .map(MarketMinuteSnapshot::getMinuteTime)
-                                        .collect(Collectors.toSet());
+                                                        date,
+                                                        now);
 
-                        Map<LocalDateTime, LiveMinuteResolution> resolutions = new HashMap<>();
+                                        LocalDateTime from = feedState.getLastCheckedMinute() == null
+                                                        ? date.atTime(MARKET_OPEN)
+                                                        : feedState
+                                                                        .getLastCheckedMinute()
+                                                                        .plusMinutes(1);
 
-                        for (LiveMinuteResolution resolution : resolutionRepository
-                                        .findBySymbolAndExchangeAndMinuteTimeBetweenOrderByMinuteTimeAsc(
-                                                        symbol,
-                                                        exchange,
-                                                        from,
+                                        if (from.isBefore(
+                                                        date.atTime(MARKET_OPEN))) {
+                                                from = date.atTime(MARKET_OPEN);
+                                        }
+
+                                        if (from.isAfter(
                                                         latestClosedMinute)) {
+                                                continue;
+                                        }
 
-                                resolutions.put(
-                                                resolution.getMinuteTime(),
-                                                resolution);
-                        }
+                                        Set<LocalDateTime> tickMinutes = snapshotRepository
+                                                        .findBySymbolAndExchangeAndMinuteTimeBetweenOrderByMinuteTimeAsc(
+                                                                        symbol,
+                                                                        exchange,
+                                                                        from,
+                                                                        latestClosedMinute)
+                                                        .stream()
+                                                        .map(MarketMinuteSnapshot::getMinuteTime)
+                                                        .collect(Collectors.toSet());
 
-                        List<LocalDateTime> unresolved = new ArrayList<>();
+                                        Map<LocalDateTime, LiveMinuteResolution> resolutions = new HashMap<>();
 
-                        List<LocalDateTime> newlyUnresolved = new ArrayList<>();
+                                        for (LiveMinuteResolution resolution : resolutionRepository
+                                                        .findBySymbolAndExchangeAndMinuteTimeBetweenOrderByMinuteTimeAsc(
+                                                                        symbol,
+                                                                        exchange,
+                                                                        from,
+                                                                        latestClosedMinute)) {
 
-                        for (LocalDateTime minute = from; !minute.isAfter(
-                                        latestClosedMinute); minute = minute.plusMinutes(1)) {
+                                                resolutions.put(
+                                                                resolution.getMinuteTime(),
+                                                                resolution);
+                                        }
 
-                                if (tickMinutes.contains(minute)) {
-                                        continue;
+                                        List<LocalDateTime> unresolved = new ArrayList<>();
+
+                                        List<LocalDateTime> newlyUnresolved = new ArrayList<>();
+
+                                        for (LocalDateTime minute = from; !minute.isAfter(
+                                                        latestClosedMinute); minute = minute.plusMinutes(1)) {
+
+                                                if (tickMinutes.contains(minute)) {
+                                                        continue;
+                                                }
+
+                                                LiveMinuteResolution resolution = resolutions.get(minute);
+
+                                                if (resolution != null
+                                                                && (resolution.getStatus() == MinuteResolutionStatus.NO_TRADE_CONFIRMED
+                                                                                || resolution.getStatus() == MinuteResolutionStatus.REPAIRED)) {
+                                                        continue;
+                                                }
+
+                                                unresolved.add(minute);
+
+                                                if (markUnresolved(
+                                                                symbol,
+                                                                exchange,
+                                                                minute,
+                                                                "No local tick candle; provider validation required",
+                                                                now)) {
+                                                        newlyUnresolved.add(minute);
+                                                }
+                                        }
+
+                                        if (!unresolved.isEmpty()) {
+                                                feedState.setBlocked(true);
+                                                feedState.setGapFrom(
+                                                                min(
+                                                                                feedState.getGapFrom(),
+                                                                                unresolved.get(0)));
+                                                feedState.setGapTo(
+                                                                max(
+                                                                                feedState.getGapTo(),
+                                                                                unresolved.get(
+                                                                                                unresolved.size()
+                                                                                                                - 1)));
+
+                                                dataStatusService.markPartial(
+                                                                symbol,
+                                                                exchange,
+                                                                date,
+                                                                "Closed minute unresolved; provider validation required");
+
+                                                publishRanges(
+                                                                symbol,
+                                                                exchange,
+                                                                date,
+                                                                newlyUnresolved);
+
+                                                detected += newlyUnresolved.isEmpty()
+                                                                ? 0
+                                                                : 1;
+
+                                        } else if (Boolean.TRUE.equals(
+                                                        feedState.getBlocked())) {
+
+                                                feedState.setBlocked(false);
+                                                feedState.setGapFrom(null);
+                                                feedState.setGapTo(null);
+                                        }
+
+                                        feedState.setLastCheckedMinute(
+                                                        latestClosedMinute);
+
+                                        feedState.setUpdatedAt(now);
+
+                                        feedStateRepository.save(feedState);
+                                } catch (Exception ex) {
+                                        log.debug("Closed minute gap check collision for symbol={}: {}", symbol,
+                                                        ex.getMessage());
                                 }
-
-                                LiveMinuteResolution resolution = resolutions.get(minute);
-
-                                if (resolution != null
-                                                && (resolution.getStatus() == MinuteResolutionStatus.NO_TRADE_CONFIRMED
-                                                                || resolution.getStatus() == MinuteResolutionStatus.REPAIRED)) {
-                                        continue;
-                                }
-
-                                unresolved.add(minute);
-
-                                if (markUnresolved(
-                                                symbol,
-                                                exchange,
-                                                minute,
-                                                "No local tick candle; provider validation required",
-                                                now)) {
-                                        newlyUnresolved.add(minute);
-                                }
                         }
-
-                        if (!unresolved.isEmpty()) {
-                                feedState.setBlocked(true);
-                                feedState.setGapFrom(
-                                                min(
-                                                                feedState.getGapFrom(),
-                                                                unresolved.get(0)));
-                                feedState.setGapTo(
-                                                max(
-                                                                feedState.getGapTo(),
-                                                                unresolved.get(
-                                                                                unresolved.size() - 1)));
-
-                                dataStatusService.markPartial(
-                                                symbol,
-                                                exchange,
-                                                date,
-                                                "Closed minute unresolved; provider validation required");
-
-                                publishRanges(
-                                                symbol,
-                                                exchange,
-                                                date,
-                                                newlyUnresolved);
-
-                                detected += newlyUnresolved.isEmpty()
-                                                ? 0
-                                                : 1;
-
-                        } else if (Boolean.TRUE.equals(
-                                        feedState.getBlocked())) {
-
-                                feedState.setBlocked(false);
-                                feedState.setGapFrom(null);
-                                feedState.setGapTo(null);
-                        }
-
-                        feedState.setLastCheckedMinute(
-                                        latestClosedMinute);
-
-                        feedState.setUpdatedAt(now);
-
-                        feedStateRepository.save(feedState);
                 }
 
                 return detected;
@@ -627,7 +644,12 @@ public class LiveMarketSnapshotService {
 
                 state.setUpdatedAt(now);
 
-                feedStateRepository.save(state);
+                try {
+                        feedStateRepository.save(state);
+                } catch (Exception ex) {
+                        log.debug("Live feed state save collision ignore for symbol={}: {}", state.getSymbol(),
+                                        ex.getMessage());
+                }
         }
 
         private void markTickReceived(
@@ -663,8 +685,13 @@ public class LiveMarketSnapshotService {
 
                         resolution.setUpdatedAt(now);
 
-                        resolutionRepository.save(
-                                        resolution);
+                        try {
+                                resolutionRepository.save(
+                                                resolution);
+                        } catch (Exception ex) {
+                                log.debug("Live minute resolution save collision ignore for symbol={}: {}",
+                                                snapshot.symbol(), ex.getMessage());
+                        }
                 }
         }
 
