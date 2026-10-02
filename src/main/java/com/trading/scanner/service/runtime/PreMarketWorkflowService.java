@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -171,16 +172,22 @@ public class PreMarketWorkflowService {
             WorkflowStatus universeStep = executeStage(WorkflowStatusService.PREMARKET_UNIVERSE_SYNC, today,
                     catalogStep.getWorkflowId(), () -> {
                         LocalDate prevDay = tradingCalendar.previousTradingDay(today);
+                        LocalTime nowTime = timeProvider.nowDateTime().toLocalTime();
 
                         // Auto-catchup prior day EOD reconciliation if evening runs were missed or
-                        // incomplete
-                        if (eodReconciliationService != null) {
+                        // incomplete, strictly before 08:50 AM (prior to NSE pre-open quote state
+                        // transition)
+                        if (nowTime.isBefore(LocalTime.of(8, 50)) && eodReconciliationService != null) {
                             try {
                                 eodReconciliationService.reconcilePreviousTradingDay();
                             } catch (Exception ex) {
                                 log.warn("Auto-catchup EOD reconciliation for {} had issues: {}", prevDay,
                                         ex.getMessage());
                             }
+                        } else if (!nowTime.isBefore(LocalTime.of(8, 50))) {
+                            log.warn(
+                                    "Skipping prior day EOD auto-catchup for {} because current time ({}) is at or after 08:50 AM pre-open safety cutoff",
+                                    prevDay, nowTime);
                         }
 
                         List<StockUniverse> universe = stockUniverseRepository.findAll();

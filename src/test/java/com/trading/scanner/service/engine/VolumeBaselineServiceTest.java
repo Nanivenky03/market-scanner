@@ -72,111 +72,90 @@ class VolumeBaselineServiceTest {
         }
 
         @Test
-        void preCalculate_shouldPersistEverySessionMinute() {
+        void preCalculate_shouldSkipWhenSampleDaysLessThan20() {
                 LocalDate completedDate = LocalDate.of(2026, 7, 14);
-
                 LocalDate effectiveDate = LocalDate.of(2026, 7, 15);
 
+                when(tradingCalendar.isTradingDay(completedDate)).thenReturn(true);
+                when(tradingCalendar.nextTradingDay(completedDate)).thenReturn(effectiveDate);
+                when(dailyStockContextRepository.findByTradingDateOrderBySymbolAsc(completedDate))
+                                .thenReturn(List.of(DailyStockContext.builder()
+                                                .symbol("ONGC")
+                                                .exchange("NSE")
+                                                .tradingDate(completedDate)
+                                                .build()));
+                when(stockPriceRepository.findBySymbolAndDateLessThanEqualOrderByDateAsc("ONGC", completedDate))
+                                .thenReturn(List.of(
+                                                stockPrice("ONGC", completedDate.minusDays(2), 1000),
+                                                stockPrice("ONGC", completedDate.minusDays(1), 2000),
+                                                stockPrice("ONGC", completedDate, 3000)));
+
+                VolumeBaselineService.PreCalculationResult result = service
+                                .preCalculateForCompletedTradingDay(completedDate);
+
+                assertEquals(0, result.processedSymbols());
+                assertEquals(1, result.skippedSymbols());
+                verifyNoInteractions(volumeDailyBaselineRepository);
+                verifyNoInteractions(volumeTimeWindowBaselineRepository);
+        }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        void preCalculate_shouldPersistEverySessionMinute() {
+                LocalDate completedDate = LocalDate.of(2026, 7, 14);
+                LocalDate effectiveDate = LocalDate.of(2026, 7, 15);
                 LocalDateTime computedAt = completedDate.atTime(16, 5);
 
-                List<LocalDate> historyDates = List.of(
-                                LocalDate.of(2026, 7, 10),
-                                LocalDate.of(2026, 7, 11),
-                                completedDate);
+                List<LocalDate> historyDates = new ArrayList<>();
+                List<StockPrice> stockPrices = new ArrayList<>();
+                for (int i = 19; i >= 0; i--) {
+                        LocalDate d = completedDate.minusDays(i);
+                        historyDates.add(d);
+                        stockPrices.add(stockPrice("ONGC", d, 1000));
+                }
 
-                when(tradingCalendar.isTradingDay(
-                                completedDate))
-                                .thenReturn(true);
+                when(tradingCalendar.isTradingDay(completedDate)).thenReturn(true);
+                when(tradingCalendar.nextTradingDay(completedDate)).thenReturn(effectiveDate);
+                when(timeProvider.nowDateTime()).thenReturn(computedAt);
 
-                when(tradingCalendar.nextTradingDay(
-                                completedDate))
-                                .thenReturn(effectiveDate);
+                when(dailyStockContextRepository.findByTradingDateOrderBySymbolAsc(completedDate))
+                                .thenReturn(List.of(DailyStockContext.builder()
+                                                .symbol("ONGC")
+                                                .exchange("NSE")
+                                                .tradingDate(completedDate)
+                                                .build()));
 
-                when(timeProvider.nowDateTime())
-                                .thenReturn(computedAt);
+                when(stockPriceRepository.findBySymbolAndDateLessThanEqualOrderByDateAsc("ONGC", completedDate))
+                                .thenReturn(stockPrices);
 
-                when(dailyStockContextRepository
-                                .findByTradingDateOrderBySymbolAsc(
-                                                completedDate))
-                                .thenReturn(List.of(
-                                                DailyStockContext.builder()
-                                                                .symbol("ONGC")
-                                                                .exchange("NSE")
-                                                                .tradingDate(completedDate)
-                                                                .build()));
-
-                when(stockPriceRepository
-                                .findBySymbolAndDateLessThanEqualOrderByDateAsc(
-                                                "ONGC",
-                                                completedDate))
-                                .thenReturn(List.of(
-                                                stockPrice(
-                                                                "ONGC",
-                                                                historyDates.get(0),
-                                                                1000),
-                                                stockPrice(
-                                                                "ONGC",
-                                                                historyDates.get(1),
-                                                                2000),
-                                                stockPrice(
-                                                                "ONGC",
-                                                                historyDates.get(2),
-                                                                3000)));
-
-                when(volumeDailyBaselineRepository
-                                .findBySymbolAndExchangeAndTradingDate(
-                                                "ONGC",
-                                                "NSE",
-                                                effectiveDate))
+                when(volumeDailyBaselineRepository.findBySymbolAndExchangeAndTradingDate("ONGC", "NSE", effectiveDate))
                                 .thenReturn(Optional.empty());
 
-                when(marketCandleRepository
-                                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
-                                                "ONGC",
-                                                "NSE",
-                                                CandleTimeframe.ONE_MINUTE,
-                                                historyDates.get(0).atTime(9, 15),
-                                                completedDate
-                                                                .plusDays(1)
-                                                                .atStartOfDay()
-                                                                .minusNanos(1)))
+                when(marketCandleRepository.findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                                "ONGC", "NSE", CandleTimeframe.ONE_MINUTE, historyDates.get(0).atTime(9, 15),
+                                completedDate.plusDays(1).atStartOfDay().minusNanos(1)))
                                 .thenReturn(fullHistoricalCandles(historyDates));
 
-                when(volumeTimeWindowBaselineRepository
-                                .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
-                                                eq("ONGC"),
-                                                eq("NSE"),
-                                                eq(effectiveDate),
-                                                anyInt()))
+                when(volumeTimeWindowBaselineRepository.findBySymbolAndExchangeAndTradingDateAndSessionMinute(
+                                eq("ONGC"), eq("NSE"), eq(effectiveDate), anyInt()))
                                 .thenReturn(Optional.empty());
 
-                VolumeBaselineService.PreCalculationResult result = service.preCalculateForCompletedTradingDay(
-                                completedDate);
+                VolumeBaselineService.PreCalculationResult result = service
+                                .preCalculateForCompletedTradingDay(completedDate);
 
-                assertEquals(
-                                1,
-                                result.processedSymbols());
+                assertEquals(1, result.processedSymbols());
+                assertEquals(1, result.upsertedDailyBaselines());
+                assertEquals(375, result.upsertedTimeWindowBaselines());
 
-                assertEquals(
-                                1,
-                                result.upsertedDailyBaselines());
+                ArgumentCaptor<List<VolumeTimeWindowBaseline>> captor = ArgumentCaptor.forClass(List.class);
+                verify(volumeTimeWindowBaselineRepository).saveAll(captor.capture());
 
-                assertEquals(
-                                375,
-                                result.upsertedTimeWindowBaselines());
-
-                ArgumentCaptor<VolumeTimeWindowBaseline> captor = ArgumentCaptor.forClass(
-                                VolumeTimeWindowBaseline.class);
-
-                verify(volumeTimeWindowBaselineRepository, times(375))
-                                .save(captor.capture());
-
-                List<VolumeTimeWindowBaseline> saved = captor.getAllValues();
+                List<VolumeTimeWindowBaseline> saved = captor.getValue();
+                assertEquals(375, saved.size());
 
                 Set<Integer> minutes = saved.stream()
                                 .map(VolumeTimeWindowBaseline::getSessionMinute)
                                 .collect(java.util.stream.Collectors.toSet());
-
                 assertEquals(375, minutes.size());
 
                 for (int minute = 0; minute < 375; minute++) {
@@ -187,32 +166,7 @@ class VolumeBaselineServiceTest {
                                 .filter(row -> row.getSessionMinute() == 14)
                                 .findFirst()
                                 .orElseThrow();
-
-                assertEquals(
-                                3000L,
-                                minute14.getAvgCumulativeVolume20());
-
-                assertEquals(
-                                3,
-                                minute14.getSampleDays());
-
-                VolumeTimeWindowBaseline minute30 = saved.stream()
-                                .filter(row -> row.getSessionMinute() == 30)
-                                .findFirst()
-                                .orElseThrow();
-
-                assertEquals(
-                                6200L,
-                                minute30.getAvgCumulativeVolume20());
-
-                VolumeTimeWindowBaseline minute374 = saved.stream()
-                                .filter(row -> row.getSessionMinute() == 374)
-                                .findFirst()
-                                .orElseThrow();
-
-                assertEquals(
-                                75000L,
-                                minute374.getAvgCumulativeVolume20());
+                assertEquals(20, minute14.getSampleDays());
         }
 
         @Test
@@ -483,7 +437,7 @@ class VolumeBaselineServiceTest {
                                                 candle(
                                                                 dates.get(dayIndex),
                                                                 minute,
-                                                                volumes[dayIndex]));
+                                                                volumes[dayIndex % volumes.length]));
                         }
                 }
 

@@ -13,21 +13,25 @@ import java.util.Optional;
 @Repository
 public interface BackfillJobRepository extends JpaRepository<BackfillJob, Integer> {
 
-    boolean existsBySymbolAndExchangeAndTradingDate(
-            String symbol,
-            String exchange,
-            LocalDate tradingDate);
+        boolean existsBySymbolAndExchangeAndTradingDate(
+                        String symbol,
+                        String exchange,
+                        LocalDate tradingDate);
 
-    Optional<BackfillJob> findBySymbolAndExchangeAndTradingDate(
-            String symbol,
-            String exchange,
-            LocalDate tradingDate);
+        Optional<BackfillJob> findBySymbolAndExchangeAndTradingDate(
+                        String symbol,
+                        String exchange,
+                        LocalDate tradingDate);
 
-    Optional<BackfillJob> findFirstByStatusAndNextAttemptAtLessThanEqualOrderByPriorityAscNextAttemptAtAscIdAsc(
-            BackfillJobStatus status,
-            LocalDateTime now);
+        Optional<BackfillJob> findFirstByStatusAndNextAttemptAtLessThanEqualOrderByPriorityAscNextAttemptAtAscIdAsc(
+                        BackfillJobStatus status,
+                        LocalDateTime now);
 
-    List<BackfillJob> findByStatusAndLastAttemptAtBefore(
-            BackfillJobStatus status,
-            LocalDateTime cutoff);
+        List<BackfillJob> findByStatusAndLastAttemptAtBefore(
+                        BackfillJobStatus status,
+                        LocalDateTime cutoff);
+
+        List<BackfillJob> findByStatusAndTradingDate(
+                        BackfillJobStatus status,
+                        LocalDate tradingDate);
 }

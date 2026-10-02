@@ -223,7 +223,7 @@ public class MarketScheduler implements SchedulingConfigurer {
                 .checkForClosedMinuteGaps();
     }
 
-    @Scheduled(cron = "${runtime.schedule.minute-rollover-cron:5 * 9-15 * * MON-FRI}", zone = "${runtime.schedule.zone}")
+    @Scheduled(cron = "${runtime.schedule.minute-rollover-cron:10 * 9-15 * * MON-FRI}", zone = "${runtime.schedule.zone}")
     public void scheduledMinuteRollover() {
         liveMarketCandleService.rolloverCompletedMinutes();
     }
