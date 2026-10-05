@@ -126,8 +126,11 @@ public class RuntimeBootstrapService implements ApplicationRunner {
     }
 
     private void stepRuntimeSettingSync() {
+        int seeded = runtimeSettingService.ensureRequiredSettingsExist();
+        if (seeded > 0) {
+            log.info("Runtime settings sync seeded {} new setting(s)", seeded);
+        }
         runStage(WorkflowStatusService.RUNTIME_SETTING_SYNC, () -> {
-            int seeded = runtimeSettingService.ensureRequiredSettingsExist();
             return "Runtime settings verified. newlySeeded=" + seeded;
         });
     }

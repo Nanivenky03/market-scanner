@@ -100,6 +100,14 @@ class MarketSchedulerTest {
         }
 
         @Test
+        void scheduledPreMarketCatchup_shouldDelegate() {
+                marketScheduler.scheduledPreMarketCatchup();
+
+                verify(preMarketWorkflowService)
+                                .catchUpPreMarketWorkflowsIfDue();
+        }
+
+        @Test
         void scheduledLiveRuntimeStart_shouldDelegate() {
                 marketScheduler.scheduledLiveRuntimeStart();
 

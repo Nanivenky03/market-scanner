@@ -230,8 +230,8 @@ class RuntimeSettingServiceTest {
 
         int seeded = service.ensureRequiredSettingsExist();
 
-        assertEquals(17, seeded);
-        verify(repository, times(17)).save(any(RuntimeSetting.class));
+        assertEquals(18, seeded);
+        verify(repository, times(18)).save(any(RuntimeSetting.class));
     }
 
     @Test
@@ -250,6 +250,7 @@ class RuntimeSettingServiceTest {
                         .build()));
 
         assertEquals("0 0 7 * * MON-FRI", service.morningMaintenanceCron());
+        assertEquals("0 10,20,30,40,50 8 * * MON-FRI", service.preMarketCatchupCron());
         assertEquals("5 * 9-15 * * MON-FRI", service.minuteRolloverCron());
     }
 }

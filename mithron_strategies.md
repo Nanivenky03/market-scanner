@@ -17,10 +17,18 @@ Before any strategy evaluates any signal, this must pass first.
 Nifty LTP > Nifty VWAP → Long rules active → all three strategies may run
 Nifty LTP < Nifty VWAP → Long rules suspended → no signals from any strategy
 
-This is checked on every 5M candle close.
-If Nifty crosses below VWAP mid-session, no new entries for rest of day.
-Existing open positions are managed normally — they are not exited
-just because Nifty crosses VWAP. Only new entries stop.
+This is checked on every 5M candle close (tick-level or 1M crosses are noise).
+State machine:
+  If Nifty 5M candle closes BELOW Nifty VWAP:
+    → Suspend new entries from that candle close onwards
+    → Existing open positions managed normally, not exited
+  If Nifty 5M candle then closes BACK ABOVE Nifty VWAP:
+    → New entries re-enabled from that candle close onwards
+    → Day is NOT permanently killed
+  Exception — do not re-enable if:
+    The time is past 01:00 PM
+    OR daily loss kill switch has already fired
+    OR it is a wind-down session (>= 02:45 PM)
 ```
 
 ---
@@ -571,7 +579,8 @@ firstCandleHigh   = max(high) across all 5 candles
 firstCandleLow    = min(low) across all 5 candles
 firstCandleClose  = close of 09:19 1M candle
 firstCandleVolume = sum(volume) across all 5 candles
-
+firstCandleTypicalPrice = (firstCandleHigh + firstCandleLow + firstCandleClose) / 3
+firstCandleTurnover = firstCandleVolume × firstCandleTypicalPrice
 firstCandleRangePct = (high - low) / low × 100
 firstCandleBullish  = close > open (strict greater than)
 ```
@@ -580,7 +589,7 @@ firstCandleBullish  = close > open (strict greater than)
 ```
 firstCandleRangePct < 0.15%: range too tight, level meaningless
 firstCandleRangePct > 3.0%:  chaotic opening, stop too wide
-firstCandleVolume < 50,000:  insufficient participation
+firstCandleTurnover < 1,00,00,000 (Rs. 1 Crore): insufficient opening liquidity / participation
 firstCandleBullish == false: bearish or doji first candle
                               negative opening sentiment
 Any of the 5 candles missing: not ready, invalid

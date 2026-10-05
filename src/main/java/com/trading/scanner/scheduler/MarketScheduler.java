@@ -72,7 +72,16 @@ public class MarketScheduler implements SchedulingConfigurer {
                     return safeCronTrigger(cron, zone, "0 0 8 * * MON-FRI").nextExecution(triggerContext);
                 });
 
-        // 3. Dynamic Database-Driven Trigger for Live Runtime Start (Default: 08:55 AM)
+        // 3. Dynamic Database-Driven Trigger for Pre-Market Workflow Catch-Up (Default: every 10m from 08:10 to 08:50 AM)
+        taskRegistrar.addTriggerTask(
+                this::scheduledPreMarketCatchup,
+                triggerContext -> {
+                    String cron = runtimeSettingService.preMarketCatchupCron();
+                    ZoneId zone = safeZone(runtimeSettingService.scheduleZone());
+                    return safeCronTrigger(cron, zone, "0 10,20,30,40,50 8 * * MON-FRI").nextExecution(triggerContext);
+                });
+
+        // 4. Dynamic Database-Driven Trigger for Live Runtime Start (Default: 08:55 AM)
         taskRegistrar.addTriggerTask(
                 this::scheduledLiveRuntimeStart,
                 triggerContext -> {
@@ -145,6 +154,17 @@ public class MarketScheduler implements SchedulingConfigurer {
 
             log.warn(
                     "Pre-market data pipeline failed: {}",
+                    ex.getMessage(),
+                    ex);
+        }
+    }
+
+    public void scheduledPreMarketCatchup() {
+        try {
+            preMarketWorkflowService.catchUpPreMarketWorkflowsIfDue();
+        } catch (Exception ex) {
+            log.warn(
+                    "Scheduled pre-market workflow catch-up encountered an issue: {}",
                     ex.getMessage(),
                     ex);
         }

@@ -58,6 +58,12 @@ public class RuntimeSettingService {
     }
 
     @Transactional(readOnly = true)
+    public String preMarketCatchupCron() {
+        String cron = getString("schedule.premarket.catchup.cron", "0 10,20,30,40,50 8 * * MON-FRI");
+        return org.springframework.scheduling.support.CronExpression.isValidExpression(cron) ? cron : "0 10,20,30,40,50 8 * * MON-FRI";
+    }
+
+    @Transactional(readOnly = true)
     public String liveRuntimeStartCron() {
         String cron = getString("schedule.live.start.cron", "0 55 8 * * MON-FRI");
         return org.springframework.scheduling.support.CronExpression.isValidExpression(cron) ? cron : "0 55 8 * * MON-FRI";
@@ -279,6 +285,10 @@ public class RuntimeSettingService {
         createdCount += seedIfMissing("schedule.premarket.data.cron",
                 "0 0 8 * * MON-FRI",
                 "CRON", "Daily pre-market data preparation pipeline trigger cron expression (08:00 AM)");
+
+        createdCount += seedIfMissing("schedule.premarket.catchup.cron",
+                "0 10,20,30,40,50 8 * * MON-FRI",
+                "CRON", "Daily pre-market workflow auto-catchup trigger cron expression (every 10m from 08:10 to 08:50 AM)");
 
         createdCount += seedIfMissing("schedule.live.start.cron",
                 "0 55 8 * * MON-FRI",

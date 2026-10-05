@@ -188,7 +188,7 @@ class RuntimeBootstrapServiceTest {
         verify(catalogSyncService, never()).syncNseCatalog();
         verify(instrumentMasterSyncService, never()).ensureRequiredMarketReferences();
         verify(stockUniverseSeeder, never()).seedIfNeeded();
-        verify(runtimeSettingService, never()).ensureRequiredSettingsExist();
+        verify(runtimeSettingService).ensureRequiredSettingsExist();
         verify(eodDataEntryService, never()).ensureInitialBaselineIfEmpty(any(), any());
         verify(workflowStatusService, never()).markRunning(any());
     }

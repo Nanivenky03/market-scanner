@@ -28,9 +28,9 @@ Mithron is designed to answer:
 1. **Process Over Prediction:** The goal is not to guess tomorrow's price, but to apply the exact same validated process every single day.
 2. **Exclusion Before Selection:** First determine: *"Which stocks should I NOT consider?"* Only after low-quality, illiquid, erratic, or high-risk candidates are eliminated does Mithron rank the qualified remainder.
 3. **Rules Must Be Explicit:** Every rule is mathematical and deterministic (`INPUT → FORMULA → OUTPUT`). No subjective interpretations, no "looks bullish", no unquantified intuition.
-4. **Strategies Propose, Validator Approves:** Strategies never execute trades directly. A strategy proposes a candidate signal; the independent **Strategy Validator** verifies market state, data quality, trading window, duplicate checks, and risk limits.
+4. **Strategies Identify; Shared Engines Decide and Act:** A strategy evaluates canonical facts and emits signals/proposals only. Shared validation, portfolio/trade-gating, risk, position-management, and execution engines decide whether to act and manage the resulting position. Strategies never call broker order APIs.
 5. **Strategies Never Fetch or Calculate Indicators:** Strategies must never fetch market data, call broker APIs, calculate RSI/VWAP, or build candles. They strictly consume the canonical shared facts calculated once in Layer 2.
-6. **Risk Engine Precedes Backtesting:** A backtest without risk rules is meaningless. The **Risk Engine** (entry zones, stop loss, risk distance %, position sizing, R:R targets, max daily loss) is integrated directly into the backtest engine in **Version 3.0** so strategies are tested as complete, realistic trades.
+6. **Shared Risk Rules Across Simulation and Production:** Historical simulation and production use the same strategy and risk logic. Separate execution adapters handle simulated fills in the development database and real broker orders in production. Simulation review focuses first on failed trades, their causes, and data or rule defects; financial performance remains useful evidence but is not the sole promotion criterion.
 7. **Early Universe Expansion (Nifty 500 Data Accumulation):** Right after V1.0 live validation, the universe expands to Nifty 500 so Mithron silently accumulates 30+ days of clean 1M candles and volume baselines in the background while V2, V3, and V4 are built.
 8. **Explainability Over Black Boxes:** Whenever Mithron qualifies or rejects a stock, it records the exact reasons:
    ```text
@@ -46,6 +46,7 @@ Mithron is designed to answer:
 10. **Same Strategy Code for Live & Replay:** The exact same strategy and risk code must evaluate live market feeds and historical simulation datasets to eliminate implementation drift.
 11. **Immutability of Research Evidence:** Generated signals and forward outcomes are permanent research records. Rule modifications increment `rule_version` rather than rewriting history.
 12. **Simplicity Before Scale:** Built as a clean, modular monolith maintainable by a single engineer. Complexity must earn its place.
+13. **Fail Closed and Recover Deterministically:** Untrusted or incomplete data blocks new application decisions for the affected symbol. Recovery reconciles canonical market data and broker position/order state before position decisions resume. Broker-accepted protective orders remain active during application-side pauses.
 
 ---
 
@@ -78,12 +79,12 @@ Version 1.0 is the production-grade market data, candle materialization, indicat
 
 ### Verified Capabilities:
 - **Phase 1 (Startup Bootstrap):** 6 fail-closed stages verifying catalog, active NIFTY index, universe seed, runtime settings, and previous-day EOD readiness.
-- **Phase 2 (Pre-Market Pipeline):** 07:00 AM morning maintenance, 08:00 AM catalog & token sync, universe validation, reference baseline calculation, and 09:10 AM pre-market uncrossed price locking ($\text{Open} = \text{High} = \text{Low} = \text{Close} = \text{last uncrossed tick}$).
-- **Phase 3 (Live Streaming & Ingestion):** Binary SmartStream WebSocket parser (filtering pre-09:08 ticks), tick deduplication, 1M candle accumulation, and **400ms (2.5 RPS / 150 RPM) paced background queue worker** intercepting `AB1021` in-memory.
+- **Phase 2 (Pre-Market Pipeline):** 07:00 AM morning maintenance, 08:00 AM catalog & token sync, universe validation, reference baseline calculation, 08:50 AM EOD catchup cutoff guardrail, and 09:10 AM pre-market uncrossed price locking ($\text{Open} = \text{High} = \text{Low} = \text{Close} = \text{last uncrossed tick}$).
+- **Phase 3 (Live Streaming & Ingestion):** Binary SmartStream WebSocket parser (filtering pre-09:08 ticks), tick deduplication, 1M candle accumulation, and **450ms paced background queue worker** intercepting `AB1021` in-memory across the active 500-stock universe.
 - **Phase 4 (Shared Indicators):** Wilder's RSI-14 ($\ge 42$ clean 1M candles), Wilder's ATR-14 ($\ge 14$ clean 1M candles + `prevDayClose`), Session VWAP (09:15 reset), 375-minute volume baseline curves, runtime $\text{VOL\_X}$, and candle structure ratios.
 - **Phase 5 (Quiescence, Archiving & EOD):** Post-16:00 quiescence disconnect ($\ge 3$ min silence), **Upfront batch raw historical 1M candle archival (`data/raw-eod/YYYY-MM-DD/SYMBOL.json`) & Market Quotes**, **DB-first authoritative reconciliation against Market Quote**, upsert of official `MarketQuote` into `stock_prices` for historical reference, in-memory candidate repair gating, bi-hourly retry deferrals (17:00, 19:00, 21:00), 23:00 final attempt fallback alignment with quote, and 23:45 session token teardown.
 - **Runtime Admin & Developer Tools:** Swagger UI OpenAPI inspector (`/swagger-ui/index.html`), authenticated SmartAPI proxy (`POST /admin/runtime/broker/smartapi/proxy`), and on-demand EOD reconciliation (`/admin/runtime/eod/reconcile`).
-- **Test Baseline:** **320 unit tests passing** (0 failures, 0 errors, 1 skipped).
+- **Test Baseline:** **321 unit tests passing** (0 failures, 0 errors, 1 skipped).
 
 ---
 
@@ -93,30 +94,48 @@ Version 1.0 is the production-grade market data, candle materialization, indicat
 MITHRON MASTER ROADMAP
 
 V1.0 — Market Data & Daily Session Foundation          [COMPLETE ✅]
-  ✓ SmartStream WebSocket ingestion, 1M/5M/15M candles, 450ms paced historical queue
+  ✓ SmartStream WebSocket ingestion (Nifty 500 active universe), 1M/5M/15M candles, 450ms queue
   ✓ Shared Indicators (VWAP, RSI-14, ATR-14, VOL_X, 375m Baselines, Structure)
   ✓ 4-Test EOD integrity verification, raw JSON disk archiving & stock_prices daily upsert
-  ✓ 320 passing unit tests & Swagger SmartAPI inspector proxy
+  ✓ 321 passing unit tests, Swagger SmartAPI inspector proxy, and Nifty 500 daily accumulation
 
-  └─► IMMEDIATE POST-V1 ACTION:
-      Expand Universe to Nifty 500 (Starts daily 500-stock data accumulation)
+V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTONE]
+  - Decision Language: Canonical MarketContext (MarketState + StockContext)
+    • Master Market Filter: Binary Nifty VWAP switch evaluated on 5M candle closes (Nifty 5M close > VWAP: active; < VWAP: suspended).
+    • Mid-Session Cross Recovery: Recoverable if Nifty 5M candle closes back above VWAP before 01:00 PM (1M/tick crosses treated as noise).
+    • Macro Regimes (TRENDING_UP, RANGE, etc.): Explicitly deferred until post-simulation empirical discovery.
+  - Strategy Contract & Architecture: StrategyProposal (Proposer) vs StrategyValidator (Gatekeeper)
+    • Pure decision functions: Strategies never fetch data or calculate indicators.
+    • Explainability: First-class domain model capturing passedConditions and failedConditions.
+  - First Strategy Proving Ground: FCHB (First Candle High Breakout)
+    • Opening Reference (09:15–09:19 AM): 5 1M candles define FCH, FCL, close, volume, and typical price.
+    • First Candle Turnover Floor: Minimum Rs. 1,00,00,000 (Rs. 1 Crore) = volume × ((high + low + close) / 3).
+    • First Candle Quality: Range 0.15%–3.0%, bullish (close > open), all 5 candles present.
+    • Signal Detection (5M closes, 09:30–01:00 PM): Close > FCH, BO_% <= 0.8%, signalCandleVolume > 2.0 × firstCandleVolume (5M share comparison), VOL_X >= 1.8, 5M RSI 55–72, Close > VWAP, 15M Close > 15M VWAP, strong bullish candle (body >= 0.60, wick <= 0.25).
+    • Invalidation & Stop Loss: Initial stop = FCL × 0.995; early exit if 1M candle closes back inside first candle range.
+    • Suspensions: Suspended on GAP_UP days (Nifty gap > 0.75%) or individual stock gap > 1.5%.
+  - Multi-Strategy Prioritization & Arbitration:
+    • Priority Order: Priority 1 = ORB, Priority 2 = FCHB, Priority 3 = VWAP Pullback.
+    • Winning strategy owns the symbol through position exit. Losing signal recorded as SYMBOL_ALREADY_TRADED_TODAY.
+  - Trade / Position Gate & Lifecycle:
+    • Strictly one ENTRY per stock per day across all strategies combined (regardless of win/loss outcome).
+    • Phantom Signal Protection: Unfilled or auto-cancelled limit orders do NOT count as entries (no premature symbol lock).
+    • Global Account Limits: Maximum 5 executed trades per day and 3 simultaneously open positions.
+  - In-Memory Cache & Performance Architecture:
+    • Evaluation Cadence: Runs every 5 minutes on 5M candle close (eliminates per-minute DB I/O bottleneck).
+    • In-memory StockContextCache maintains sliding window of 500 stocks in RAM.
+    • Fail-Closed Backfill Guard: Rejects signals if active backfill job exists for the symbol.
+  - Parameter Management & Immutability:
+    • Versioned parameters (strategy_version / rule_version).
+    • YAML bootstrap seeds defaults to DB on initial startup without overwriting runtime DB overrides on restart.
+    • Every signal captures an immutable JSON parameter_snapshot.
+  - Multi-Strategy Hardening: Register a secondary dummy/test strategy alongside FCHB to verify zero-coupling.
+  - Legacy Prototype Retirement: Safely deprecate and delete legacy prototype classes (LiveSignalService, LiveSimulationSignal, BreakoutSignalEvaluator, StrategyScoringService, old YAMLs).
 
-V2.0 — Strategy Intelligence & Real-Time Signals        [NEXT MILESTONE]
-  - Market State Scanner (TRENDING_UP, TRENDING_DOWN, RANGE, BREAKOUT_ENV)
-  - Strategy Framework & Interfaces (Strategies propose; Validator approves)
-  - Core Strategies: VWAP Pullback, FCHB (First Candle High Breakout), ORB (Opening Range Breakout)
-  - Strategy Validator & Signal Audit Trail (Explicit passed/failed reasons)
-
-V3.0 — Risk Engine & Historical Backtesting Laboratory  [RISK + RESEARCH]
-  - Risk & Trade-Plan Engine:
-    • Structural Stop Loss & Invalidation Level
-    • Risk Distance (%) & Extension Guards (Max risk per trade)
-    • Position Sizing & Reward-to-Risk (R:R) targets
-    • Max Daily Loss & Trailing Stop rules
-  - Historical Backtest Engine:
-    • Point-in-time replay using the EXACT same strategy + risk code
-    • Evaluates complete trades across accumulated Nifty 500 dataset
-    • Performance Metrics: Win/Loss rate, Profit Factor, Max Drawdown, MFE/MAE, Expectancy
+V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
+  - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies
+  - Expand point-in-time simulation analytics: win/loss rate, profit factor, max drawdown, MFE/MAE, expectancy
+  - Improve failure analysis and compare versioned strategy behavior over larger historical samples
 
 V4.0 — Professional Web UI & Trader Dashboard           [DEDICATED UI VERSION]
   - Live Market State & Nifty 500 Universe Overview
@@ -140,22 +159,32 @@ V6.0 — Small-Capital Live Trading & Paper/Live Toggle
 
 ---
 
-## 6. The Strategy Promotion Pipeline
+## 6. Strategy Lifecycle and Promotion Pipeline
 
-A strategy never jumps directly into live trading:
+Each versioned strategy advances through explicit operating stages:
 
 ```text
-Strategy Development (V2.0)
-        ↓
-Historical Backtest with Risk Engine (V3.0)
-        ↓
-Visual Inspection & Dashboard Analysis (V4.0)
-        ↓
-Trading Engine Integration & Order Simulation (V5.0)
-        ↓
-Small-Capital Live Trading (V6.0)
+Historical simulation on copied production data (development database)
+        -> evidence review and rule/version decision
+Live-market paper trading (no real orders)
+        -> operational and behavior verification
+Production trading (real broker orders)
 ```
-*(If live behavior deviates materially from simulation, the strategy is immediately demoted.)*
+
+The strategy logic and risk rules are shared across stages; only the execution adapter and database differ. Production stores paper trades and real-money trades in separate tables. Live stop/target decisions are recalculated at each minute close. Each trade receives an internal immutable ID linked to broker order identifiers; rejected order modifications are retried while the last broker-accepted protective order remains active. Promotion focuses on identifying and eliminating incorrect trades and understanding failure causes, rather than requiring a profit threshold alone. A live strategy's rules are not changed during market hours. Post-market changes create a new immutable version/effective date and retain prior signal, trade, and simulation evidence.
+
+---
+
+### Shared Trade and Position Management Rules
+
+- `stock_universe.is_tradable` is the current data-integrity/export eligibility flag. Pre-market logic should set it true only when the symbol has complete EOD data and `stock_prices` coverage for at least the previous 20 official trading days; an incomplete previous trading day sets it false. Newly seeded symbols start false.
+- Production-to-development data copy runs separately from production trading and copies data through the prior official trading day (never today), selecting symbols whose current `is_tradable` is true. Each copy/simulation run should record its date range and included-symbol set. This is a current-eligibility sample, not a reconstruction of historical index membership.
+- Strategy evaluation is limited to the eligible symbol set. Shared validation, arbitration, global limits, and risk decisions are not strategy-specific.
+- Signals for the same symbol and event are deduplicated into one candidate. Unique configured strategy implementation priority chooses the winner; that strategy owns entry and position-exit decisions until the position closes.
+- Global account limits are at most 5 executed trades per trading day and at most 3 simultaneously open positions. A trade counts when entry quantity is executed; the daily count remains after close. Rejected or cancelled unfilled orders do not count. The portfolio/trade gate enforces these limits across strategies.
+- Each trade has an application-generated immutable trade/position ID linked to broker order IDs and execution references. A position has a versioned trade plan. At every minute close, recalculate stop/target under the owning strategy's rules and submit modifications when values change. Poll broker order/position details regularly and reconcile them with local state. If a modification is rejected, retry under a defined policy while the previously accepted protective order remains active.
+- During per-symbol backfill/recovery, application-side derived calculations and exit decisions pause. Broker-accepted protective orders remain active. After repair, reconcile candles, then broker positions/orders/fills, then evaluate the current exit plan and submit any required order changes. Live WebSocket updates and backfill must be reconciled in timestamp order so older data cannot overwrite newer canonical candles.
+- In historical simulation, an entry signal on a candle close fills at the next minute candle open. In live processing, use the next available market tick/price after the signal. Simulation uses a local execution adapter and never calls real order APIs. Fees, slippage, gaps, and partial-fill assumptions remain explicit run metadata and must be agreed before relying on performance results.
 
 ---
 
@@ -169,7 +198,7 @@ Version 2.0 Answers:
 "What is happening now, and which predefined setups qualify?"
 
 Version 3.0 Answers:
-"With full risk rules (stops, targets, sizing), would this setup have made money historically?"
+"What failed in historical simulation, why did it fail, and did the versioned rules address the cause?"
 
 Version 4.0 Answers:
 "How can I clearly visualize, inspect, and monitor setups and historical performance?"
