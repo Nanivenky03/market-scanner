@@ -93,119 +93,302 @@ Monthly expiry (last Thursday of month):
 
 ---
 
-## Position Sizing Formula
+## Position Sizing & Dynamic Capital Management
 
 ```
-riskRupees = totalCapital × 0.015  (1.5% risk per trade)
-riskPerShare = entryPrice - stopLossPrice
-qtyRaw = riskRupees / riskPerShare
-qtyFinal = floor(qtyRaw)
+Available Capital & Margin Management:
+  - Mithron tracks total trading capital, intraday margin availability (Angel One MIS provides up to 5x leverage for approved equities), margin currently committed to open positions, and unencumbered free cash.
+  - Sizing is calculated dynamically per trade based on available unencumbered capital rather than a hardcoded static amount.
 
-Hard minimum: qtyFinal must be >= 2
-  Reason: first partial exit sells 50%. With qty=1 you cannot split.
-  If qtyFinal < 2 → skip this trade entirely.
+Formulas:
+  riskRupees = availableTradingCapital × 0.015  (1.5% risk per trade)
+  riskPerShare = entryPrice - stopLossPrice
+  qtyRaw = riskRupees / riskPerShare
+  qtyFinal = floor(qtyRaw)
 
-Example at Rs.10,000 capital:
-  riskRupees = 10,000 × 0.015 = Rs.150
-  If entry = Rs.500, stop = Rs.496:
-    riskPerShare = Rs.4
-    qtyRaw = 150 / 4 = 37.5
-    qtyFinal = 37
-```
+Hard Minimum Quantity Gate:
+  qtyFinal must be >= 2.
+  Reason: First partial profit target (Target 1) sells exactly 50% of the position. With qty = 1, splitting is mathematically impossible.
+  If qtyFinal < 2 → Trade is skipped entirely.
 
----
-
-## R:R Check After Charges
-
-```
-estimatedCharges = Rs.60 per round trip (buy + sell combined)
-  Use SmartAPI estimateCharges if available.
-  Fall back to Rs.60 flat if API unavailable.
-
-netRisk = riskRupees + estimatedCharges
-netRewardAt1R = riskRupees - estimatedCharges
-
-rrAfterCharges = netRewardAt1R / netRisk
-
-If rrAfterCharges < 1.5 → skip this trade
-  At Rs.10,000 capital this filters very tight stops where
-  charges eat more than 1/3 of the risk budget.
+Margin Verification via SmartAPI:
+  Before submitting or approving any trade proposal, Mithron queries SmartAPI's Margin Calculator API:
+    POST /rest/secure/angelbroking/margin/v1/batch
+  If required margin > available margin in the target portfolio → Trade is rejected immediately.
 ```
 
 ---
 
-## Confidence Scoring System
-
-Every signal is scored 0 to 100 before entry decision.
+## Dynamic R:R Check After Brokerage & Regulatory Charges
 
 ```
-BO_% score (how far above breakout reference):
-  0.0 to 0.4%  → 25 points
-  0.4 to 0.8%  → 15 points
-  0.8 to 1.0%  → 5 points
-  > 1.0%       → 0 points (do not enter)
+Dynamic Charges Calculation:
+  Mithron uses Angel One SmartAPI's Estimate Charges API:
+    POST /rest/secure/angelbroking/brokerage/v1/estimateCharges
+  Returns exact breakdown of:
+    - Brokerage (flat Rs. 20 per executed order or 0.25%, whichever is lower)
+    - STT / CTT (Securities Transaction Tax)
+    - Exchange Transaction Charges
+    - SEBI Turnover Fees & Stamp Duty
+    - GST (18% on brokerage + transaction charges)
+  Fallback: If API call times out or is temporarily unavailable, fall back to conservative Rs. 60 flat per round trip.
 
-VOL_X score:
-  Above 2.5    → 25 points
-  1.8 to 2.5   → 15 points
-  1.5 to 1.8   → 5 points
-  Below 1.5    → 0 points (do not enter)
+Dynamic Net Risk-to-Reward Evaluation:
+  netRewardAt1R = (qtyFinal × (entryPrice - stopLossPrice)) - estimatedRoundTripCharges
+  netRiskAt1R   = (qtyFinal × (entryPrice - stopLossPrice)) + estimatedRoundTripCharges
 
-RSI score (for 5M RSI at signal time):
-  Ideal range center (55-65) → 25 points
-  Acceptable range (65-70)   → 15 points
-  At boundary (70-72)        → 5 points
-  Outside range              → 0 points (do not enter)
+  rrAfterCharges = netRewardAt1R / netRiskAt1R
 
-Nifty VWAP margin score:
-  Nifty > VWAP by 0.3% or more → 15 points
-  Nifty just above VWAP         → 5 points
-  Nifty below VWAP              → master filter already blocked this
+  Gate: If rrAfterCharges < 1.5 → Skip this trade.
 
-Dual timeframe alignment:
-  Signal appears on both 5M and 15M simultaneously → 10 points
-
-Total possible: 100 points
-
-Thresholds:
-  Trades 1, 2, 3 (standard): score >= 60 required
-  Trades 4, 5 (high confidence only): score >= 80 required
+Why this calculation is dynamic and capital-scaled:
+  A fixed threshold of 1.5 R:R without factoring dynamic charges creates a dangerous trap at lower capital levels.
+  For example, with a tight stop loss on a Rs. 10,000 account, Rs. 60 round-trip charges can consume 40% of the entire risk budget, turning an apparent 1:1.5 trade into an effective 1:0.8 trade.
+  By computing net reward and net risk dynamically after all statutory charges, Mithron strictly guarantees an authentic net 1:1.5+ statistical edge across all capital tiers.
 ```
 
 ---
 
-## Risk Engine — Five Checks Before Every Trade
+## Traffic-Light Quality Gate (Red / Yellow / Green Matrix)
 
-All five must pass. Any single failure → skip trade, no exceptions.
+Mithron replaces opaque 0–100 numerical scoring with an intuitive, deterministic **Traffic-Light Quality Gate**. Every signal parameter is evaluated as **GREEN**, **YELLOW**, or **RED**.
 
 ```
-Check 1: Open positions < 3
-  Maximum 3 concurrent open positions at any time.
+Condition Classification Matrix:
 
-Check 2: Total current risk < 3.2% of capital
-  Calculated using CURRENT trailing stop levels, not original stops.
-  As trailing stop moves up, risk on that position decreases.
-  3.2% not 4% — 0.8% buffer for simultaneous position changes.
+1. Breakout Extension (BO_%):
+   GREEN:   0.0% to 0.4% above breakout reference (ideal entry sweet spot)
+   YELLOW:  0.4% to 0.8% above reference (acceptable, slightly extended)
+   RED:     > 0.8% above reference (chasing price; risk of immediate pullback)
 
-Check 3: Daily loss < 4% of capital
-  Cumulative realized + unrealized loss.
-  If >= 4%: kill switch fires, no new trades for rest of day.
-  Existing positions managed normally.
+2. Volume Multiple (VOL_X - Time-Normalized vs 20-Day Curve):
+   GREEN:   VOL_X >= 2.5 (massive institutional participation)
+   YELLOW:  VOL_X between 1.8 and 2.5 (solid above-average participation)
+   RED:     VOL_X < 1.8 (insufficient breakout conviction)
 
-Check 4: Total trades today < 5
-  Maximum 5 trades per day across all three strategies combined.
-  Trades 1-3: standard (score >= 60)
-  Trades 4-5: high confidence only (score >= 80)
+3. 5M RSI Momentum:
+   GREEN:   RSI between 58 and 65 (prime momentum zone, plenty of room before overbought)
+   YELLOW:  RSI between 55–58 OR 65–70 (acceptable momentum)
+   RED:     RSI < 55 (momentum too weak) OR RSI > 72 (severely overbought)
 
-Check 5: R:R after charges >= 1.5
-  Calculated using estimated charges for this specific trade.
+4. Master Market Filter Alignment (Nifty vs VWAP):
+   GREEN:   Nifty 5M Close > Nifty VWAP by >= 0.30% (strong tailwind)
+   YELLOW:  Nifty 5M Close > Nifty VWAP by < 0.30% (positive, but narrow buffer)
+   RED:     Nifty 5M Close < Nifty VWAP (master market filter suspended)
+
+5. Dual Timeframe & Trend Context:
+   GREEN:   15M Close > 15M VWAP AND 5M candle bodyRatio >= 0.65
+   YELLOW:  15M Close > 15M VWAP AND 5M candle bodyRatio between 0.55 and 0.65
+   RED:     15M Close < 15M VWAP OR 5M candle bodyRatio < 0.55
+
+6. Macro & Day Type Filters:
+   GREEN:   Normal day (-0.75% <= gap <= +0.75%), prevDayRangePct <= 3.0%
+   YELLOW:  prevDayRangePct between 3.0% and 4.0%
+   RED:     Gap-up day (> +0.75%), prevDayRangePct > 4.0%, circuit room < 2.0%
+```
+
+### Trade Quota & Admission Rules Across the Day
+
+```
+Trades 1, 2, and 3 (Early/Core Trades):
+  - 0 REDs permitted.
+  - Maximum 2 YELLOWs permitted.
+  - Setup must be predominantly GREEN.
+
+Trades 4 and 5 (Late/Capping Trades):
+  - 0 REDs permitted.
+  - 0 YELLOWs permitted (MUST BE ALL GREEN).
+  - Setup must be a textbook, flawless A+ candidate.
+
+Rationale for Asymmetric Quality Gate:
+  The first three trades represent the primary risk allocation of the day. If the portfolio takes those trades, capital is now deployed or partially subjected to intraday drawdown.
+  Allowing marginal (YELLOW) setups for trades 4 and 5 risks over-trading and giving back daily gains. Trades 4 and 5 are strictly reserved for elite setups that demand inclusion.
+```
+
+---
+
+## Risk Engine — Dual Portfolio Separation & Pre-Trade Gates
+
+### Dual Portfolio State Separation (`PortfolioState`):
+
+```
+Core Principle:
+  Paper trading and Live real-money trading MUST operate under separate, isolated portfolio states:
+    - PortfolioState(PAPER): Tracks paper trade count (0..5), open paper positions (0..3), and simulated P&L.
+    - PortfolioState(LIVE): Tracks live trade count (0..5), open broker positions (0..3), and actual broker P&L.
+
+Why Portfolios Must Be Decoupled:
+  If a single shared trade quota of 5 trades/day were used, 5 paper trades triggered in the morning would completely block any live real-money trade for the rest of the day.
+  Conversely, a paper trading drawdown must never trigger a kill switch on real-money trading.
+  Both portfolios execute the exact same risk rules, but against their own isolated state machines.
+```
+
+### Five Pre-Trade Risk Gates (Evaluated per Portfolio):
+
+All five gates must pass. A single failure immediately rejects the proposal:
+
+```
+Gate 1: Open positions < 3
+  Maximum 3 concurrent open positions at any given moment.
+
+Gate 2: Total current risk < 3.2% of capital
+  Calculated using CURRENT trailing stop levels across all open positions, not initial stops.
+  As trailing stops move up toward breakeven and profit, open risk decays toward 0%, freeing up risk capacity.
+  A 0.8% buffer (3.2% vs 4.0%) protects against simultaneous adverse slippage.
+
+Gate 3: Daily cumulative loss < 4% of capital
+  Sum of realized losses today + unrealized loss on open positions.
+  If >= 4%: Day kill-switch engages immediately. No new entries permitted for the rest of the session.
+  Existing open positions continue to be managed strictly by their trailing stops.
+
+Gate 4: Total executed trades today < 5
+  Maximum 5 executed trades per day.
+  Trades 1–3: Admission rule allows up to 2 YELLOW conditions (0 RED).
+  Trades 4–5: Admission rule requires ALL GREEN conditions (0 RED, 0 YELLOW).
+
+Gate 5: Dynamic R:R after charges >= 1.5
+  Evaluated with real-time charges from SmartAPI Brokerage API.
+
+Gate 6: Symbol Lock (One Entry Per Stock Per Day)
+  Strictly one entry per stock per day across all strategies combined in that portfolio.
+  Phantom Signal Protection: If a limit or proposed entry was cancelled without executing, the symbol is NOT locked. Only a FILLED execution locks the symbol for the remainder of the day.
+```
+
+---
+
+## Single-Order State Machine & Race-Condition Prevention
+
+### The Reverse Position Race Condition Hazard:
+
+```
+The Fatal Scenario in Algorithmic Intraday Execution:
+  1. Position is LONG 100 shares.
+  2. A protective Stop-Loss Market order (SL-M) for 100 shares rests on the broker's exchange book.
+  3. Price experiences sudden volatility. An in-memory trigger fires (e.g., early structural candle invalidation or tighter trailing stop).
+  4. If the application cancels the resting SL-M order and immediately sends a new MARKET SELL order:
+     - Due to exchange network latency, the resting SL-M order triggers and fills on the exchange.
+     - A few milliseconds later, the application's cancellation is rejected ("Order already filled"), BUT the new MARKET SELL order is ALSO placed and fills!
+     - 100 shares sold + 100 shares sold = 200 shares sold.
+     - The account is now ACCIDENTALLY SHORT 100 SHARES in real money!
+     - If the stock bounces, the account suffers unlimited overnight or intraday short losses.
+
+Mithron's Architectural Solution: The Single-Order State Machine
+  At no point does Mithron ever place a second exit order while an existing exit order rests on the broker server.
+```
+
+### Order Lifecycle & In-Place Modification (`modifyOrder`):
+
+```
+1. Entry Order:
+   - On 5M signal confirmation (09:35:00), place immediate MARKET ORDER.
+   - Entry price fills at next 1M candle open.
+
+2. Initial Protective Stop Placement:
+   - Immediately upon entry fill confirmation, place a single resting STOPLOSS_MARKET order on the broker:
+       transactionType = SELL
+       orderType = STOPLOSS_MARKET
+       triggerPrice = initialStopLoss (firstCandleLow × 0.995)
+       quantity = positionQuantity
+
+3. Trailing Stop Adjustments (1M Candle Boundary):
+   - In-memory trailing stop calculated on every tick and 1M candle close.
+   - When a tighter stop is confirmed (at 0.8R breakeven, or ATR ratchet), Mithron calls SmartAPI modifyOrder:
+       modifyOrder(orderId, newTriggerPrice)
+   - The resting order is modified IN-PLACE on the exchange order book.
+   - Zero new orders created. Zero race condition possible.
+
+4. Emergency Exit / Early Structural Invalidation:
+   - If an early structural invalidation fires (e.g., 1M candle closes back inside first candle range):
+   - Mithron does NOT cancel the order and send a new order.
+   - Mithron modifies the EXISTING resting stop-loss order directly to MARKET:
+       modifyOrder(orderId, orderType="MARKET")
+   - The broker exchange instantly converts the resting order into an immediate market execution.
+   - If the resting order already filled just before the modification reached the broker, the modify call returns "Order already executed" (AB1004/AB1008). Mithron catches this response and cleanly marks position status as CLOSED without sending any redundant sell orders.
+```
+
+---
+
+## Execution Timing: Real-Time Ticks vs Candle Closes
+
+```
+Decoupling of Entry Signals vs Exit Monitoring:
+
+1. Entry Signal Evaluation:
+   - Evaluated strictly on FINALIZED CANDLE CLOSES (e.g. 5M candle close for FCHB).
+   - Prevents false-breakout noise and mid-candle phantom signals.
+   - Consumes in-memory StockContextCache sliding windows.
+
+2. Target & Stop-Loss Monitoring:
+   - Evaluated on EVERY REAL-TIME TICK in memory (via LiveMarketSnapshotService).
+   - Why: A sudden 30-second spike or flash crash can pierce a target or stop loss and retrace before a 1M candle finishes. Waiting for a 1M candle close to detect a stop or target hit introduces catastrophic slippage.
+   - Tick breaches trigger immediate order execution or broker order modification.
+
+3. Trailing Stop Ratchet & Structural Invalidation:
+   - Ratchet adjustments and candle-close structural invalidations evaluate at 1M candle close boundaries.
+```
+
+---
+
+## Pre-Market Day Open Resilience & Outage Recovery
+
+```
+Canonical Day Open Definition:
+  - Day Open is the 09:08:00 uncrossed equilibrium price from the NSE pre-market auction.
+  - Frozen and locked into DailyStockContext and stock_prices between 09:08 and 09:10 AM.
+
+Handling Pre-Market Network Outages (09:00 to 09:14 AM):
+  - If a network disconnect or WebSocket feed outage occurs during the pre-market auction:
+    • NEVER fall back to the continuous 09:15 candle open. The 09:15 open contains continuous session order book imbalances and does NOT equal the official NSE Day Open.
+    • The pre-market workflow checks if open price in DailyStockContext / stock_prices is null or zero.
+    • If missing, Mithron calls Angel One SmartAPI Market Quote API (GET /rest/secure/angelbroking/market/v1/quote) during the 09:10–09:14 window to fetch the authoritative open quote.
+  - Strategies remain 100% pure functions: they consume DailyStockContext.getTodayOpenPrice() and never invoke broker APIs directly.
+```
+
+---
+
+## Strategy Parameter Architecture: YAML Baselines + DB Overrides
+
+```
+Parameter Management:
+  1. YAML Definition (Version Controlled):
+     - Every strategy defines baseline parameters in a versioned YAML file (e.g., config/strategies/fchb_strategy.yaml).
+     - Contains default values for RSI boundaries, extension limits, volume multipliers, and time cutoffs.
+  2. Database Seeding & Runtime Overrides (strategy_rule_value table):
+     - On bootstrap, defaults from YAML are inserted into strategy_rule_value if not already present.
+     - Parameters can be adjusted dynamically in the database without code recompilation or application redeployment.
+  3. Immutable Signal Auditing:
+     - When any strategy evaluates a candidate, the exact parameter values used are serialized into JSON and stored in signals.rule_context, ensuring 100% historical reproduceability.
+```
+
+---
+
+## Long vs. Short Strategy Decoupling
+
+```
+Architectural Separation:
+  - Long strategies (e.g., FchbStrategy) and Short strategies (e.g., FclbStrategy - First Candle Low Breakdown) are implemented as SEPARATE, INDEPENDENT CLASSES.
+  - Rationale:
+    1. Asymmetric Market Physics: Selloffs are high-velocity and panic-driven; rallies are grinding and accumulation-driven. Indicators require different lookbacks and thresholds.
+    2. Regulatory Constraints: Intraday short selling in Indian cash equities requires MIS product type and mandatory square-off before 03:15 PM, whereas delivery/CNC applies differently.
+    3. Maintenance & Cleanliness: Combining long and short branches into a single class leads to conditional spaghetti code and brittle regressions.
+```
+
+---
+
+## Decoupling Signal Generation and Position Management
+
+```
+Role Separation:
+  - Signal Evaluator (e.g., FchbStrategy): Pure function implementing Strategy.evaluate(StockContext, MarketState). Operates on finalized candles to propose trade entries.
+  - Position Handler (e.g., FchbPositionHandler): Implements StrategyPositionHandler.evaluatePosition(Position, LiveMarketSnapshot). Operates on incoming ticks and 1M candles to manage trailing stops, partial profit taking, and exits.
+  - PositionManagerService: Central service holding all OPEN positions across strategies, dispatching each position to its corresponding StrategyPositionHandler based on strategy_id.
 ```
 
 ---
 
 ## Universal Trade Lifecycle
 
-Applies identically to all three strategies after entry.
+Applies identically to all three strategies after entry:
 
 ```
 Entry price = 0R reference point
@@ -229,7 +412,7 @@ Trailing stop on remaining 50% (ATR-based):
 
 Price hits stop at any stage:
   Market order exit, full remaining quantity
-  GTT on Angel One server executes if application is down
+  In prod: Single-order state machine converts resting stop order to MARKET.
 
 At 02:45 PM (02:15 PM on expiry days):
   If profitable (any amount) → exit at market
@@ -246,25 +429,23 @@ At 03:00 PM (02:15 PM on expiry days):
 ## Entry Order Rules
 
 ```
-After signal confirmed on 5M candle close:
-  Wait for next 1M candle to close in signal direction
-  If 1M confirmation candle is green → proceed
-  If 1M confirmation candle is red → signal cancelled, skip
+Canonical Execution Model (Market Order on Signal Confirmation):
+  When a 5M candle closes and satisfies all strategy conditions (BO_%, VOL_X, RSI, Nifty > VWAP, Traffic Light Gate):
+    → Signal is confirmed immediately on that 5M candle close (e.g., 09:35:00)
+    → Place immediate MARKET ORDER for entry
+    → Execution Price: Next 1-minute candle Open price (e.g., 09:35:00 Open)
+    → In simulation: entryPrice = nextCandle.openPrice
 
-Entry order type: LIMIT order
-Entry price: confirmation candle high + 0.1%
-  This avoids chasing — if price has already run far above,
-  limit order does not fill and trade is skipped
-
-Auto-cancel: if limit order not filled within 2 minutes → cancel
-  Do not hold open limit orders — they can fill at wrong moment
+Why Market Order over Limit Order:
+  - Eliminates execution latency and 1-minute artificial delay
+  - Eliminates unfill risk on genuine high-momentum breakouts
+  - Eliminates limit-order timeout ambiguity in simulation and replay
+  - Accurately mirrors real-world automated production execution
 
 On fill:
-  Immediately calculate exact stop loss price
-  Immediately place GTT stop loss order on Angel One server
-  GTT is your safety net if application crashes or loses connection
-  GTT must be updated every time trailing stop moves up
-```
+  Immediately calculate exact stop loss price (FCL × 0.995)
+  Place resting protective stop order (SL-M) immediately on broker exchange.
+  Manage via single-order state machine (modifyOrder for trailing stops and market exits).
 
 ---
 
@@ -569,7 +750,7 @@ This strategy is SUSPENDED on gap-up days (Nifty gap > 0.75%) because the first 
 
 ## First Candle Reference Building (09:15 to 09:19 AM)
 
-Done before signals can fire. Stored in daily_stock_context.
+Done before signals can fire. Stored in `daily_stock_context`.
 
 ```
 Uses five 1M candles: 09:15, 09:16, 09:17, 09:18, 09:19
@@ -579,104 +760,108 @@ firstCandleHigh   = max(high) across all 5 candles
 firstCandleLow    = min(low) across all 5 candles
 firstCandleClose  = close of 09:19 1M candle
 firstCandleVolume = sum(volume) across all 5 candles
-firstCandleTypicalPrice = (firstCandleHigh + firstCandleLow + firstCandleClose) / 3
-firstCandleTurnover = firstCandleVolume × firstCandleTypicalPrice
-firstCandleRangePct = (high - low) / low × 100
-firstCandleBullish  = close > open (strict greater than)
+firstCandleRangePct = (firstCandleHigh - firstCandleLow) / firstCandleLow × 100
+firstCandleBullish  = firstCandleClose > firstCandleOpen (strictly green candle)
 ```
 
 **First candle quality filter (if any fail → FCHB suspended for this stock today):**
 ```
-firstCandleRangePct < 0.15%: range too tight, level meaningless
-firstCandleRangePct > 3.0%:  chaotic opening, stop too wide
-firstCandleTurnover < 1,00,00,000 (Rs. 1 Crore): insufficient opening liquidity / participation
-firstCandleBullish == false: bearish or doji first candle
-                              negative opening sentiment
-Any of the 5 candles missing: not ready, invalid
+1. firstCandleRangePct < 0.15%: range too tight, reference level meaningless
+2. firstCandleRangePct > 3.0%:  chaotic opening volatility, protective stop too wide
+3. firstCandleBullish == false: bearish or doji first candle indicates negative/indecisive opening sentiment
+4. Missing candle guard: All five 1M bars (09:15..09:19) must be fully finalized and present in memory
+
+Note on Volume Normalization & Turnover Floor:
+  - Mithron avoids arbitrary static turnover thresholds (e.g. rigid Rs. 1 Crore floor) and raw opening candle volume multipliers (e.g. 2.0x first candle volume).
+  - Rationale: High-quality mid-cap setups often build liquidity progressively after 09:30 AM rather than printing Rs. 1 Crore in the opening 5 minutes. Furthermore, opening candles frequently contain institutional block uncrossing trades that artificially inflate first candle volume, rendering a 2.0x comparison unrealistic.
+  - Instead, volume conviction is strictly and mathematically normalized via VOL_X (comparing 5M volume against the symbol's 20-day time-of-day baseline curve).
 ```
 
 ---
 
 ## Entry Signal Detection (5M candle close, 09:30 AM to 01:00 PM)
 
+Operates as a pure decision function (`FchbStrategy.evaluate(StockContext, MarketState)`):
+
 ```
-ALL of these must be true:
+ALL conditions must pass:
 
 1. 5M candle closes ABOVE firstCandleHigh
+   (breakout confirmed strictly on finalized 5M candle close)
 
-2. BO_% from first candle high <= 0.8%
-   = (close - firstCandleHigh) / firstCandleHigh × 100
-   If > 0.8%: too far above the level, chasing
+2. Breakout Extension: BO_% <= 0.8%
+   = (5M_close - firstCandleHigh) / firstCandleHigh × 100
+   If > 0.8%: price has extended too far from base; chasing risk is RED.
 
-3. Signal candle volume > 2.0 × firstCandleVolume
-   This comparison is specific to FCHB — different from VOL_X
-   The signal candle must show more than twice the participation
-   of the opening itself
+3. Time-Normalized Volume: VOL_X >= 1.8
+   Volume exceeds 180% of the symbol's 20-day historical average for this exact 5-minute interval.
 
-4. VOL_X (time-normalized) >= 1.8
-   Volume also above 20-day time-normalized average
+4. Momentum: 5M RSI between 55 and 72
+   Confirms directional momentum without being overbought.
 
-5. RSI on 5M between 55 and 72
+5. Intraday Trend Support: Stock Close > Stock VWAP
+   Buyers maintain dominance above volume-weighted average price.
 
-6. Stock close > stock VWAP
+6. Dual Timeframe Alignment: 15M Close > 15M VWAP
+   Higher timeframe trend supports the breakout direction.
 
-7. 15M context: price above 15M VWAP (trend support)
-
-8. Signal candle is strong bullish:
+7. Strong Bullish Candle Structure:
    bodyRatio >= 0.60, upperWickRatio <= 0.25, rangePct >= 0.15%
 
-9. Nifty above VWAP (master filter)
+8. Master Market Filter: Nifty 5M Close > Nifty VWAP
+   Evaluated from MarketState. Master market filter must be active.
 
-10. Signal only valid until 01:00 PM
-    After 01:00 PM: first candle reference loses intraday relevance
+9. Time Window: 09:30 AM to 01:00 PM
+   Signals stop at 01:00 PM as morning breakout levels lose intraday statistical significance.
 
-11. Confidence score >= 60
+10. Traffic-Light Admission Gate:
+    - Trades 1, 2, 3: 0 REDs, maximum 2 YELLOWs.
+    - Trades 4, 5: MUST BE ALL GREEN (0 REDs, 0 YELLOWs).
 
-→ Signal confirmed
-→ Wait for 1M confirmation candle to close green above firstCandleHigh
-→ Place limit buy at 1M confirmation candle high + 0.1%
-→ Auto-cancel if not filled within 2 minutes
+→ Signal qualified on 5M candle close
+→ Dispatched to RiskEngine for dynamic margin & R:R verification
+→ On approval: Immediate MARKET ORDER entry placed (fills at next 1M candle open)
 ```
 
 ---
 
-## Stop Loss
+## Protective Stop Loss & Position Management (`FchbPositionHandler`)
+
+Managed dynamically by `FchbPositionHandler` on incoming ticks and 1M candle closes:
 
 ```
-Stop loss price = firstCandleLow × 0.995
+Initial Stop Loss Price:
+  stopLossPrice = firstCandleLow × 0.995
+  (Placed immediately as resting STOPLOSS_MARKET order on broker exchange upon entry fill)
 
-Rationale: if price closes back inside the first candle range,
-the breakout has completely failed. The first candle established
-a range; breaking back into it means buyers could not hold the level.
+Early Structural Invalidation (Immediate Exit):
+  If any subsequent 1M candle CLOSES back inside the first candle range:
+    close < firstCandleHigh
+  → Triggers IMMEDIATE MARKET EXIT via single-order state machine:
+    modifyOrder(orderId, orderType="MARKET")
+  Rationale: The premise of FCHB is that buyers hold the opening high as support. A 1M candle close back inside the first candle range confirms failure. Exiting immediately preserves capital rather than absorbing a full -1R loss at firstCandleLow.
 
-Early exit trigger:
-  If 1M candle CLOSES back inside the first candle range
-  (below firstCandleHigh and the candle close is within the range)
-  → Exit at market IMMEDIATELY
-  Do not wait for stop loss level to be hit.
-  The breakout has failed and early exit saves more money.
+Breakeven Ratchet (+0.8R):
+  When price touches +0.8R (0.8 × (entryPrice - initialStopLoss)):
+  → Modify resting stop loss trigger price to entryPrice (0R = breakeven).
+  → Risk on position is now 0.0%.
 
-GTT placed at firstCandleLow × 0.995 on Angel One immediately after fill.
-```
+Target 1 Partial Profit Booking (+1R):
+  When price touches +1R (entryPrice + (entryPrice - initialStopLoss)):
+  → Exit 50% of position at market.
+  → Remaining 50% stop loss remains locked at entryPrice (breakeven).
 
----
+Target 2 Trailing Exit (ATR-Based Ratchet):
+  On remaining 50% quantity:
+  On every 1M candle close that closes higher than previous:
+    newStop = 1M_candle_low - (0.5 × 5M_ATR)
+    If newStop > currentStop:
+      modifyOrder(orderId, newStop)
+  Stop only ratchets upward, never downward.
 
-## Targets
-
-```
-Target 1 (first exit, 50% of position):
-  Entry + 1R
-  1R = entry price - stop loss price
-
-Target 2 (remaining 50%):
-  ATR-based trailing stop
-  Trail begins after 50% exits at 1R
-  Follow 1M candle lows minus 0.5 × 5M ATR
-
-Minimum R:R gate before entering:
-  firstCandleRange must provide at least 1:1.5 R:R after charges.
-  If first candle range is too small (stop too close to entry),
-  the trade does not meet the minimum. Skip it.
+Time Cutoffs:
+  02:45 PM (02:15 PM on expiry): Conditional exit (exit if profitable or at loss but above stop; hold if at breakeven).
+  03:00 PM (02:15 PM on expiry): UNCONDITIONAL HARD CLOSE at market.
 ```
 
 ---

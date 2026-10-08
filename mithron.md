@@ -30,7 +30,7 @@ Mithron is designed to answer:
 3. **Rules Must Be Explicit:** Every rule is mathematical and deterministic (`INPUT → FORMULA → OUTPUT`). No subjective interpretations, no "looks bullish", no unquantified intuition.
 4. **Strategies Identify; Shared Engines Decide and Act:** A strategy evaluates canonical facts and emits signals/proposals only. Shared validation, portfolio/trade-gating, risk, position-management, and execution engines decide whether to act and manage the resulting position. Strategies never call broker order APIs.
 5. **Strategies Never Fetch or Calculate Indicators:** Strategies must never fetch market data, call broker APIs, calculate RSI/VWAP, or build candles. They strictly consume the canonical shared facts calculated once in Layer 2.
-6. **Shared Risk Rules Across Simulation and Production:** Historical simulation and production use the same strategy and risk logic. Separate execution adapters handle simulated fills in the development database and real broker orders in production. Simulation review focuses first on failed trades, their causes, and data or rule defects; financial performance remains useful evidence but is not the sole promotion criterion.
+6. **Historical Simulation as Fast-Forward Paper Trading:** Local historical simulation runs the **exact same paper trading workflow, strategy rules, risk engine, and execution adapters** as live paper trading. The only difference is the clock: live paper trading is driven by live market ticks, whereas historical simulation feeds finalized historical bars in fast-forward. Both write to the identical `simulated_*` schema, ensuring 100% zero implementation drift between local backtesting and live market execution.
 7. **Early Universe Expansion (Nifty 500 Data Accumulation):** Right after V1.0 live validation, the universe expands to Nifty 500 so Mithron silently accumulates 30+ days of clean 1M candles and volume baselines in the background while V2, V3, and V4 are built.
 8. **Explainability Over Black Boxes:** Whenever Mithron qualifies or rejects a stock, it records the exact reasons:
    ```text
@@ -43,7 +43,7 @@ Mithron is designed to answer:
    Status:       APPROVED
    ```
 9. **Point-in-Time Correctness:** At minute $T$, the engine must strictly only know what was knowable at minute $T$. No lookahead bias or future-leakage is permitted in live or historical replay.
-10. **Same Strategy Code for Live & Replay:** The exact same strategy and risk code must evaluate live market feeds and historical simulation datasets to eliminate implementation drift.
+10. **Zero Code Drift (Same Strategy & Position Code for Replay and Live):** The exact same strategy class, quality gate, position handler, and risk checks evaluate live market feeds and historical simulation datasets. No separate "backtester" code exists.
 11. **Immutability of Research Evidence:** Generated signals and forward outcomes are permanent research records. Rule modifications increment `rule_version` rather than rewriting history.
 12. **Simplicity Before Scale:** Built as a clean, modular monolith maintainable by a single engineer. Complexity must earn its place.
 13. **Fail Closed and Recover Deterministically:** Untrusted or incomplete data blocks new application decisions for the affected symbol. Recovery reconciles canonical market data and broker position/order state before position decisions resume. Broker-accepted protective orders remain active during application-side pauses.
@@ -104,33 +104,44 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
     • Master Market Filter: Binary Nifty VWAP switch evaluated on 5M candle closes (Nifty 5M close > VWAP: active; < VWAP: suspended).
     • Mid-Session Cross Recovery: Recoverable if Nifty 5M candle closes back above VWAP before 01:00 PM (1M/tick crosses treated as noise).
     • Macro Regimes (TRENDING_UP, RANGE, etc.): Explicitly deferred until post-simulation empirical discovery.
+  - Long vs. Short Strategy Decoupling:
+    • Separate classes for Long (FchbStrategy) and Short (FclbStrategy). Intraday shorting has asymmetric market physics and strict MIS 03:15 PM auto-square-off rules.
   - Strategy Contract & Architecture: StrategyProposal (Proposer) vs StrategyValidator (Gatekeeper)
     • Pure decision functions: Strategies never fetch data or calculate indicators.
+    • Decoupled Position Handler: FchbStrategy evaluates entry signals; FchbPositionHandler evaluates exits.
     • Explainability: First-class domain model capturing passedConditions and failedConditions.
   - First Strategy Proving Ground: FCHB (First Candle High Breakout)
-    • Opening Reference (09:15–09:19 AM): 5 1M candles define FCH, FCL, close, volume, and typical price.
-    • First Candle Turnover Floor: Minimum Rs. 1,00,00,000 (Rs. 1 Crore) = volume × ((high + low + close) / 3).
-    • First Candle Quality: Range 0.15%–3.0%, bullish (close > open), all 5 candles present.
-    • Signal Detection (5M closes, 09:30–01:00 PM): Close > FCH, BO_% <= 0.8%, signalCandleVolume > 2.0 × firstCandleVolume (5M share comparison), VOL_X >= 1.8, 5M RSI 55–72, Close > VWAP, 15M Close > 15M VWAP, strong bullish candle (body >= 0.60, wick <= 0.25).
-    • Invalidation & Stop Loss: Initial stop = FCL × 0.995; early exit if 1M candle closes back inside first candle range.
-    • Suspensions: Suspended on GAP_UP days (Nifty gap > 0.75%) or individual stock gap > 1.5%.
-  - Multi-Strategy Prioritization & Arbitration:
+    • Opening Reference (09:15–09:19 AM): 5 1M candles define FCH, FCL, close, volume, range (0.15%–3.0%), and bullishness (close > open).
+    • Volume Normalization: Standardized on time-normalized VOL_X >= 1.8 (rigid Rs. 1 Crore floor and 2.0x opening volume multiplier removed to avoid penalizing mid-caps or block-trade opens).
+    • Signal Detection (5M closes, 09:30–01:00 PM): Close > FCH, BO_% <= 0.8%, VOL_X >= 1.8, 5M RSI 55–72, Close > VWAP, 15M Close > 15M VWAP, strong bullish candle (body >= 0.60, upper wick <= 0.25).
+    • Traffic-Light Quality Gate: Red / Yellow / Green matrix replaces opaque 0–100 scoring. Trades 1–3 permit up to 2 YELLOWs (0 RED). Trades 4–5 demand ALL GREEN (0 RED, 0 YELLOW).
+    • Execution Model: Immediate Market Order on 5M signal confirmation (entry price = next 1M candle open price).
+    • Single-Order State Machine: Resting STOPLOSS_MARKET order placed on broker exchange at firstCandleLow × 0.995. Trailing stops adjusted in-place via modifyOrder(orderId, newTriggerPrice). Early structural exits (1M close inside first candle) convert resting order via modifyOrder(orderId, orderType="MARKET"), completely eliminating reverse-position race condition.
+    • Targets: Target 1 = +1R (50% exit), Breakeven move at +0.8R, Target 2 = ATR trailing stop on remaining 50%, 02:45 PM conditional exit, 03:00 PM hard close.
+    • Pre-Market Day Open Resilience: Day Open locked at 09:08 uncrossed price. If network outage occurs during 09:00–09:14, pre-market pipeline queries SmartAPI Market Quote API (never falls back to continuous 09:15 open).
+  - Multi-Strategy Prioritization & Inline Arbitration:
     • Priority Order: Priority 1 = ORB, Priority 2 = FCHB, Priority 3 = VWAP Pullback.
-    • Winning strategy owns the symbol through position exit. Losing signal recorded as SYMBOL_ALREADY_TRADED_TODAY.
-  - Trade / Position Gate & Lifecycle:
-    • Strictly one ENTRY per stock per day across all strategies combined (regardless of win/loss outcome).
-    • Phantom Signal Protection: Unfilled or auto-cancelled limit orders do NOT count as entries (no premature symbol lock).
-    • Global Account Limits: Maximum 5 executed trades per day and 3 simultaneously open positions.
-  - In-Memory Cache & Performance Architecture:
-    • Evaluation Cadence: Runs every 5 minutes on 5M candle close (eliminates per-minute DB I/O bottleneck).
-    • In-memory StockContextCache maintains sliding window of 500 stocks in RAM.
-    • Fail-Closed Backfill Guard: Rejects signals if active backfill job exists for the symbol.
+    • Orchestrator resolves symbol priority in-line: winning strategy owns the symbol through position exit; losing signal recorded as SYMBOL_ALREADY_TRADED_TODAY. Zero extra classes needed.
+  - Trade / Position Gate & Dual Portfolio Lifecycle:
+    • Dual Portfolio State Separation: PortfolioState(PAPER) vs PortfolioState(LIVE) operate independently so paper trading never consumes or blocks the 5-trade daily quota or risk budget of real-money trading.
+    • Dynamic Capital & Margin Management: Leverages SmartAPI Margin Calculator API (/margin/v1/batch) and Brokerage Estimate Charges API (/brokerage/v1/estimateCharges). Dynamic Net R:R after charges >= 1.5 enforced.
+    • Strictly one ENTRY per stock per day across all strategies combined in that portfolio (unfilled orders do not lock symbol).
+    • Global Account Limits: Maximum 5 executed trades per day and 3 simultaneously open positions per portfolio.
+  - Unified In-Memory Architecture (Zero V1 Changes):
+    • LiveMarketSnapshotService holds real-time ticks/LTP in RAM for 0 ms exit checks.
+    • StockContextCache maintains sliding windows of 1M, 5M, 15M candles for 500 stocks (< 35 MB RAM) with lock-free atomic reads.
+    • Zero database queries during live market strategy evaluation.
   - Parameter Management & Immutability:
-    • Versioned parameters (strategy_version / rule_version).
-    • YAML bootstrap seeds defaults to DB on initial startup without overwriting runtime DB overrides on restart.
-    • Every signal captures an immutable JSON parameter_snapshot.
-  - Multi-Strategy Hardening: Register a secondary dummy/test strategy alongside FCHB to verify zero-coupling.
-  - Legacy Prototype Retirement: Safely deprecate and delete legacy prototype classes (LiveSignalService, LiveSimulationSignal, BreakoutSignalEvaluator, StrategyScoringService, old YAMLs).
+    • Version-controlled YAML parameter baselines synced to strategy_rule_value DB table on startup.
+    • Runtime DB overrides without code redeployment. Immutable rule_context JSON audit snapshots on every signal.
+  - Implementation Progress:
+    • V2.0 Legacy Retirement & Baseline: COMPLETED ✅ (Cleaned obsolete prototype classes/YAMLs, decoupled services; 318 unit tests passing).
+    • V2.0 Schema Architecture: COMPLETED ✅ (V034 dropped obsolete tables, V035 established 8 core strategy/order/position tables with zero SQL defaults, entities & repositories created).
+    • V2.1 Evaluation Infrastructure: COMPLETED ✅ (MarketState, StockContext, Strategy interface, MasterMarketFilterService, lock-free StockContextCache with < 35 MB RAM footprint and 0 DB backfill queries; 326 unit tests passing).
+    • V2.1-FIX Production Reliability Fixes: COMPLETED ✅ (WebSocket timestamp reset on connect/disconnect & premarket-live-start transition order; 327 unit tests passing).
+    • V2.2 FCHB Strategy Module: PLANNED (Signal evaluation & position handler).
+    • V2.3 Portfolio Risk Engine & Position Manager: PLANNED (Dual paper/live portfolio states, dynamic margin/charges, 1M position loop).
+    • V2.4 Master Workflow Orchestrator & Adapters: PLANNED (Conductor & simulated execution adapter).
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
   - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies

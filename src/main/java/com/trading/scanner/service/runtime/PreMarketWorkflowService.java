@@ -293,6 +293,8 @@ public class PreMarketWorkflowService {
                 return "Live WebSocket connected and active universe subscribed successfully: " + result.message();
             });
 
+            runtimeAutomationService.markMarketHoursRunningIfApplicable();
+
             return complete(WorkflowStatusService.PREMARKET_LIVE_START, today, "Live runtime started successfully");
         }
     }

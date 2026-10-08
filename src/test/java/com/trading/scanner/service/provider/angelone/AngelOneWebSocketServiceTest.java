@@ -126,4 +126,15 @@ class AngelOneWebSocketServiceTest {
         assertEquals(0L, angelOneWebSocketService.status().parsedTicksReceived());
         assertEquals(1L, angelOneWebSocketService.status().parserFailures());
     }
+
+    @Test
+    void disconnect_shouldResetLastMessageReceivedAt() {
+        when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 10, 8, 16, 0));
+
+        AngelOneWebSocketService.Status status = angelOneWebSocketService.disconnect();
+
+        org.junit.jupiter.api.Assertions.assertFalse(status.connected());
+        org.junit.jupiter.api.Assertions.assertNull(status.lastMessageReceivedAt());
+        org.junit.jupiter.api.Assertions.assertEquals(LocalDateTime.of(2026, 10, 8, 16, 0), status.lastDisconnectedAt());
+    }
 }

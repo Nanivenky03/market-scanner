@@ -15,7 +15,6 @@ import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.service.engine.DailyDataStatusService;
 import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.engine.IntradayIndicatorService;
-import com.trading.scanner.service.runtime.LiveSignalService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,7 +47,6 @@ public class LiveMarketCandleService {
         private final MarketCandleRepository marketCandleRepository;
 
         private final TimeProvider timeProvider;
-        private final LiveSignalService liveSignalService;
 
         private final DailyStockContextService dailyStockContextService;
 
@@ -72,7 +70,6 @@ public class LiveMarketCandleService {
         public LiveMarketCandleService(
                         MarketCandleRepository marketCandleRepository,
                         TimeProvider timeProvider,
-                        LiveSignalService liveSignalService,
                         DailyStockContextService dailyStockContextService,
                         IntradayIndicatorService intradayIndicatorService,
                         DailyDataStatusService dailyDataStatusService,
@@ -83,7 +80,6 @@ public class LiveMarketCandleService {
                 this.marketCandleRepository = marketCandleRepository;
 
                 this.timeProvider = timeProvider;
-                this.liveSignalService = liveSignalService;
 
                 this.dailyStockContextService = dailyStockContextService;
 
@@ -105,7 +101,6 @@ public class LiveMarketCandleService {
         public LiveMarketCandleService(
                         MarketCandleRepository marketCandleRepository,
                         TimeProvider timeProvider,
-                        LiveSignalService liveSignalService,
                         DailyStockContextService dailyStockContextService,
                         IntradayIndicatorService intradayIndicatorService,
                         DailyDataStatusService dailyDataStatusService,
@@ -115,7 +110,6 @@ public class LiveMarketCandleService {
                 this(
                                 marketCandleRepository,
                                 timeProvider,
-                                liveSignalService,
                                 dailyStockContextService,
                                 intradayIndicatorService,
                                 dailyDataStatusService,
@@ -812,12 +806,6 @@ public class LiveMarketCandleService {
                 }
 
                 MarketCandle calculated = applyCommonIndicators(derived);
-
-                if (emitSignal) {
-                        liveSignalService
-                                        .processFinalizedDerivedCandle(
-                                                        calculated);
-                }
         }
 
         private MarketCandle upsertDerivedCandle(

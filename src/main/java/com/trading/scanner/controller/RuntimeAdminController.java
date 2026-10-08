@@ -3,7 +3,6 @@ package com.trading.scanner.controller;
 import com.trading.scanner.calendar.NseHolidayCalendar;
 import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.ExchangeHoliday;
-import com.trading.scanner.model.LiveSimulationSignal;
 import com.trading.scanner.model.MarketMinuteSnapshot;
 import com.trading.scanner.model.RuntimeAlertState;
 import com.trading.scanner.model.RuntimeSetting;
@@ -13,7 +12,6 @@ import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
 import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
 import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
-import com.trading.scanner.service.runtime.LiveSignalService;
 import com.trading.scanner.service.runtime.MarketCalendarService;
 import com.trading.scanner.service.runtime.RuntimeAlertService;
 import com.trading.scanner.service.runtime.RuntimeAutomationService;
@@ -42,7 +40,6 @@ public class RuntimeAdminController {
     private final RuntimeAutomationService runtimeAutomationService;
     private final RuntimeReadinessService runtimeReadinessService;
     private final DailyStockContextService dailyStockContextService;
-    private final LiveSignalService liveSignalService;
     private final RuntimeSettingService runtimeSettingService;
     private final RuntimeHousekeepingService runtimeHousekeepingService;
     private final RuntimeAlertService runtimeAlertService;
@@ -251,19 +248,6 @@ public class RuntimeAdminController {
     public ResponseEntity<List<DailyStockContext>> dailyStockContext(
             @Parameter(description = "Trading date in yyyy-MM-dd format", example = "2026-06-24") @RequestParam LocalDate date) {
         return ResponseEntity.ok(dailyStockContextService.findByTradingDate(date));
-    }
-
-    @Operation(summary = "List recent live signals")
-    @GetMapping("/live-signals")
-    public ResponseEntity<List<LiveSimulationSignal>> recentLiveSignals(
-            @Parameter(description = "Maximum number of recent signals to return", example = "50") @RequestParam(defaultValue = "50") int limit) {
-        return ResponseEntity.ok(liveSignalService.recentSignals(limit));
-    }
-
-    @Operation(summary = "Clear live signals")
-    @PostMapping("/live-signals/clear")
-    public ResponseEntity<LiveSignalService.ClearSignalsResult> clearLiveSignals() {
-        return ResponseEntity.ok(liveSignalService.clearSignals());
     }
 
     @Operation(summary = "Trigger EOD reconciliation now")

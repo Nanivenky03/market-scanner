@@ -8,7 +8,6 @@ import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.repository.InstrumentMasterRepository;
-import com.trading.scanner.repository.LiveSimulationSignalRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
@@ -37,7 +36,6 @@ public class RuntimeReadinessService {
     private final InstrumentMasterRepository instrumentMasterRepository;
     private final StockPriceRepository stockPriceRepository;
     private final MarketCandleRepository marketCandleRepository;
-    private final LiveSimulationSignalRepository liveSimulationSignalRepository;
     private final AngelOneWebSocketService angelOneWebSocketService;
     private final RuntimeSettingService runtimeSettingService;
     private final RuntimeAutomationProperties runtimeAutomationProperties;
@@ -53,7 +51,6 @@ public class RuntimeReadinessService {
             InstrumentMasterRepository instrumentMasterRepository,
             StockPriceRepository stockPriceRepository,
             MarketCandleRepository marketCandleRepository,
-            LiveSimulationSignalRepository liveSimulationSignalRepository,
             AngelOneWebSocketService angelOneWebSocketService,
             RuntimeSettingService runtimeSettingService,
             RuntimeAutomationProperties runtimeAutomationProperties,
@@ -67,7 +64,6 @@ public class RuntimeReadinessService {
         this.instrumentMasterRepository = instrumentMasterRepository;
         this.stockPriceRepository = stockPriceRepository;
         this.marketCandleRepository = marketCandleRepository;
-        this.liveSimulationSignalRepository = liveSimulationSignalRepository;
         this.angelOneWebSocketService = angelOneWebSocketService;
         this.runtimeSettingService = runtimeSettingService;
         this.runtimeAutomationProperties = runtimeAutomationProperties;
@@ -96,7 +92,7 @@ public class RuntimeReadinessService {
                 "DERIVED_FROM_LIVE_ONE_MINUTE");
         long liveDerivedFifteenMinuteCount = marketCandleRepository
                 .countByTimeframeAndSource(CandleTimeframe.FIFTEEN_MINUTE, "DERIVED_FROM_LIVE_ONE_MINUTE");
-        long liveSignalCount = liveSimulationSignalRepository.count();
+        long liveSignalCount = 0L;
 
         List<MissingBrokerToken> missingBrokerTokens = new ArrayList<>();
         for (RequiredSymbol required : requiredSymbols(activeUniverse).values()) {

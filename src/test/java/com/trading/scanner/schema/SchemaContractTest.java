@@ -28,11 +28,7 @@ class SchemaContractTest {
                         "simulation_state",
                         "emergency_closure",
                         "instrument_master",
-                        "simulation_run_group",
-                        "simulation_variant",
-                        "simulation_trade",
                         "market_candles",
-                        "live_simulation_signal",
                         "daily_stock_context",
                         "runtime_setting",
                         "runtime_alert_state",
@@ -45,7 +41,16 @@ class SchemaContractTest {
                         "backfill_job",
                         "live_feed_state",
                         "live_minute_resolution",
-                        "eod_data_entry");
+                        "eod_data_entry",
+                        "workflow_status",
+                        "strategy_config",
+                        "strategy_rule_value",
+                        "signals",
+                        "simulated_signals",
+                        "orders",
+                        "simulated_orders",
+                        "positions",
+                        "simulated_positions");
 
         private static final Map<String, List<String>> REQUIRED_COLUMNS = Map.of(
                         "market_candles",

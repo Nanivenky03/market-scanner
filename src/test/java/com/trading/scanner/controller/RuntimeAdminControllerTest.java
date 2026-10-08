@@ -6,7 +6,6 @@ import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
 import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
 import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
-import com.trading.scanner.service.runtime.LiveSignalService;
 import com.trading.scanner.service.runtime.MarketCalendarService;
 import com.trading.scanner.service.runtime.RuntimeAlertService;
 import com.trading.scanner.service.runtime.RuntimeAutomationService;
@@ -29,7 +28,6 @@ class RuntimeAdminControllerTest {
     private RuntimeAutomationService runtimeAutomationService;
     private RuntimeReadinessService runtimeReadinessService;
     private DailyStockContextService dailyStockContextService;
-    private LiveSignalService liveSignalService;
     private RuntimeSettingService runtimeSettingService;
     private RuntimeHousekeepingService runtimeHousekeepingService;
     private RuntimeAlertService runtimeAlertService;
@@ -45,7 +43,6 @@ class RuntimeAdminControllerTest {
         runtimeAutomationService = mock(RuntimeAutomationService.class);
         runtimeReadinessService = mock(RuntimeReadinessService.class);
         dailyStockContextService = mock(DailyStockContextService.class);
-        liveSignalService = mock(LiveSignalService.class);
         runtimeSettingService = mock(RuntimeSettingService.class);
         runtimeHousekeepingService = mock(RuntimeHousekeepingService.class);
         runtimeAlertService = mock(RuntimeAlertService.class);
@@ -59,7 +56,6 @@ class RuntimeAdminControllerTest {
                 runtimeAutomationService,
                 runtimeReadinessService,
                 dailyStockContextService,
-                liveSignalService,
                 runtimeSettingService,
                 runtimeHousekeepingService,
                 runtimeAlertService,

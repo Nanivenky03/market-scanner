@@ -700,7 +700,7 @@ public void onApplicationReady() {
                 }
         }
 
-        private void markMarketHoursRunningIfApplicable() {
+        public void markMarketHoursRunningIfApplicable() {
                 if (workflowStatusService == null) {
                         return;
                 }
@@ -711,8 +711,9 @@ public void onApplicationReady() {
                         }
 
                         UUID dependsOnId = null;
+                        WorkflowStatus premarketLive = null;
                         try {
-                                WorkflowStatus premarketLive = workflowStatusService.findOrCreateDailyWorkflow(
+                                premarketLive = workflowStatusService.findOrCreateDailyWorkflow(
                                                 WorkflowStatusService.PREMARKET_LIVE_START,
                                                 WorkflowStatusService.PREMARKET_GROUP,
                                                 today.toString(),
@@ -721,6 +722,10 @@ public void onApplicationReady() {
                                         dependsOnId = premarketLive.getWorkflowId();
                                 }
                         } catch (Exception ignored) {
+                        }
+
+                        if (premarketLive == null || premarketLive.getStatus() != WorkflowStatus.Status.SUCCESS) {
+                                return;
                         }
 
                         WorkflowStatus marketHoursWorkflow = workflowStatusService.prepareForDaily(

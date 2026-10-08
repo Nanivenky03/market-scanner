@@ -8,7 +8,6 @@ import com.trading.scanner.model.Exchange;
 import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.repository.InstrumentMasterRepository;
-import com.trading.scanner.repository.LiveSimulationSignalRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
@@ -48,9 +47,6 @@ class RuntimeReadinessServiceTest {
     private MarketCandleRepository marketCandleRepository;
 
     @Mock
-    private LiveSimulationSignalRepository liveSimulationSignalRepository;
-
-    @Mock
     private AngelOneWebSocketService angelOneWebSocketService;
 
     @Mock
@@ -87,7 +83,6 @@ class RuntimeReadinessServiceTest {
                 instrumentMasterRepository,
                 stockPriceRepository,
                 marketCandleRepository,
-                liveSimulationSignalRepository,
                 angelOneWebSocketService,
                 runtimeSettingService,
                 runtimeAutomationProperties,

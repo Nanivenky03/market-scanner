@@ -40,7 +40,9 @@ public class BaseDataResetService {
             "volume_daily_baseline",
             "volume_time_window_baseline",
             "runtime_alert_state",
-            "live_simulation_signal");
+            "simulated_positions",
+            "simulated_orders",
+            "simulated_signals");
 
     private final JdbcTemplate jdbcTemplate;
     private final RuntimeAutomationService runtimeAutomationService;

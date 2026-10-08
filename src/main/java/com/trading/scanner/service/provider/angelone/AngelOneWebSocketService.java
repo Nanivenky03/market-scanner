@@ -100,6 +100,7 @@ public class AngelOneWebSocketService {
             connected = false;
             connecting = false;
             lastDisconnectedAt = timeProvider.nowDateTime();
+            lastMessageReceivedAt = null;
         }
 
         return status();
@@ -257,6 +258,7 @@ public class AngelOneWebSocketService {
             connected = true;
             connecting = false;
             lastConnectedAt = timeProvider.nowDateTime();
+            lastMessageReceivedAt = lastConnectedAt;
             lastError = null;
             log.info("Angel One websocket connected");
 

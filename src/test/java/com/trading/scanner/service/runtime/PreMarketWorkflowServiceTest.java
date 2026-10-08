@@ -558,6 +558,7 @@ class PreMarketWorkflowServiceTest {
                 assertEquals(WorkflowStatusService.PREMARKET_LIVE_START, result.stage());
 
                 verify(runtimeAutomationService).connectAndSubscribe();
+                verify(runtimeAutomationService).markMarketHoursRunningIfApplicable();
                 verify(workflowStatusService).markSuccess(eq(liveId), anyString());
         }
 

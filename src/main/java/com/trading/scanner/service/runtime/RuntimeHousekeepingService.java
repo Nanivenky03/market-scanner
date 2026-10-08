@@ -6,7 +6,6 @@ import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.repository.DailyCandleSummaryRepository;
 import com.trading.scanner.repository.DailyDataStatusRepository;
 import com.trading.scanner.repository.DailyStockContextRepository;
-import com.trading.scanner.repository.LiveSimulationSignalRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.VolumeDailyBaselineRepository;
 import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
@@ -28,7 +27,6 @@ public class RuntimeHousekeepingService {
         private final MarketCandleRepository marketCandleRepository;
         private final DailyStockContextRepository dailyStockContextRepository;
         private final DailyDataStatusRepository dailyDataStatusRepository;
-        private final LiveSimulationSignalRepository liveSimulationSignalRepository;
         private final VolumeDailyBaselineRepository volumeDailyBaselineRepository;
         private final VolumeTimeWindowBaselineRepository volumeTimeWindowBaselineRepository;
         private final WebSocketFrameCaptureService webSocketFrameCaptureService;
@@ -79,9 +77,7 @@ public class RuntimeHousekeepingService {
                                 .deleteByTradingDateBefore(
                                                 contextCutoff);
 
-                long deletedLiveSignals = liveSimulationSignalRepository
-                                .deleteBySignalDateBefore(
-                                                liveSignalCutoff);
+                long deletedLiveSignals = 0L;
 
                 long deletedVolumeDailyBaselines = volumeDailyBaselineRepository
                                 .deleteByTradingDateBefore(

@@ -13,7 +13,6 @@ import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.service.engine.DailyDataStatusService;
 import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.engine.IntradayIndicatorService;
-import com.trading.scanner.service.runtime.LiveSignalService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -40,7 +39,6 @@ class LiveMarketCandleServiceTest {
         private MarketCandleRepository marketCandleRepository;
         private LiveMinuteResolutionRepository liveMinuteResolutionRepository;
         private TimeProvider timeProvider;
-        private LiveSignalService liveSignalService;
         private DailyStockContextService dailyStockContextService;
         private IntradayIndicatorService intradayIndicatorService;
         private DailyDataStatusService dailyDataStatusService;
@@ -55,8 +53,6 @@ class LiveMarketCandleServiceTest {
 
                 timeProvider = mock(TimeProvider.class);
 
-                liveSignalService = mock(LiveSignalService.class);
-
                 dailyStockContextService = mock(DailyStockContextService.class);
 
                 intradayIndicatorService = mock(IntradayIndicatorService.class);
@@ -68,7 +64,6 @@ class LiveMarketCandleServiceTest {
                 service = new LiveMarketCandleService(
                                 marketCandleRepository,
                                 timeProvider,
-                                liveSignalService,
                                 dailyStockContextService,
                                 intradayIndicatorService,
                                 dailyDataStatusService,
@@ -459,8 +454,6 @@ class LiveMarketCandleServiceTest {
                                                 anyList(),
                                                 any());
 
-                verify(liveSignalService, never())
-                                .processFinalizedDerivedCandle(any());
         }
 
         @Test

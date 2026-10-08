@@ -6,7 +6,6 @@ import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.repository.DailyCandleSummaryRepository;
 import com.trading.scanner.repository.DailyDataStatusRepository;
 import com.trading.scanner.repository.DailyStockContextRepository;
-import com.trading.scanner.repository.LiveSimulationSignalRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.VolumeDailyBaselineRepository;
 import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
@@ -37,9 +36,6 @@ class RuntimeHousekeepingServiceTest {
 
         @Mock
         private DailyCandleSummaryRepository dailyCandleSummaryRepository;
-
-        @Mock
-        private LiveSimulationSignalRepository liveSimulationSignalRepository;
 
         @Mock
         private VolumeDailyBaselineRepository volumeDailyBaselineRepository;
@@ -89,8 +85,6 @@ class RuntimeHousekeepingServiceTest {
                                 .thenReturn(12L);
                 when(dailyCandleSummaryRepository.deleteByTradingDateBefore(cutoff))
                                 .thenReturn(11L);
-                when(liveSimulationSignalRepository.deleteBySignalDateBefore(cutoff))
-                                .thenReturn(7L);
                 when(volumeDailyBaselineRepository.deleteByTradingDateBefore(cutoff))
                                 .thenReturn(9L);
                 when(volumeTimeWindowBaselineRepository.deleteByTradingDateBefore(cutoff))
@@ -111,7 +105,7 @@ class RuntimeHousekeepingServiceTest {
                 assertEquals(15L, result.deletedDailyStockContexts());
                 assertEquals(12L, result.deletedDailyDataStatuses());
                 assertEquals(11L, result.deletedDailyCandleSummaries());
-                assertEquals(7L, result.deletedLiveSignals());
+                assertEquals(0L, result.deletedLiveSignals());
                 assertEquals(9L, result.deletedVolumeDailyBaselines());
                 assertEquals(18L, result.deletedVolumeTimeWindowBaselines());
                 assertEquals(5, result.clearedFrameBufferEntries());
