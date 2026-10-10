@@ -119,32 +119,35 @@ Margin Verification via SmartAPI:
 
 ---
 
-## Dynamic R:R Check After Brokerage & Regulatory Charges
+## Pre-Trade 3x Friction Viability Filter (Replaces Retired Net R:R Check)
 
 ```
-Dynamic Charges Calculation:
-  Mithron uses Angel One SmartAPI's Estimate Charges API:
-    POST /rest/secure/angelbroking/brokerage/v1/estimateCharges
-  Returns exact breakdown of:
-    - Brokerage (flat Rs. 20 per executed order or 0.25%, whichever is lower)
-    - STT / CTT (Securities Transaction Tax)
-    - Exchange Transaction Charges
-    - SEBI Turnover Fees & Stamp Duty
-    - GST (18% on brokerage + transaction charges)
-  Fallback: If API call times out or is temporarily unavailable, fall back to conservative Rs. 60 flat per round trip.
+Why the original R:R Formula (netRewardAt1R / netRiskAt1R >= 1.5) was retired:
+  At an initial 1:1 gross reward-to-risk setup, netRewardAt1R = 1R - charges, while netRiskAt1R = 1R + charges.
+  Because netReward is mathematically always smaller than netRisk, this ratio can never reach 1.0 (let alone 1.5) regardless of capital size.
+  Every trade would fail, causing permanent execution paralysis.
 
-Dynamic Net Risk-to-Reward Evaluation:
-  netRewardAt1R = (qtyFinal × (entryPrice - stopLossPrice)) - estimatedRoundTripCharges
-  netRiskAt1R   = (qtyFinal × (entryPrice - stopLossPrice)) + estimatedRoundTripCharges
+The Definitive 3x Friction Viability Filter:
+  Expected 1R Gross Profit >= 3 × Estimated Round-Trip Friction
 
-  rrAfterCharges = netRewardAt1R / netRiskAt1R
+Pre-Trade Conservative Friction Estimation (3-Leg Conservative Formula):
+  Estimated Charges = Rs. 60 (Brokerage) + (Round-Trip Turnover × 0.00035) + GST
+  Where:
+    - Brokerage = Rs. 60 flat (assumes conservative 3-leg execution: 1 entry + 2 partial exits)
+    - Statutory Rates (~0.00035) = STT (0.025% on sell), NSE Exchange Fees (0.00297% both ways), Stamp Duty (0.003%), SEBI fees
+    - Round-Trip Turnover = 2 × (Quantity × EntryPrice)
 
-  Gate: If rrAfterCharges < 1.5 → Skip this trade.
+Post-Trade Official Reconciliation:
+  SmartAPI estimateCharges API has known broker-side discrepancies and is NOT used for pre-trade gating.
+  Pre-trade gating strictly uses the conservative 3-leg formula above.
+  Post-trade P&L accounting reconciles exact actual charges deducted from the broker order execution feed.
 
-Why this calculation is dynamic and capital-scaled:
-  A fixed threshold of 1.5 R:R without factoring dynamic charges creates a dangerous trap at lower capital levels.
-  For example, with a tight stop loss on a Rs. 10,000 account, Rs. 60 round-trip charges can consume 40% of the entire risk budget, turning an apparent 1:1.5 trade into an effective 1:0.8 trade.
-  By computing net reward and net risk dynamically after all statutory charges, Mithron strictly guarantees an authentic net 1:1.5+ statistical edge across all capital tiers.
+Why this calculation protects small accounts (e.g., Rs. 30,000 capital):
+  - On a normal Rs. 500 stock with Rs. 4 stop: Qty = 112, Turnover = Rs. 1.12L, Charges = ~Rs. 99.
+    Rs. 450 (1R) >= 3 × Rs. 99 (Rs. 297) → PASSES.
+  - On an Rs. 1,800 stock with tight Rs. 5.40 stop: Qty = 83, Turnover = Rs. 2.98L, Charges = ~Rs. 165.
+    Rs. 450 (1R) < 3 × Rs. 165 (Rs. 495) → REJECTED (Friction Trap).
+  It naturally steers the system away from high-turnover friction traps on tight stops!
 ```
 
 ---
@@ -232,22 +235,30 @@ Gate 1: Open positions < 3
   Maximum 3 concurrent open positions at any given moment.
 
 Gate 2: Total current risk < 3.2% of capital
-  Calculated using CURRENT trailing stop levels across all open positions, not initial stops.
-  As trailing stops move up toward breakeven and profit, open risk decays toward 0%, freeing up risk capacity.
-  A 0.8% buffer (3.2% vs 4.0%) protects against simultaneous adverse slippage.
+  Calculated using CURRENT live trailing stop levels relative to entry across all open positions:
+    Total Open Risk = Sum(Quantity × max(0.0, Entry Price - Current Trailing Stop))
+  Measures true downside exposure from entry if all active stops fire simultaneously.
+  Never drops artificially as a stock falls toward its stop; strictly decays toward 0% only when trailing stops ratchet upward toward and past breakeven.
+  A 0.8% buffer (3.2% vs 4.0% daily kill switch) protects against a cluster of simultaneous stop hits wiping out daily risk in a single adverse market tick.
 
 Gate 3: Daily cumulative loss < 4% of capital
   Sum of realized losses today + unrealized loss on open positions.
   If >= 4%: Day kill-switch engages immediately. No new entries permitted for the rest of the session.
   Existing open positions continue to be managed strictly by their trailing stops.
 
-Gate 4: Total executed trades today < 5
+Gate 4: Total executed trades today < 5 (Trade Quota & YELLOW Handoff)
   Maximum 5 executed trades per day.
   Trades 1–3: Admission rule allows up to 2 YELLOW conditions (0 RED).
   Trades 4–5: Admission rule requires ALL GREEN conditions (0 RED, 0 YELLOW).
+  Architecture Handoff Rule:
+    - The Strategy layer evaluates purely against a 2-YELLOW budget and emits proposal metadata (yellowCount).
+    - The Risk Engine receives current daily trade count (1-5).
+    - If trade count >= 3 (evaluating for trade 4 or 5) AND yellowCount > 0: Risk Engine REJECTS the trade.
+    - This keeps the Strategy pure/stateless and places quota enforcement squarely in Layer 4.
 
-Gate 5: Dynamic R:R after charges >= 1.5
-  Evaluated with real-time charges from SmartAPI Brokerage API.
+Gate 5: 3x Friction Viability Filter
+  Expected 1R Gross Profit >= 3 × Estimated Round-Trip Friction (using conservative 3-leg formula).
+  Guarantees edge is not eroded by turnover-based statutory taxes and brokerage.
 
 Gate 6: Symbol Lock (One Entry Per Stock Per Day)
   Strictly one entry per stock per day across all strategies combined in that portfolio.
@@ -399,10 +410,13 @@ Price reaches 0.8R:
   Worst case from this point forward = zero loss
   Stop never comes back down from here
 
-Price reaches 1R:
+Price reaches 1R (Target 1 Partial Exit):
   EXIT 50% of position at market
-  Remaining 50% stop stays at entry price (0R)
-  ATR-based trailing stop begins on remaining 50%
+  Unconditional Stop Lock: Stop for remaining 50% immediately moves to max(currentStop, entryPrice)
+    - If 0.8R ratchet already fired: Stop is already at entry (unchanged).
+    - If price jumped directly past 0.8R to 1R in a single tick: Stop is moved from FCL to entry price immediately.
+    - Zero downside risk on the remaining position.
+  ATR-based trailing stop begins on remaining 50% (Candidate stop = 1M Low - 0.5 * 5M ATR). Stop only ratchets upward.
 
 Trailing stop on remaining 50% (ATR-based):
   On every 1M candle close that is HIGHER than previous:
@@ -442,10 +456,17 @@ Why Market Order over Limit Order:
   - Eliminates limit-order timeout ambiguity in simulation and replay
   - Accurately mirrors real-world automated production execution
 
-On fill:
-  Immediately calculate exact stop loss price (FCL × 0.995)
-  Place resting protective stop order (SL-M) immediately on broker exchange.
-  Manage via single-order state machine (modifyOrder for trailing stops and market exits).
+On fill (Dual-Layer Protection Architecture):
+  1. Immediately calculate exact stop loss price (FCL × 0.995).
+  2. Exchange Resting Stop: Place resting protective stop order (SL-M) immediately on broker exchange.
+     Managed in real time via Single-Order State Machine (modifyOrder for trailing stops and market exits).
+  3. GTT Crash Protection (Server-Side Broker Safety Net):
+     Immediately register a server-side GTT (Good Till Triggered) stop order at FCL × 0.995 directly on Angel One servers.
+     Why GTT is essential:
+       - If the local Windows application crashes, the laptop reboots, or home internet drops, the GTT order lives on Angel One's cloud infrastructure.
+       - Guarantees catastrophic loss protection during abnormal runtime failures.
+       - When trailing stop moves: Cancel old GTT and register new GTT.
+       - On normal position exit or 15:00 hard close: Cancel active GTT order cleanly.
 
 ---
 

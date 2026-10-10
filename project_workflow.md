@@ -311,7 +311,7 @@ Two production edge cases discovered during live market feed monitoring were rem
 
 ---
 
-#### 5. V2.2 — First Candle High Breakout (FCHB) Strategy Slice: Entry & Position Rules `[NEXT MILESTONE]`
+#### 5. V2.2 — First Candle High Breakout (FCHB) Strategy Slice: Entry & Position Rules `[COMPLETED + TESTED ✅]`
 
 Strategies operate as **pure decision functions**, decoupled from application timers, database repositories, or broker APIs. Each strategy slice provides two distinct, single-responsibility components: **Signal Evaluation** (entry decisions) and **Position Handling** (exit decisions).
 
@@ -337,15 +337,18 @@ Strategies operate as **pure decision functions**, decoupled from application ti
   1. `firstCandleRangePct >= 0.15%` and `<= 3.0%` (guards against dead opens and unmanageably wide stops).
   2. `firstCandleBullish == true` (positive opening sentiment required).
   3. All 5 1M candles present and finalized in cache.
-- **Volume Normalization (Removal of Rigid ₹1 Crore Floor & 2.0x Opening Volume Check):**
-  - *Decision:* Removed the rigid ₹1,00,00,000 turnover floor and the `signalCandleVolume > 2.0 * firstCandleVolume` multiplier check.
-  - *Rationale:* For small-to-mid-cap equities in the Nifty 500, a ₹1 Crore opening floor arbitrarily penalizes liquid setups whose volume accelerates naturally as the morning unfolds. Furthermore, opening candles frequently contain institutional block uncrossing auctions that artificially inflate the first candle volume, making a `2.0x` share comparison unrealistic.
-  - *Standardization:* Replaced with time-normalized `VOL_X >= 1.8` (comparing the 5M candle volume against the symbol's 20-day historical baseline curve for that exact 5-minute interval).
+  4. `firstCandleTurnover >= ₹1,00,00,000` (₹1 Crore): $\text{Volume} \times \frac{H+L+C}{3} \ge 10,000,000$. Replaces rigid share-count floor; price-agnostic liquidity proof.
+- **Two-Factor Volume Model (Institutional Normalization):**
+  - **Factor A (Mandatory Hard Gate):** Time-normalized $\text{VOL\_X} \ge 1.8\times$ (relative to 20-day historical baseline curve for this exact 5M interval). If fails $\to$ **RED** (Disqualified).
+  - **Factor B (Time-Weighted Quality Gate — YELLOW Factor Only):**
+    - 09:30 to 09:45 IST: $\text{Signal Volume} \ge 1.5\times \text{Candle 1 Volume} \implies \text{GREEN}$; $\ge 1.0\times \implies \text{YELLOW}$; $< 1.0\times \implies \text{Extra YELLOW}$.
+    - 09:45 to 13:00 IST: $\text{Signal Volume} \ge 0.75\times \text{Candle 1 Volume} \implies \text{GREEN}$; $\ge 0.50\times \implies \text{YELLOW}$; $< 0.50\times \implies \text{Extra YELLOW}$.
+    - *Rationale:* Protects against the U-shaped midday volume dip without ignoring opening auction participation.
 - **Traffic-Light Quality Gate (Red / Yellow / Green Matrix):**
   - Replaced opaque 0–100 numerical scoring with deterministic traffic-light evaluation:
-    - **RED (Hard Disqualification - 0 Permitted):** Extension $> 0.8\%$, RSI $< 55$ or $> 72$, VOL_X $< 1.8$, Nifty $<$ VWAP, first candle bearish, post-volatile day $> 4.0\%$, circuit room $< 2.0\%$, stock gap $> 1.5\%$.
-    - **YELLOW (Marginal Setup):** Extension $0.5\% - 0.8\%$, RSI $55 - 58$ or $65 - 70$, VOL_X $1.8 - 2.2$, Nifty close barely above VWAP ($< 0.30\%$).
-    - **GREEN (Textbook Prime Setup):** Extension $0.0\% - 0.4\%$, RSI $58 - 65$, VOL_X $\ge 2.5$, Nifty close $> 0.30\%$ above VWAP, 15M trend strongly aligned, strong bullish candle (`bodyRatio >= 0.65`, `upperWickRatio <= 0.15`).
+    - **RED (Hard Disqualification - 0 Permitted):** Extension $> 0.8\%$, RSI $< 55$ or $> 72$, VOL_X $< 1.8$, Nifty $<$ VWAP, Nifty Gap $\ge 0.75\%$ (Day suspended), first candle bearish, post-volatile day $> 4.0\%$, circuit room $< 2.0\%$, stock gap $> 1.5\%$.
+    - **YELLOW (Marginal Setup):** Extension $0.5\% - 0.8\%$, RSI $55 - 58$ or $65 - 70$, Factor B volume ratio yellow tiers, Nifty close barely above VWAP ($< 0.30\%$).
+    - **GREEN (Textbook Prime Setup):** Extension $0.0\% - 0.4\%$, RSI $58 - 65$, VOL_X $\ge 2.5$, Factor B volume ratio green tiers, Nifty close $> 0.30\%$ above VWAP, 15M trend strongly aligned, strong bullish candle (`bodyRatio >= 0.65`, `upperWickRatio <= 0.15`).
   - **Trade Quota Quality Rules:**
     - **Trades 1, 2, 3:** Maximum 2 YELLOW conditions permitted, 0 REDs.
     - **Trades 4, 5:** MUST BE ALL GREEN (0 REDs, 0 YELLOWs). Because earlier trades have utilized daily risk capacity, late-session trades demand flawless textbook execution.
@@ -362,12 +365,14 @@ Strategies operate as **pure decision functions**, decoupled from application ti
 
 ##### C. Strategy-Specific Position Handler (`FchbPositionHandler`):
 - **Contract:** Implements `StrategyPositionHandler.evaluatePosition(Position, LiveMarketSnapshot) -> PositionAction`.
-- **Exit Logic:**
-  - **Initial Protective Stop:** `firstCandleLow * 0.995` placed immediately on broker exchange as a resting `STOPLOSS_MARKET` order.
-  - **Early Structural Invalidation (Immediate Market Exit):** If any subsequent 1M candle closes back inside the first candle range (`close < firstCandleHigh`) $\to$ triggers immediate full exit via single-order state machine `modifyOrder(orderId, orderType="MARKET")`.
-  - **Breakeven Ratchet (+0.8R):** When price touches $+0.8R$, ratchet resting stop to `entryPrice` (0R risk).
-  - **Target 1 Partial Exit (+1R):** When price touches $+1R$, exit 50% at market; keep remaining 50% stop at `entryPrice`.
-  - **Target 2 Trailing Exit:** On remaining 50%, trail stop using 5M ATR: `1M_low - (0.5 * 5M_ATR)`. Stop only ratchets upward.
+- **Exit Logic & Priority Order:**
+  - **Priority 1 (Hard Close):** 15:00:00 unconditional market exit.
+  - **Priority 2 (Wind-Down Cutoff):** 14:45:00 on normal trading days (14:15:00 on weekly expiry days). If stop $<$ entry $\to$ full exit; if stop $\ge$ entry $\to$ hold and trail until 15:00.
+  - **Priority 3 (Stop Loss Hit):** Real-time tick LTP $\le$ currentStopLoss $\to$ full exit.
+  - **Priority 4 (Structural Invalidation - Fast Cut):** Active only while stop $<$ entry: 1M candle close $<$ FCH $\to$ full market exit.
+  - **Priority 5 (Target 1 Partial Exit):** LTP $\ge$ Target 1 (+1R) $\to$ exit 50% at market.
+  - **Priority 6 (Breakeven Ratchet):** LTP $\ge$ Entry + 0.8R (before Target 1) $\to$ move stop to entry price.
+  - **Priority 7 (Target 2 ATR Trailing Ratchet):** Post-Target 1 booked $\to$ trail stop at $1\text{M Low} - (0.5 \times 5\text{M ATR})$. Stop only ratchets upward.
   - **Time Cutoffs:** 02:45 PM conditional exit, 03:00 PM unconditional hard close (02:15 PM on expiry).
 
 ---
@@ -381,21 +386,36 @@ Strategies operate as **pure decision functions**, decoupled from application ti
 - **Rationale:** If a single shared trade quota of 5 trades were used, morning paper signals would consume the entire daily quota, blocking genuine real-money trades. Furthermore, simulated drawdowns must never trigger a kill switch on real-money trading.
 - **Pre-Trade Risk Gates (Evaluated per Portfolio):**
   1. Open positions $< 3$.
-  2. Total trades today $< 5$ (Trades 1–3 accept up to 2 YELLOWs; Trades 4–5 require ALL GREEN).
-  3. Cumulative daily loss $< 4\%$ of portfolio capital (triggers kill switch for that portfolio).
-  4. Symbol Lock: Strictly **one entry per stock per day** across all strategies combined in that portfolio.
-  5. Phantom Signal Protection: Unfilled or cancelled limit/market orders do NOT lock the symbol; only a FILLED execution locks it.
-  6. Dynamic Net R:R after charges $\ge 1.5$.
+  2. Total trades today $< 5$:
+     - Trades 1–3: Accept up to 2 YELLOW conditions (0 RED).
+     - Trades 4–5: MUST BE ALL GREEN (0 RED, 0 YELLOW).
+     - *Handoff Rule:* Strategy evaluates purely against a 2-YELLOW budget and emits proposal metadata (`yellowCount`). The Risk Engine inspects current daily trade count and rejects trades 4–5 if `yellowCount > 0`.
+  3. Total Current Portfolio Risk $< 3.2\%$ of capital:
+     - Sum of downside risk from entry across all active positions:
+       $$\text{Total Open Risk} = \sum (\text{Quantity} \times \max(0.0, \text{Entry Price} - \text{Current Trailing Stop}))$$
+     - Measures maximum capital at risk if all active stops fire simultaneously.
+     - Never fluctuates with mark-to-market LTP noise. Only decays downward as stops ratchet toward breakeven and into locked-in profit ($\max(0.0, \text{Entry} - \text{Stop}) = 0$).
+     - Prevents a cluster of simultaneous stop hits from breaching the 4% daily kill switch.
+  4. Cumulative daily loss $< 4\%$ of portfolio capital (triggers kill switch for that portfolio).
+  5. Symbol Lock: Strictly **one entry per stock per day** across all strategies combined in that portfolio.
+  6. Phantom Signal Protection: Unfilled or cancelled limit/market orders do NOT lock the symbol; only a FILLED execution locks it.
+  7. **3x Friction Viability Filter (Replaces retired R:R formula):**
+     - Evaluates: $\text{Expected } 1R \text{ Gross Profit} \ge 3 \times \text{Estimated Round-Trip Friction}$.
+     - Pre-trade friction estimated via conservative 3-leg formula:
+       $$\text{Estimated Charges} = ₹60 \text{ (brokerage)} + (\text{Round-Trip Turnover} \times 0.00035 \text{ statutory taxes}) + \text{GST}$$
+     - Discards high-turnover friction traps (e.g., tight stops on high-priced stocks).
 
-##### B. Dynamic Capital Management & SmartAPI Integration:
+##### B. Dynamic Capital Management, GTT Crash Protection & SmartAPI Integration:
 - **Available Margin & Leverage Tracking:** Mithron tracks total equity, intraday MIS leverage (up to 5x margin for approved equities provided by Angel One), margin currently committed to open positions, and unencumbered free cash.
 - **SmartAPI Margin Calculator API (`POST /rest/secure/angelbroking/margin/v1/batch`):** Queries the official broker API to verify exact margin requirements before approving any trade proposal, eliminating hardcoded margin assumptions.
-- **SmartAPI Brokerage & Charges API (`POST /rest/secure/angelbroking/brokerage/v1/estimateCharges`):** Queries the official broker API to compute exact statutory charges (brokerage, STT, turnover charges, stamp duty, GST). Falls back to flat ₹60 if API is unreachable.
-- **Dynamic Net R:R Gate:** Evaluates:
-  $$\text{Net Reward} = (\text{Quantity} \times 1R) - \text{Total Estimated Charges}$$
-  $$\text{Net Risk} = (\text{Quantity} \times 1R) + \text{Total Estimated Charges}$$
-  $$\text{Net R:R} = \frac{\text{Net Reward}}{\text{Net Risk}} \ge 1.5$$
-  This dynamically ensures that small capital accounts are never allowed to enter setups where fixed statutory charges degrade the statistical edge.
+- **Post-Trade Ledger Reconciliation:** Uses actual broker charges from order execution records for official net P&L accounting.
+- **Dual-Layer Stop Protection (Single-Order State Machine + GTT Crash Protection):**
+  - *Normal Operation (Single-Order State Machine):* Manages resting exchange SL-M order in-place via `modifyOrder(orderId, newTriggerPrice)` and market exit conversions.
+  - *Abnormal Operation / Crash Protection (Broker-Side GTT):* On fill, places a server-side GTT stop order at $\text{FCL} \times 0.995$ directly on Angel One servers. Protects open positions if application crashes, power fails, or network drops. GTT is updated on ratchets and cancelled on regular exit.
+- **Execution Timing & Expiry Handling:**
+  - Normal Days: 14:45 Wind-Down, 15:00 Hard Close.
+  - Weekly Expiry Days: 14:15 Wind-Down, 15:00 Hard Close.
+  - Monthly Expiry Days: FCHB suspended entirely for the day.
 
 ##### C. Single-Order State Machine (Reverse Position Race Condition Prevention):
 - **The Reverse Position Hazard:**
@@ -652,7 +672,7 @@ Strategies operate as **pure decision functions**, decoupled from application ti
 - [x] **V2.0: Database Schema Migrations & JPA Entities** `[COMPLETED + TESTED]` (V034/V035, 8 tables, zero SQL defaults)
 - [x] **V2.1: Domain Contracts & Evaluation Infrastructure** `[COMPLETED + TESTED]` (MarketState, StockContext, 0-DB backfill tracking, lock-free cache, 326 unit tests passing)
 - [x] **V2.1-FIX: Production Reliability & Hygiene Fixes** `[COMPLETED + TESTED]` (WebSocket timestamp reset & premarket transition order; 327 unit tests passing)
-- [ ] **V2.2: FCHB Strategy Module (Entry Rules & Position Handler)** `[PLANNED]`
+- [x] **V2.2: FCHB Strategy Module (Entry Rules & Position Handler)** `[COMPLETED + TESTED]` (361 unit tests passing)
 - [ ] **V2.3: Portfolio Risk Engine & Central Position Manager** `[PLANNED]` (Dual Paper/Live PortfolioState separation)
 - [ ] **V2.4: Master Workflow Orchestrator & Execution Adapters** `[PLANNED]`
 - [ ] **V2.5: Hardening & Historical Simulation Verification** `[PLANNED]`

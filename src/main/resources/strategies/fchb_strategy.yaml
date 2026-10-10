@@ -1,0 +1,57 @@
+strategy:
+  id: 2
+  key: "FCHB"
+  name: "First Candle High Breakout"
+  description: "5M breakout above 09:15-09:19 opening high with volume and momentum"
+  priority: 2
+  timeframe: "5M"
+  direction: "LONG"
+  is_active: true
+
+rules:
+  # First Candle Reference (09:15-09:19 AM)
+  first_candle_min_range_pct: 0.15
+  first_candle_max_range_pct: 3.0
+  first_candle_require_bullish: true
+
+  # Breakout Extension (BO_%)
+  breakout_extension_max_pct: 0.8
+  breakout_extension_yellow_pct: 0.4
+
+  # Time-Normalized Volume Multiple (VOL_X)
+  vol_x_min: 1.8
+  vol_x_green: 2.5
+
+  # 5-Minute RSI Momentum
+  rsi_min: 55.0
+  rsi_max: 72.0
+  rsi_green_min: 58.0
+  rsi_green_max: 65.0
+
+  # Candle Quality
+  min_body_ratio: 0.60
+  max_upper_wick_ratio: 0.25
+  min_range_pct: 0.15
+
+  # Master Market Filter
+  nifty_min_vwap_buffer_pct: 0.0
+  nifty_green_vwap_buffer_pct: 0.30
+
+  # Filters & Exclusions
+  max_prev_day_range_pct: 4.0
+  min_dist_from_resistance_pct: 1.0
+  max_stock_gap_pct: 1.5
+
+  # Session Time Windows
+  entry_start_time: "09:30:00"
+  entry_cutoff_time: "13:00:00"
+  conditional_exit_time: "14:45:00"
+  hard_close_time: "15:00:00"
+
+  # Risk & Position Targets
+  initial_stop_buffer_pct: 0.005
+  breakeven_r_multiple: 0.8
+  target_1_r_multiple: 1.0
+  target_1_exit_fraction: 0.5
+  atr_trail_multiplier: 0.5
+

@@ -21,8 +21,22 @@ public record StockContext(
         List<MarketCandle> candles1m,
         List<MarketCandle> candles5m,
         List<MarketCandle> candles15m,
-        boolean backfillActive
+        boolean backfillActive,
+        Double volX
 ) {
+
+    public StockContext(
+            String symbol,
+            String exchange,
+            LocalDate tradingDate,
+            DailyStockContext dailyContext,
+            List<MarketCandle> candles1m,
+            List<MarketCandle> candles5m,
+            List<MarketCandle> candles15m,
+            boolean backfillActive
+    ) {
+        this(symbol, exchange, tradingDate, dailyContext, candles1m, candles5m, candles15m, backfillActive, null);
+    }
 
     public StockContext {
         candles1m = candles1m == null ? Collections.emptyList() : Collections.unmodifiableList(candles1m);

@@ -139,7 +139,7 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
     • V2.0 Schema Architecture: COMPLETED ✅ (V034 dropped obsolete tables, V035 established 8 core strategy/order/position tables with zero SQL defaults, entities & repositories created).
     • V2.1 Evaluation Infrastructure: COMPLETED ✅ (MarketState, StockContext, Strategy interface, MasterMarketFilterService, lock-free StockContextCache with < 35 MB RAM footprint and 0 DB backfill queries; 326 unit tests passing).
     • V2.1-FIX Production Reliability Fixes: COMPLETED ✅ (WebSocket timestamp reset on connect/disconnect & premarket-live-start transition order; 327 unit tests passing).
-    • V2.2 FCHB Strategy Module: PLANNED (Signal evaluation & position handler).
+    • V2.2 FCHB Strategy Module: COMPLETED ✅ (FchbStrategy, FchbPositionHandler, Traffic-Light Quality Gate, 361 unit tests passing).
     • V2.3 Portfolio Risk Engine & Position Manager: PLANNED (Dual paper/live portfolio states, dynamic margin/charges, 1M position loop).
     • V2.4 Master Workflow Orchestrator & Adapters: PLANNED (Conductor & simulated execution adapter).
 
