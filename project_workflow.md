@@ -432,6 +432,13 @@ Strategies operate as **pure decision functions**, decoupled from application ti
 - **Minute-Boundary Monitoring:** Listens to 1-minute candle finalization events for structural invalidation and trailing ratchet updates.
 - **Delegation:** Resolves the owning strategy handler using `position.getStrategyId()` and dispatches evaluation to the handler.
 
+##### E. Four Real-Data Replay Integration Scenarios:
+Before running end-to-end backtesting orchestration in V2.4, V2.3 proves the Risk Engine and Position Manager against 4 real-world market scenarios captured from the production database:
+1. **Scenario 1 (Strong Bullish Trend Day):** Nifty consistently above VWAP. Multiple stocks trigger FCHB with low/zero YELLOWs; positions hit Target 1 (+1R) and trail to multi-R profits.
+2. **Scenario 2 (Bearish / Trap Day):** Nifty opens or breaks below VWAP; FCHB signals blocked by the macro gate.
+3. **Scenario 3 (Range-Bound / Choppy Day):** Narrow market ranges; tests tight stops, the 3x friction filter blocking excessive turnover traps, and breakeven ratchets.
+4. **Scenario 4 (Stock-Level Trap on Bullish Day):** Nifty is strongly bullish above VWAP (macro filter passes), but an individual stock experiences an absorption failure (1M candle immediately closes below FCH after entry). Tests that early structural invalidation fires instantly and cuts loss to a small fraction of -1R.
+
 ---
 
 #### 7. V2.4 — Master Workflow Orchestrator & Execution Architecture `[PLANNED]`

@@ -139,9 +139,16 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
     • V2.0 Schema Architecture: COMPLETED ✅ (V034 dropped obsolete tables, V035 established 8 core strategy/order/position tables with zero SQL defaults, entities & repositories created).
     • V2.1 Evaluation Infrastructure: COMPLETED ✅ (MarketState, StockContext, Strategy interface, MasterMarketFilterService, lock-free StockContextCache with < 35 MB RAM footprint and 0 DB backfill queries; 326 unit tests passing).
     • V2.1-FIX Production Reliability Fixes: COMPLETED ✅ (WebSocket timestamp reset on connect/disconnect & premarket-live-start transition order; 327 unit tests passing).
-    • V2.2 FCHB Strategy Module: COMPLETED ✅ (FchbStrategy, FchbPositionHandler, Traffic-Light Quality Gate, 361 unit tests passing).
-    • V2.3 Portfolio Risk Engine & Position Manager: PLANNED (Dual paper/live portfolio states, dynamic margin/charges, 1M position loop).
-    • V2.4 Master Workflow Orchestrator & Adapters: PLANNED (Conductor & simulated execution adapter).
+    • V2.2 FCHB Strategy Module & Position Handler: COMPLETED ✅
+      - Pure Strategy Evaluator (`FchbStrategy`): 5M breakout trigger, Candle 1 reference (turnover >= Rs. 1 Cr, range 0.15%-3.0%), 7-factor Red/Yellow/Green Traffic-Light Quality Gate, Two-Factor Volume model (VOL_X >= 1.8 hard gate + time-weighted Candle 1 ratio).
+      - Decoupled Position Handler (`FchbPositionHandler`): 7-step priority exits (15:00 hard close, 14:45/14:15 wind-down, tick stop breach, 1M structural invalidation fast cut, Target 1 +1R 50% partial exit with immediate breakeven stop lock, +0.8R breakeven ratchet, and 1M ATR trailing ratchet for the remaining 50% runner).
+      - Unit Test Coverage: 32 dedicated unit test cases (21 strategy tests, 11 position handler tests), 359/359 test suite passing.
+    • V2.3 Portfolio Risk Engine, Position Manager & Simulation Testing: CURRENT STAGE
+      - Dual Portfolio State Separation (`PortfolioState` for PAPER vs LIVE).
+      - 7 Pre-Trade Risk Gates: Max 3 open positions, 5-trade daily quota with Trade 4-5 ALL GREEN handoff, 3.2% live downside portfolio risk cap (Entry - TrailingStop), 4% daily kill switch, Symbol Lock (1 entry/symbol/day), Phantom signal protection, and Conservative 3x Friction Viability Filter (Rs. 60 + Turnover × 0.00035 + GST).
+      - Central Position Manager Service (`PositionManagerService`): In-memory active position registry dispatching ticks for target/stop hits and 1M candle closes for structural invalidation and trailing stops. Single-order state machine and server-side GTT crash protection.
+      - 4 Real-Data Replay Integration Scenarios using captured database candles: Bullish Trend Day, Bearish Trap Day, Range-Bound Day, and Stock-Level Trap on Bullish Day.
+    • V2.4 Master Workflow Orchestrator & Execution Adapters: PLANNED (Conductor, simulation database adapter, and REST simulation replay).
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
   - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies
