@@ -138,7 +138,8 @@ class FchbRealDataScenarioIntegrationTest {
         @Test
         @DisplayName("SCENARIO 2: Neutral Day with Multiple Positions -> Stop decay to entry frees portfolio risk capacity for 3rd trade")
         void testScenario2_NeutralMarketRiskDecayAndCapacity() {
-                // With committed margin check (Committed + Required <= Capital), 3 positions of ~20-22k trade value require adequate capital
+                // With committed margin check (Committed + Required <= Capital), 3 positions of
+                // ~20-22k trade value require adequate capital
                 riskEngine.initializePortfolio(PortfolioMode.PAPER, 60000.0, LocalDate.of(2026, 10, 11));
 
                 MarketState neutralMarket = new MarketState(
