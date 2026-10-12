@@ -488,6 +488,13 @@ public class LiveMarketCandleService {
                                 "Flushed open candles");
         }
 
+        public synchronized void clearOpenCandlesWithoutPersisting() {
+                int count = openCandles.size();
+                openCandles.clear();
+                previousDayCloseCache.clear();
+                log.info("Cleared {} in-memory open candles without persisting to DB", count);
+        }
+
         public RolloverResult rolloverCompletedMinutes() {
                 LocalDateTime now = timeProvider.nowDateTime();
                 LocalDateTime currentMinute = truncateToMinute(now);

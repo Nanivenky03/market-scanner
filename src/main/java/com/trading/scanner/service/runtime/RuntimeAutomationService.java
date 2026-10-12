@@ -129,6 +129,22 @@ public class RuntimeAutomationService {
 
         private volatile String lastRecoveryMessage;
 
+        private volatile LocalDateTime watchdogSuspendedUntil;
+
+        public void suspendWatchdogUntil(LocalDateTime until) {
+                this.watchdogSuspendedUntil = until;
+                log.info("Runtime watchdog suspended until {}", until);
+        }
+
+        public void resumeWatchdog() {
+                this.watchdogSuspendedUntil = null;
+                log.info("Runtime watchdog resumed");
+        }
+
+        public boolean isWatchdogSuspended(LocalDateTime now) {
+                return watchdogSuspendedUntil != null && now.isBefore(watchdogSuspendedUntil);
+        }
+
         public RuntimeActionResult warmUpBrokerSession() {
 
                 AngelOneSessionService.SessionWarmupResult result = angelOneSessionService.warmUpSession();
@@ -327,6 +343,12 @@ public class RuntimeAutomationService {
         public RuntimeActionResult recoverLiveRuntimeIfNeeded() {
 
                 LocalDateTime now = timeProvider.nowDateTime();
+
+                if (isWatchdogSuspended(now)) {
+                        return noAction(
+                                        "Skipped live recovery because watchdog is temporarily suspended for workflow restart until "
+                                                        + watchdogSuspendedUntil);
+                }
 
                 if (!runtimeAutomationProperties
                                 .getLive()

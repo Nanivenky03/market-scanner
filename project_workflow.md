@@ -819,7 +819,19 @@ Before running end-to-end backtesting orchestration in V2.4, V2.3 proves the Ris
 - [x] **V2.1: Domain Contracts & Evaluation Infrastructure** `[COMPLETED + TESTED]` (MarketState, StockContext, 0-DB backfill tracking, lock-free cache, 326 unit tests passing)
 - [x] **V2.1-FIX: Production Reliability & Hygiene Fixes** `[COMPLETED + TESTED]` (WebSocket timestamp reset & premarket transition order; 327 unit tests passing)
 - [x] **V2.2: FCHB Strategy Module (Entry Rules & Position Handler)** `[COMPLETED + TESTED]` (361 unit tests passing)
-- [x] **V2.3: Portfolio Risk Engine, Resilience & Mid-Day Recovery** `[COMPLETED + TESTED]` (376 unit tests passing)
+- [x] **V2.3: Portfolio Risk Engine, Resilience & Mid-Day Recovery** `[COMPLETED + TESTED]` (385 unit tests passing)
+  - **Track A: Official NSE Holiday Calendar Hardening**
+    - Root Cause Remediation: Eliminated destructive hardcoded overrides by enforcing a strict DB-empty seed-once guard (`count() == 0`).
+    - Akamai Bot Protection Handshake: Implemented 2-step HTTP session handshake with browser headers (`User-Agent`, `Accept-Language`, `Referer`) to acquire active session cookies prior to invoking `/api/holiday-master?type=trading`.
+    - Resilient Backoff & Alerting: Added 3-attempt exponential retry mechanism with fail-safe circuit breaker; dispatches medium-priority email alerts via `RuntimeAlertService` on exhaustion without JVM crashes.
+    - Future-Only Pruning & Year Transition: Past trading records remain strictly immutable; synchronizes future holidays for current and $T+1$ year (active during December) to prevent Jan 1st lockout.
+    - Clean Scheduling: Runs every Monday at 06:00 AM regardless of trading day status, retiring redundant Sunday checks and arbitrary 17:00 cutoffs.
+  - **Track B: Mid-Day Restart & Market Quote Synchronization Hardening**
+    - Paced Market Quote Batching: Added 120 ms inter-batch pauses across 50-stock chunks in `AngelOneMarketDataProvider.fetchMarketQuotes` to strictly respect Angel One's 10 req/s rate limit.
+    - Lifecycle Teardown & In-Memory Purge: Cleanly disconnects WebSocket and wipes in-memory accumulators (`clearOpenCandlesWithoutPersisting`) and sliding windows (`stockContextCache.clear()`) during mid-day restarts.
+    - Watchdog Race Elimination: Automatically suspends the 60-second recovery watchdog for 2 minutes during workflow restarts to eliminate re-connection races mid-purge.
+    - Prioritized Morning Backfill: Backfill queue assigns Priority 0 to tradable symbols and Priority 10 to the wider universe, unblocking strategy evaluations in ~12 seconds rather than >3 minutes.
+    - Production Order Table Preservation: Guarantees zero deletions from production order/position tables during today-only data purges, enabling immediate re-hydration.
 - [ ] **V2.4: Master Workflow Orchestrator & Execution Adapters** `[PLANNED]`
 - [ ] **V2.5: Hardening & Historical Simulation Verification** `[PLANNED]`
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`

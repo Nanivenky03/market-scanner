@@ -602,6 +602,16 @@ public class AngelOneMarketDataProvider
                                 log.warn("Failed to fetch market quotes batch of {} tokens for exchange={}: {}",
                                                 tokenBatch.size(), targetExchange, ex.getMessage(), ex);
                         }
+
+                        // Pace requests to strictly respect Angel One Quote API 10 req/sec rate limit
+                        if (i + batchSize < allTokens.size()) {
+                                try {
+                                        Thread.sleep(120L);
+                                } catch (InterruptedException ie) {
+                                        Thread.currentThread().interrupt();
+                                        break;
+                                }
+                        }
                 }
 
                 return resultMap;

@@ -140,6 +140,17 @@ public class BackfillQueueService {
                         LocalDate tradingDate,
                         LocalDateTime fromTime,
                         LocalDateTime toTime) {
+                return enqueueIntradayGap(symbol, exchange, tradingDate, fromTime, toTime, 0);
+        }
+
+        @Transactional
+        public int enqueueIntradayGap(
+                        String symbol,
+                        String exchange,
+                        LocalDate tradingDate,
+                        LocalDateTime fromTime,
+                        LocalDateTime toTime,
+                        int priority) {
 
                 if (symbol == null
                                 || exchange == null
@@ -184,7 +195,7 @@ public class BackfillQueueService {
                                                 .symbol(symbol)
                                                 .exchange(exchange)
                                                 .tradingDate(tradingDate)
-                                                .priority(0)
+                                                .priority(priority)
                                                 .status(BackfillJobStatus.PENDING)
                                                 .attempts(0)
                                                 .createdAt(now)
@@ -203,9 +214,11 @@ public class BackfillQueueService {
                         job.setAttempts(0);
                 }
 
+                int effectivePriority = job.getPriority() != null ? Math.min(job.getPriority(), priority) : priority;
+
                 job.setFromTime(mergedFrom);
                 job.setToTime(mergedTo);
-                job.setPriority(0);
+                job.setPriority(effectivePriority);
                 job.setStatus(BackfillJobStatus.PENDING);
                 job.setNextAttemptAt(now);
                 job.setLeaseUntil(null);
