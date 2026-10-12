@@ -379,72 +379,120 @@ Strategies operate as **pure decision functions**, decoupled from application ti
 
 #### 6. V2.3 — Portfolio Risk Engine, Dynamic Capital Management & Position Manager `[IMPLEMENTATION PLAN & READY]`
 
-##### A. Dual Portfolio State Separation (`RiskEngine`)
-- **What:** Strict isolation between paper/simulation and live real-money portfolio state machines:
-  - `PortfolioState(PAPER)`: Tracks paper trade count ($0..5$), open paper positions ($0..3$), and simulated daily P&L.
-  - `PortfolioState(LIVE)`: Tracks live trade count ($0..5$), open broker positions ($0..3$), and actual broker real-money P&L.
-- **Where:** `com.trading.scanner.engine.risk.PortfolioState`, `RiskEngine.java`.
-- **Why:** Prevents simulated/paper morning signals from consuming real-money risk quotas, and ensures paper drawdowns never trigger a live kill switch.
-- **Pre-Trade Risk Gates:**
-  1. Open positions $< 3$.
-  2. Total trades today $< 5$ (Trades 1–3: $\le 2$ YELLOWs, 0 RED; Trades 4–5: ALL GREEN).
-  3. Total Open Portfolio Downside Risk $< 3.2\%$ of capital ($\sum \text{Qty} \times \max(0, \text{Entry} - \text{CurrentStop})$).
-  4. Cumulative daily loss $< 4.0\%$ (hard daily kill switch).
-  5. Symbol Lock: Strictly **one entry per stock per day** (unfilled/cancelled orders do not lock).
+##### Complete 10-Point Item Matrix & Architecture
+
+| # | Category | Issue / Enhancement | Files Affected | Target Resolution |
+|---|---|---|---|---|
+| **1** | **P&L Accounting** | Partial Exit (+1R) profit lost from account equity | `PortfolioState.java`, `RiskEngine.java`, `PositionManagerService.java` | Add `recordPartialExit(pnl)`: immediately credits $+0.5R$ cash to `realizedPnl` and `currentCapital`. |
+| **2** | **Margin & Sizing** | Margin check ignores already-committed margin from active positions | `PortfolioState.java`, `RiskEngine.java` | Check $\text{CommittedMargin} + \text{NewMargin} \le \text{Capital}$ to prevent exchange rejections. |
+| **3** | **Strategy Exits** | Runner profit giveback (spikes to +3R and retraces to entry) | `FchbPositionHandler.java`, `fchb_strategy.yaml` | Add Progressive Milestone Ratchets: $+2R \implies \text{SL at } +1R$, $+3R \implies \text{SL at } +2R$, combined with 1M ATR trailing stop. |
+| **4** | **Lifecycle Reset** | `dailyTradeCount` & symbol locks never reset across days (Day 2 lockout) | `RiskEngine.java`, `PositionManagerService.java`, `PreMarketWorkflowService.java` | Hook fail-safe reset into existing `trading-day-init` (07:00 AM daily) — zero new workflow stages. |
+| **5** | **Null Safety** | Null unboxing in streams & calculations (`Double` / `Integer` wrappers) | `PortfolioState.java`, `RiskEngine.java` | Add defensive null guards across `calculateTotalOpenDownsideRisk` and sizing logic to prevent JVM thread crashes. |
+| **6** | **Data Gate** | Resistance clearance filter fails open when history is missing | `FchbStrategy.java` | Double Gate: If `distFromResistancePct == null`, strictly fail closed with `NOT_EVALUABLE` (`"RESISTANCE_DATA_INCOMPLETE"`). If $< 1.0\%$, fail closed with `NOT_QUALIFIED`. |
+| **7** | **Concurrency** | Coarse synchronized methods stall ticks across 500 stocks | `PositionManagerService.java` | Strip coarse locks into fine-grained `ConcurrentHashMap<String, Object>` per-symbol locks. |
+| **8** | **EOD Square-Off** | Illiquid stocks leak past 15:00 if zero ticks arrive; duplicate fill hazard | `FchbPositionHandler.java`, `PositionManagerService.java` | 1. Advance hard close to 14:55 PM (15–20 min before Angel One RMS).<br>2. Add active timer sweep.<br>3. Cancel-Resting-Orders-First protocol. |
+| **9** | **Crash Recovery** | Mid-day app restart loses in-memory active positions and trade count | `PositionManagerService.java`, `RiskEngine.java` | Add startup re-hydration hook that restores active positions and today's trade count from DB/memory snapshots on restart. |
+| **10** | **Broker Verification** | Blind trust in application memory without broker confirmation | `PositionManagerService.java`, `RiskEngine.java` | 1. Double check live free margin via Angel One RMS API before firing orders.<br>2. Active loop querying `getPosition` until all `netqty == 0`.<br>3. Morning 07:00 AM check ensuring 0 overnight positions. |
 
 ---
 
-##### B. Item 1: Dynamic Real-Time Capital & Margin Reconciliation (Angel One Margin & Funds API)
-- **What:** Live two-tier capital gating combining local in-memory ledger deduction with real-time broker margin queries:
-  1. Primary Gate (In-Memory Fast Check): Deducts estimated margin locally in 0 ms.
-  2. Secondary Gate (Direct Broker API): Calls Angel One RMS Funds API (`GET /rest/secure/angelbroking/user/v1/getRMS`) for available cash, and Margin Batch API (`POST /rest/secure/angelbroking/margin/v1/batch`) to verify exact broker-side margin required for the proposed basket.
-- **Where:** `AngelOneMarginService.java`, `AngelOneBrokerClient.java`, called by `RiskEngine.evaluateTrade(...)`.
-- **Why:** Eliminates hardcoded leverage assumptions (e.g. assuming fixed 5x leverage when specific stocks may only carry 3x or 1x MIS margin), preventing unexpected broker order rejections (`AB1004: Insufficient Funds`).
+##### Detailed Implementation Breakdown
 
----
+1. **Partial Exit Realized P&L Accounting (Item 1):**
+   - In `PortfolioState`:
+     ```java
+     public synchronized void recordPartialExit(double pnl) {
+         this.realizedPnl += pnl;
+         this.currentCapital = this.initialCapital + this.realizedPnl;
+     }
+     ```
+   - In `RiskEngine`: Expose `recordPartialExit(PortfolioMode mode, double pnl)`.
+   - In `PositionManagerService`: On `PARTIAL_EXIT`, calculate `partialPnl = (currentPrice - position.entryPrice()) * exitQty` and call `riskEngine.recordPartialExit(mode, partialPnl)`.
 
-##### C. Item 2: Order Lifecycle Audit & Split Tranche Architecture (3 Orders: Entry, Partial Exit, Full Exit)
-- **What:** A strictly audited 3-order state machine with parent-child linkage in `orders` / `simulated_orders` and `positions` / `simulated_positions`:
-  1. **Order 1 (Position Open):** `BUY` order for full quantity $Q$ (`transaction_type = BUY`, `order_status = FILLED`).
-  2. **Order 2 (Target 1 Partial Exit):** When LTP reaches Target 1 (+1R), places `SELL` order for $Q/2$ at market (`parent_order_id = Order 1.id`, `transaction_type = SELL`). Position status transitions from `OPEN` to `PARTIALLY_CLOSED`, updating `current_quantity = Q - Q/2`.
-  3. **Order 3 (Final Exit):** For the remaining $Q/2$ quantity, triggered either by the ratcheted trailing stop, milestone lock, or the 15:00 hard cutoff (`parent_order_id = Order 1.id`, `transaction_type = SELL`, full exit). Position transitions to `CLOSED`.
-- **Where:** `OrderLifecycleService.java`, `CentralPositionManager.java`, `SimulatedTradeExecutionAdapter.java`, `BrokerTradeExecutionAdapter.java`.
-- **Why:** Provides complete auditability for partial profit booking without confusing exchange order books, avoiding orphan orders or double fills.
+2. **Cumulative Committed Margin Check (Item 2):**
+   - In `PortfolioState`:
+     ```java
+     public double calculateTotalCommittedMargin() {
+         return openPositions.values().stream()
+                 .mapToDouble(pos -> {
+                     if (pos == null || pos.currentQuantity() == null || pos.entryPrice() == null) {
+                         return 0.0;
+                     }
+                     return (pos.currentQuantity() * pos.entryPrice()) / RiskEngine.INTRADAY_LEVERAGE_FACTOR;
+                 })
+                 .sum();
+     }
+     ```
+   - In `RiskEngine.evaluateProposal()`:
+     ```java
+     double committedMargin = portfolio.calculateTotalCommittedMargin();
+     if ((committedMargin + requiredMargin) > capital) {
+         return RiskEvaluationResult.rejected("INSUFFICIENT_MARGIN_CAPITAL", proposal);
+     }
+     ```
 
----
+3. **Progressive Milestone Ratchets for Target 2 / Runner (Item 3):**
+   - In `FchbPositionHandler`: When `target1Booked == true`:
+     $$\text{initialRisk} = \text{target1Price} - \text{entryPrice}$$
+     $$\text{if LTP} \ge \text{entryPrice} + 3.0 \times \text{initialRisk} \implies \text{milestoneFloor} = \text{entryPrice} + 2.0 \times \text{initialRisk}$$
+     $$\text{else if LTP} \ge \text{entryPrice} + 2.0 \times \text{initialRisk} \implies \text{milestoneFloor} = \text{entryPrice} + 1.0 \times \text{initialRisk}$$
+     $$\text{else} \implies \text{milestoneFloor} = \text{entryPrice}$$
+     $$\text{candidateStop} = \max(\text{milestoneFloor}, \text{Low}_{1M} - (0.5 \times \text{ATR}_{5M}))$$
+   - If `candidateStop > currentStopLoss`, ratchet the stop monotonically!
 
-##### D. Item 3: Progressive Milestone Ratchets vs ATR Trailing Stop
-- **What:** A hybrid dual-layer stop protection combining deterministic milestones with continuous volatility trailing:
-  - **Layer 1 (Deterministic Milestone Ratchets):**
-    - $LTP < \text{Entry} + 0.8R$: Stop remains at Initial Stop Loss (FCL).
-    - $LTP \ge \text{Entry} + 0.8R$: Stop moves to Breakeven ($\text{Entry Price}$).
-    - $LTP \ge \text{Target 1 } (+1.0R)$: Target 1 booked (50% exit); remaining stop locked at $+\mathbf{0.2R}$ profit floor.
-    - $LTP \ge \text{Entry} + 1.5R$: Remaining stop locked at $+\mathbf{0.8R}$ profit floor.
-    - $LTP \ge \text{Entry} + 2.0R$: Remaining stop locked at $+\mathbf{1.3R}$ profit floor.
-  - **Layer 2 (Continuous 1M/5M ATR Trailing Stop):**
-    - Trails upward continuously on every 1M candle close at $\text{Low}_{1M} - (0.5 \times \text{ATR}_{5M})$.
-  - **Resolution:** $\text{Effective Stop} = \max(\text{Milestone Stop}, \text{ATR Trailing Stop})$. The stop is strictly monotonic (only moves upward, never downward).
-- **Where:** `FchbPositionHandler.java`, `CentralPositionManager.java`.
-- **Why:** Guarantees that large intraday rallies (e.g. running to 2.5R) lock in institutional-grade profit without giving back gains on midday pullbacks, while preserving freedom for outlier multi-R trend days.
+4. **Fail-Safe Daily Reset in `trading-day-init` (07:00 AM) (Item 4):**
+   - In `RiskEngine`: Add `resetForNewDay(LocalDate newDate)`:
+     - Sets `dailyTradeCount = 0`
+     - Clears `tradedSymbolsToday`
+     - Clears open positions
+     - Sets `initialCapital = currentCapital` (carries forward realized equity)
+     - Defensive try-catch ensuring it never throws unhandled exceptions.
+   - In `PositionManagerService`: Add `resetForNewDay()` which clears in-memory active position maps.
+   - In `PreMarketWorkflowService`: Inside `trading-day-init` (Stage 1 @ 07:00 AM):
+     ```java
+     riskEngine.resetForNewDay(today);
+     positionManagerService.resetForNewDay();
+     ```
+     Tracked under existing `workflow_status` — zero new workflow stages created.
 
----
+5. **Defensive Null-Safety Guards (Item 5):**
+   - In `PortfolioState.calculateTotalOpenDownsideRisk()`, guard all streams against null wrapper objects:
+     ```java
+     if (pos == null || pos.entryPrice() == null || pos.currentStopLoss() == null || pos.currentQuantity() == null) {
+         return 0.0;
+     }
+     ```
+   - In `RiskEngine`, ensure all proposal wrappers are null-checked before primitive unboxing.
 
-##### E. Item 4: 3x Friction Viability Filter Calibration & Safety Verification
-- **What:** Mathematical pre-trade viability check:
-  $$\text{Expected } 1R \text{ Gross Profit} \ge 3 \times \text{Estimated Round-Trip Friction}$$
-  $$\text{Friction} = ₹60 \text{ (brokerage for 3 order legs)} + (\text{Turnover} \times 0.00035 \text{ STT/charges}) + \text{GST}$$
-- **Where:** `FchbStrategy.java`, validated in `StrategyValidator.java`.
-- **Why:** Prevents entering trades where high stock price and tight stop loss result in huge share quantities whose statutory turnover taxes exceed the trade's expected profit. On liquid equities with typical intraday stops ($0.3\% - 0.8\%$), $1R$ is Rs. 1,500–2,000 whereas 3-leg friction is Rs. 120–160 (profit $\approx 10\times - 15\times$ friction), passing the $3\times$ filter easily without requiring abnormal price runs.
+6. **Double-Gate Resistance Clearance (Fail-Closed) (Item 6):**
+   - In `FchbStrategy`:
+     ```java
+     if (daily.getDistFromResistancePct() == null) {
+         return StrategyEvaluation.notEvaluable("RESISTANCE_DATA_INCOMPLETE");
+     }
+     if (daily.getDistFromResistancePct() < 1.0) {
+         return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("RESISTANCE_DISTANCE_MIN_1"), "RESISTANCE_CLOSER_THAN_1_PCT");
+     }
+     ```
 
----
+7. **Per-Symbol Locks for Zero Cross-Stock Contention (Item 7):**
+   - In `PositionManagerService`: Add `ConcurrentHashMap<String, Object> symbolLocks`.
+   - Synchronize strictly per-symbol: `symbolLocks.computeIfAbsent(symbol, s -> new Object())`.
+   - Ticks on RELIANCE execute concurrently with ticks on TCS without blocking each other.
 
-##### F. Item 5: Pre-Market & Post-Market Lifecycle Integrity Gating (Embedded in Existing Stages)
-- **What:** All lifecycle resets and hygiene checks are strictly embedded inside existing daily stages:
-  - **Pre-Market (`premarket-housekeeping` @ 07:00 AM):** Resets WebSocket idle timestamps, clears stale tick buffers, resets in-memory portfolio quotas for the new date.
-  - **Pre-Market Data Preparation (`premarket-universe-sync` @ 08:00 AM):** Reconciles active universe tradability against EOD completeness and minimum daily history.
-  - **Post-Market (`eod-reconciliation` & `daily-cycle-complete` @ 16:00-23:45 PM):** In-memory position reconciliation, uncommitted buffer flushes, and broker token teardown.
-- **Where:** `PreMarketWorkflowService.java`, `PostMarketWorkflowService.java`, `RuntimeHousekeepingService.java`.
-- **Why:** Avoids creating untracked "floating" background tasks; every maintenance action is governed by fail-closed dependency gates in `workflow_status`.
+8. **14:55 PM EOD Hard Close Protocol & Cancel-Resting-First Active Loop (Item 8):**
+   - In `FchbPositionHandler`: Update `HARD_CLOSE_TIME` to `14:55:00` (provides a 15–20 minute safe buffer prior to Angel One RMS auto-square off).
+   - In `PositionManagerService`: Add scheduled active sweep `closeExpiredPositions(mode, cutoffTime, lastKnownPrices)` that forces exits on all remaining open positions at 14:55 PM regardless of tick arrival.
+   - Cancel-Resting-First Protocol: Cancel all pending exchange stop orders before firing market exits.
+
+9. **Mid-Day Application Crash Recovery & Re-Hydration (Item 9):**
+   - In `PositionManagerService` & `RiskEngine`: Add `rehydrateActiveState(List<PositionSnapshot> openPositions, int dailyTradesExecutedToday)`.
+   - Re-hydrates active positions in RAM and restores `dailyTradeCount` and `tradedSymbolsToday` from database snapshots or startup parameters, preventing over-trading and restoring trailing stops.
+
+10. **Broker API Double Checks (RMS Margin & Positions Zero Verification) (Item 10):**
+    - **Pre-Trade:** In the execution layer, verify Angel One live `availablecash` via `getRMS` before submitting orders.
+    - **EOD Post-Exit Loop:** Call Angel One `getPosition` repeatedly every 30–60 seconds until all symbols report `netqty == 0`.
+    - **07:00 AM Morning Maintenance Check:** Inside `trading-day-init`, call `getPosition` to verify zero residual positions exist before initializing the new trading day.
 
 ---
 
@@ -481,13 +529,42 @@ Strategies operate as **pure decision functions**, decoupled from application ti
 
 ---
 
-##### K. Item 10: Calendar Data Integrity & Pruning of Obsolete Bootstrap Holidays
-- **What:** Fix hardcoded 2026 holiday typos in `NseHolidayCalendar.java` and implement automatic pruning of obsolete bootstrap dates during official NSE calendar synchronization:
-  - Remove `2026-10-12` (falsely labeled Dussehra; real Dussehra is `2026-10-20`).
-  - Correct `2026-11-09` to `2026-11-10` (Diwali-Balipratipada) and `2026-11-27` to `2026-11-24` (Guru Nanak Jayanti).
-  - Add prune logic in `MarketCalendarService` to delete any `STATIC_BOOTSTRAP` dates for the current year that do not exist in the official NSE feed.
-- **Where:** `NseHolidayCalendar.java`, `MarketCalendarService.java`, database cleanup script.
-- **Why:** Resolves the production outage of 2026-10-12 where Mithron falsely flagged today as a trading holiday and skipped all daily pre-market workflows.
+##### K. Item 10: Calendar Data Integrity & Pruning of Obsolete Bootstrap Holidays `[COMPLETED + TESTED ✅]`
+- **Incident & RCA (2026-10-12 Outage):**
+  - Hardcoded typo in `NseHolidayCalendar.java` had `2026-10-12` designated as Dussehra (actual Dussehra is `2026-10-20`).
+  - `@PostConstruct bootstrapPersistedHolidays()` inserted row into `exchange_holiday` (`STATIC_BOOTSTRAP`).
+  - At 07:00 AM, `PreMarketWorkflowService` called `isTradingDay(2026-10-12)`, saw the DB row, assumed a holiday, and skipped all pre-market workflows.
+- **Resolution & Long-Term Automated Pruning:**
+  - Fixed hardcoded 2026 holidays in `NseHolidayCalendar.java`:
+    - `2026-10-20` (Dussehra)
+    - `2026-11-10` (Diwali-Balipratipada)
+    - `2026-11-24` (Guru Nanak Jayanti)
+  - Deleted invalid bootstrap entries from both `mithron_prod` and `mithron_dev` PostgreSQL databases.
+  - Added dynamic pruning in `MarketCalendarService`: When fetching official NSE holiday calendar payloads, any persisted `STATIC_BOOTSTRAP` dates for that year that do not exist in the official NSE feed are automatically pruned (`DELETE FROM exchange_holiday`).
+  - Added unit test `refreshFromOfficialNseSource_shouldPruneObsoleteOrInvalidHolidays()` in `MarketCalendarServiceTest.java`.
+  - Production JAR compiled cleanly (`Mithron-1.3.9.jar`) and running live with zero unvalidated V2 code.
+
+---
+
+##### L. Mid-Day Workflow Restart, Disruption Recovery & Quote Data Sync `[PLANNED]`
+- **Context & Operational Need:**
+  - If the application starts late, crashes, or suffers a network disruption between 09:00 AM and mid-day, the official 09:08 pre-market uncrossed auction candle is missed, and minute candles up to the reconnection time are unrecorded.
+  - While live ticks resume on reconnection, gap detection only catches gaps between existing candles, leaving the morning (09:15 to restart) and 09:08 open prices missing until 17:00 EOD.
+- **Dedicated Endpoint: `POST /admin/runtime/day/restart-today-workflow`:**
+  - **Strict Scope Gate:** Accepts only `today` (`tradingDate = timeProvider.today()`). Strictly rejects any previous dates to guarantee historical data immutability.
+  - **Environment-Aware Deletion for Today:**
+    - *Simulation Mode:* Purges today's `simulated_signals`, `simulated_orders`, `simulated_positions`, `market_candles`, `daily_stock_context`, and `workflow_status`.
+    - *Production Mode:* Purges today's `market_candles`, resets today's `daily_stock_context`, and clears today's `workflow_status` (allowing all 6 pre-market stages to run fresh). Does **NOT** delete live broker orders or live audit tables.
+  - **Workflow Execution Sequence:**
+    1. Re-executes Stages 1–5 (`trading-day-init` $\to$ `premarket-housekeeping` $\to$ `premarket-catalog-sync` $\to$ `premarket-universe-sync` $\to$ `premarket-morning-reference`).
+    2. Calls `syncMarketQuotesIfMissing(today)`: Fetches batch SmartAPI Market Quotes (`POST /rest/secure/angelbroking/market/v1/quote/`) once across all active universe symbols, synthesizes the authoritative `09:08` pre-market candle (`open`, `high`, `low`, `close` set to `quote.open()`), and upserts `stock_prices` and `DailyStockContext`.
+    3. Connects live WebSocket immediately (`premarket-live-start`) so real-time ticks and current minute candles are captured concurrently without delay.
+    4. Queues background historical backfill jobs for all active universe symbols from `09:15` to the **last closed minute** (`now.truncatedTo(MINUTES).minusMinutes(1)`), ensuring the running minute is not partially backfilled.
+- **Automated Disruption Recovery (`syncMarketQuotesIfMissing`):**
+  - Integrated into `RuntimeAutomationService.recoverLiveRuntimeIfNeeded()`: If connection drops mid-session and reconnects, checks if today's 09:08 pre-market candles exist in DB.
+  - **Single Run Guard:** If 09:08 candles exist, skips the Quote API entirely (0 ms, 0 API calls). If missing (due to early morning outage), runs once to restore authoritative open prices and `stock_prices`.
+- **EOD Reconciliation Quote Updates:**
+  - In `EodReconciliationService`, ensure `stock_prices`, missing 09:08 candles, and context updates are flushed per-symbol after each iteration/pass rather than waiting for the entire multi-attempt cycle to conclude.
 
 ---
 
