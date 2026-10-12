@@ -159,11 +159,33 @@ public class MarketCalendarService {
             }
         }
 
+        int currentYear = now.getYear();
+        LocalDate rangeStart = LocalDate.of(currentYear, 1, 1);
+        LocalDate rangeEnd = (now.getMonthValue() == 12)
+                ? LocalDate.of(currentYear + 1, 12, 31)
+                : LocalDate.of(currentYear, 12, 31);
+
+        List<ExchangeHoliday> existingForRange = exchangeHolidayRepository
+                .findByExchangeAndTradingDateBetweenOrderByTradingDateAsc(
+                        EXCHANGE_NSE,
+                        rangeStart,
+                        rangeEnd);
+
+        int deleted = 0;
+        if (existingForRange != null) {
+            for (ExchangeHoliday holiday : existingForRange) {
+                if (!parsedHolidays.containsKey(holiday.getTradingDate())) {
+                    exchangeHolidayRepository.delete(holiday);
+                    deleted++;
+                }
+            }
+        }
+
         return new OfficialHolidayRefreshResult(
                 parsedHolidays.size(),
                 inserted,
                 updated,
-                "Exchange holidays refreshed from official NSE source");
+                "Exchange holidays refreshed from official NSE source. deleted=" + deleted);
     }
 
     @Transactional

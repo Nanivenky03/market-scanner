@@ -156,6 +156,36 @@ class MarketCalendarServiceTest {
         }
 
         @Test
+        void refreshFromOfficialNseSource_shouldPruneObsoleteOrInvalidHolidays() throws Exception {
+                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
+
+                String payload = loadFixture("contracts/nse-holiday-trading-2026.json");
+                doReturn(payload).when(marketCalendarService).fetchOfficialNseTradingHolidayPayload(2026);
+
+                when(exchangeHolidayRepository.findByExchangeAndTradingDate(anyString(), any(LocalDate.class)))
+                                .thenReturn(Optional.empty());
+
+                ExchangeHoliday obsoleteHoliday = ExchangeHoliday.builder()
+                                .exchange("NSE")
+                                .tradingDate(LocalDate.of(2026, 10, 12))
+                                .description("Old Mistaken Holiday")
+                                .source("STATIC_BOOTSTRAP")
+                                .build();
+
+                when(exchangeHolidayRepository.findByExchangeAndTradingDateBetweenOrderByTradingDateAsc(
+                                eq("NSE"),
+                                eq(LocalDate.of(2026, 1, 1)),
+                                eq(LocalDate.of(2026, 12, 31))))
+                                .thenReturn(List.of(obsoleteHoliday));
+
+                MarketCalendarService.OfficialHolidayRefreshResult result = marketCalendarService
+                                .refreshFromOfficialNseSource();
+
+                verify(exchangeHolidayRepository, times(1)).delete(obsoleteHoliday);
+                assertTrue(result.message().contains("deleted=1"));
+        }
+
+        @Test
         void parseOfficialNseTradingHolidayPayload_shouldParseRealApiFixture() throws Exception {
                 String payload = loadFixture("contracts/nse-holiday-trading-2026.json");
 

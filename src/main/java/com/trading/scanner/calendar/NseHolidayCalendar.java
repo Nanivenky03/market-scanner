@@ -91,9 +91,9 @@ public class NseHolidayCalendar {
             LocalDate.of(2026, 5, 1),
             LocalDate.of(2026, 6, 26),
             LocalDate.of(2026, 10, 2),
-            LocalDate.of(2026, 10, 12),
-            LocalDate.of(2026, 11, 9),
-            LocalDate.of(2026, 11, 27),
+            LocalDate.of(2026, 10, 20),
+            LocalDate.of(2026, 11, 10),
+            LocalDate.of(2026, 11, 24),
             LocalDate.of(2026, 12, 25));
 
     public static final Set<LocalDate> HOLIDAYS = Collections.unmodifiableSet(
