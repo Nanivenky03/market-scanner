@@ -18,9 +18,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Layer 4/5: In-Memory Position Manager Service.
- * Coordinates active positions across PAPER and LIVE portfolios, evaluates incoming
+ * Coordinates active positions across PAPER and LIVE portfolios, evaluates
+ * incoming
  * price ticks and 1-minute candle closes against strategy position handlers,
- * maintains in-memory trailing stop state machines, and dispatches exits to Risk Engine.
+ * maintains in-memory trailing stop state machines, and dispatches exits to
+ * Risk Engine.
  */
 @Service
 public class PositionManagerService {
@@ -69,7 +71,8 @@ public class PositionManagerService {
     /**
      * Evaluates a real-time price tick for an open position.
      */
-    public synchronized PositionAction processTick(PortfolioMode mode, String symbol, double ltp, LocalTime currentTime) {
+    public synchronized PositionAction processTick(PortfolioMode mode, String symbol, double ltp,
+            LocalTime currentTime) {
         PositionSnapshot position = getPosition(mode, symbol);
         if (position == null) {
             return PositionAction.hold();
@@ -81,21 +84,22 @@ public class PositionManagerService {
             return PositionAction.hold();
         }
 
-        PositionAction action = handler.evaluatePosition(position, ltp, null, null, currentTime, Collections.emptyMap());
+        PositionAction action = handler.evaluatePosition(position, ltp, null, null, currentTime,
+                Collections.emptyMap());
         applyPositionAction(mode, position, action, ltp);
         return action;
     }
 
     /**
-     * Evaluates a completed 1-minute candle close for an open position (structural invalidation and ATR trailing).
+     * Evaluates a completed 1-minute candle close for an open position (structural
+     * invalidation and ATR trailing).
      */
     public synchronized PositionAction processMinuteCandleClose(
             PortfolioMode mode,
             String symbol,
             MarketCandle candle1m,
             Double atr5m,
-            LocalTime currentTime
-    ) {
+            LocalTime currentTime) {
         PositionSnapshot position = getPosition(mode, symbol);
         if (position == null || candle1m == null) {
             return PositionAction.hold();
@@ -108,15 +112,18 @@ public class PositionManagerService {
         }
 
         double closePrice = candle1m.getClosePrice() != null ? candle1m.getClosePrice() : 0.0;
-        PositionAction action = handler.evaluatePosition(position, closePrice, candle1m, atr5m, currentTime, Collections.emptyMap());
+        PositionAction action = handler.evaluatePosition(position, closePrice, candle1m, atr5m, currentTime,
+                Collections.emptyMap());
         applyPositionAction(mode, position, action, closePrice);
         return action;
     }
 
     /**
-     * Applies the proposed position action to in-memory state and updates the Risk Engine.
+     * Applies the proposed position action to in-memory state and updates the Risk
+     * Engine.
      */
-    private void applyPositionAction(PortfolioMode mode, PositionSnapshot position, PositionAction action, double currentPrice) {
+    private void applyPositionAction(PortfolioMode mode, PositionSnapshot position, PositionAction action,
+            double currentPrice) {
         if (action == null || action.type() == PositionAction.ActionType.HOLD) {
             return;
         }
@@ -149,8 +156,7 @@ public class PositionManagerService {
                         position.target1Price(),
                         position.firstCandleHigh(),
                         true,
-                        position.entryTime()
-                );
+                        position.entryTime());
                 activePositions.get(mode).put(symbol, updated);
                 riskEngine.updatePosition(mode, updated);
                 log.info("[{}] PARTIAL EXIT booked for symbol={} exitQty={} remainingQty={} newStop={} reason={}",
@@ -171,20 +177,21 @@ public class PositionManagerService {
                             position.target1Price(),
                             position.firstCandleHigh(),
                             position.target1Booked(),
-                            position.entryTime()
-                    );
+                            position.entryTime());
                     activePositions.get(mode).put(symbol, updated);
                     riskEngine.updatePosition(mode, updated);
                     log.info("[{}] Ratcheted Stop Loss for symbol={} from {} to {} reason={}",
                             mode, symbol, position.currentStopLoss(), action.newStopLoss(), action.reason());
                 }
             }
-            default -> {}
+            default -> {
+            }
         }
     }
 
     /**
-     * Immediately closes an open position (e.g. manual intervention or emergency risk cutoff).
+     * Immediately closes an open position (e.g. manual intervention or emergency
+     * risk cutoff).
      */
     public synchronized void forceClosePosition(PortfolioMode mode, String symbol, double exitPrice, String reason) {
         PositionSnapshot position = getPosition(mode, symbol);

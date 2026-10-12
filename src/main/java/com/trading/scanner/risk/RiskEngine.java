@@ -14,8 +14,10 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Layer 4: Strategy-Agnostic Risk & Sizing Engine.
  * Evaluates candidate proposals across the 7 Pre-Trade Risk Gates,
- * calculates fixed fractional position sizing (1R = 1.5%), enforces the 3.2% live downside
- * risk buffer, and filters out friction traps before any order reaches broker or execution.
+ * calculates fixed fractional position sizing (1R = 1.5%), enforces the 3.2%
+ * live downside
+ * risk buffer, and filters out friction traps before any order reaches broker
+ * or execution.
  */
 @Service
 public class RiskEngine {
@@ -25,11 +27,11 @@ public class RiskEngine {
     public static final double DAILY_LOSS_LIMIT_PCT = 4.0;
     public static final double MAX_PORTFOLIO_OPEN_RISK_PCT = 3.2;
     public static final double RISK_PER_TRADE_FRACTION = 0.015; // 1.5% of capital (1R)
-    public static final double INTRADAY_LEVERAGE_FACTOR = 5.0;  // MIS 5x leverage
+    public static final double INTRADAY_LEVERAGE_FACTOR = 5.0; // MIS 5x leverage
 
-    public static final double FLAT_BROKERAGE_3_LEG = 60.0;     // Rs. 20 * 3 legs (Entry, Target 1, Target 2/Stop)
-    public static final double STATUTORY_TAX_RATE = 0.00035;    // Round-trip statutory taxes (~0.035%)
-    public static final double GST_RATE = 0.18;                 // 18% on fees
+    public static final double FLAT_BROKERAGE_3_LEG = 60.0; // Rs. 20 * 3 legs (Entry, Target 1, Target 2/Stop)
+    public static final double STATUTORY_TAX_RATE = 0.00035; // Round-trip statutory taxes (~0.035%)
+    public static final double GST_RATE = 0.18; // 18% on fees
 
     private final Map<PortfolioMode, PortfolioState> portfolios = new ConcurrentHashMap<>();
 
@@ -77,7 +79,8 @@ public class RiskEngine {
             return RiskEvaluationResult.rejected("MAX_DAILY_TRADES_REACHED", proposal);
         }
 
-        // For Trades 4 and 5 (when dailyTradeCount >= 3): Must be strictly ALL GREEN (yellowCount == 0)
+        // For Trades 4 and 5 (when dailyTradeCount >= 3): Must be strictly ALL GREEN
+        // (yellowCount == 0)
         if (tradeCount >= 3) {
             Object yellowCountObj = proposal.ruleContext() != null ? proposal.ruleContext().get("yellowCount") : null;
             long yellowCount = 0;
@@ -114,7 +117,8 @@ public class RiskEngine {
 
         double actualRiskRupees = quantity * riskPerShare;
 
-        // Gate 6: Total Current Portfolio Open Downside Risk (< 3.2% of Initial Capital)
+        // Gate 6: Total Current Portfolio Open Downside Risk (< 3.2% of Initial
+        // Capital)
         double currentOpenRisk = portfolio.calculateTotalOpenDownsideRisk();
         double potentialTotalRisk = currentOpenRisk + actualRiskRupees;
         double maxAllowedOpenRiskRupees = portfolio.getInitialCapital() * (MAX_PORTFOLIO_OPEN_RISK_PCT / 100.0);
@@ -148,8 +152,7 @@ public class RiskEngine {
                 roundTripTurnover,
                 estimatedFriction,
                 requiredMargin,
-                proposal
-        );
+                proposal);
     }
 
     /**

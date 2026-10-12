@@ -377,62 +377,121 @@ Strategies operate as **pure decision functions**, decoupled from application ti
 
 ---
 
-#### 6. V2.3 — Portfolio Risk Engine, Dynamic Capital Management & Position Manager `[PLANNED]`
+#### 6. V2.3 — Portfolio Risk Engine, Dynamic Capital Management & Position Manager `[IMPLEMENTATION PLAN & READY]`
 
-##### A. Dual Portfolio State Separation (`RiskEngine`):
-- **Core Principle:** Paper trading and Live real-money trading operate under separate, completely isolated portfolio states:
+##### A. Dual Portfolio State Separation (`RiskEngine`)
+- **What:** Strict isolation between paper/simulation and live real-money portfolio state machines:
   - `PortfolioState(PAPER)`: Tracks paper trade count ($0..5$), open paper positions ($0..3$), and simulated daily P&L.
   - `PortfolioState(LIVE)`: Tracks live trade count ($0..5$), open broker positions ($0..3$), and actual broker real-money P&L.
-- **Rationale:** If a single shared trade quota of 5 trades were used, morning paper signals would consume the entire daily quota, blocking genuine real-money trades. Furthermore, simulated drawdowns must never trigger a kill switch on real-money trading.
-- **Pre-Trade Risk Gates (Evaluated per Portfolio):**
+- **Where:** `com.trading.scanner.engine.risk.PortfolioState`, `RiskEngine.java`.
+- **Why:** Prevents simulated/paper morning signals from consuming real-money risk quotas, and ensures paper drawdowns never trigger a live kill switch.
+- **Pre-Trade Risk Gates:**
   1. Open positions $< 3$.
-  2. Total trades today $< 5$:
-     - Trades 1–3: Accept up to 2 YELLOW conditions (0 RED).
-     - Trades 4–5: MUST BE ALL GREEN (0 RED, 0 YELLOW).
-     - *Handoff Rule:* Strategy evaluates purely against a 2-YELLOW budget and emits proposal metadata (`yellowCount`). The Risk Engine inspects current daily trade count and rejects trades 4–5 if `yellowCount > 0`.
-  3. Total Current Portfolio Risk $< 3.2\%$ of capital:
-     - Sum of downside risk from entry across all active positions:
-       $$\text{Total Open Risk} = \sum (\text{Quantity} \times \max(0.0, \text{Entry Price} - \text{Current Trailing Stop}))$$
-     - Measures maximum capital at risk if all active stops fire simultaneously.
-     - Never fluctuates with mark-to-market LTP noise. Only decays downward as stops ratchet toward breakeven and into locked-in profit ($\max(0.0, \text{Entry} - \text{Stop}) = 0$).
-     - Prevents a cluster of simultaneous stop hits from breaching the 4% daily kill switch.
-  4. Cumulative daily loss $< 4\%$ of portfolio capital (triggers kill switch for that portfolio).
-  5. Symbol Lock: Strictly **one entry per stock per day** across all strategies combined in that portfolio.
-  6. Phantom Signal Protection: Unfilled or cancelled limit/market orders do NOT lock the symbol; only a FILLED execution locks it.
-  7. **3x Friction Viability Filter (Replaces retired R:R formula):**
-     - Evaluates: $\text{Expected } 1R \text{ Gross Profit} \ge 3 \times \text{Estimated Round-Trip Friction}$.
-     - Pre-trade friction estimated via conservative 3-leg formula:
-       $$\text{Estimated Charges} = ₹60 \text{ (brokerage)} + (\text{Round-Trip Turnover} \times 0.00035 \text{ statutory taxes}) + \text{GST}$$
-     - Discards high-turnover friction traps (e.g., tight stops on high-priced stocks).
+  2. Total trades today $< 5$ (Trades 1–3: $\le 2$ YELLOWs, 0 RED; Trades 4–5: ALL GREEN).
+  3. Total Open Portfolio Downside Risk $< 3.2\%$ of capital ($\sum \text{Qty} \times \max(0, \text{Entry} - \text{CurrentStop})$).
+  4. Cumulative daily loss $< 4.0\%$ (hard daily kill switch).
+  5. Symbol Lock: Strictly **one entry per stock per day** (unfilled/cancelled orders do not lock).
 
-##### B. Dynamic Capital Management, GTT Crash Protection & SmartAPI Integration:
-- **Available Margin & Leverage Tracking:** Mithron tracks total equity, intraday MIS leverage (up to 5x margin for approved equities provided by Angel One), margin currently committed to open positions, and unencumbered free cash.
-- **SmartAPI Margin Calculator API (`POST /rest/secure/angelbroking/margin/v1/batch`):** Queries the official broker API to verify exact margin requirements before approving any trade proposal, eliminating hardcoded margin assumptions.
-- **Post-Trade Ledger Reconciliation:** Uses actual broker charges from order execution records for official net P&L accounting.
-- **Dual-Layer Stop Protection (Single-Order State Machine + GTT Crash Protection):**
-  - *Normal Operation (Single-Order State Machine):* Manages resting exchange SL-M order in-place via `modifyOrder(orderId, newTriggerPrice)` and market exit conversions.
-  - *Abnormal Operation / Crash Protection (Broker-Side GTT):* On fill, places a server-side GTT stop order at $\text{FCL} \times 0.995$ directly on Angel One servers. Protects open positions if application crashes, power fails, or network drops. GTT is updated on ratchets and cancelled on regular exit.
-- **Execution Timing & Expiry Handling:**
-  - Normal Days: 14:45 Wind-Down, 15:00 Hard Close.
-  - Weekly Expiry Days: 14:15 Wind-Down, 15:00 Hard Close.
-  - Monthly Expiry Days: FCHB suspended entirely for the day.
+---
 
-##### C. Single-Order State Machine (Reverse Position Race Condition Prevention):
-- **The Reverse Position Hazard:**
-  - In automated trading, having an active resting stop-loss order on the broker exchange and placing a separate `MARKET SELL` order during an in-memory trigger creates a dangerous race condition: if volatility spikes, both orders can execute, turning a LONG 100 position into an unintended SHORT 100 position with catastrophic overnight/intraday risk.
-- **The Single-Order State Machine Architecture:**
-  - Mithron maintains at most ONE active exit order on the broker exchange per position.
-  - **Trailing Stop Updates (1M candle close):** Calls SmartAPI `modifyOrder(orderId, newTriggerPrice)` to adjust the resting order in-place on the exchange book.
-  - **Emergency / Structural Exits:** Calls `modifyOrder(orderId, orderType="MARKET")` on the EXISTING resting order, instantly transforming it into an immediate market execution. No second sell order is ever created.
-  - If the resting order already filled just before modification, SmartAPI returns "Order already executed" (`AB1004`/`AB1008`). Mithron catches this response and cleanly marks the position `CLOSED`.
+##### B. Item 1: Dynamic Real-Time Capital & Margin Reconciliation (Angel One Margin & Funds API)
+- **What:** Live two-tier capital gating combining local in-memory ledger deduction with real-time broker margin queries:
+  1. Primary Gate (In-Memory Fast Check): Deducts estimated margin locally in 0 ms.
+  2. Secondary Gate (Direct Broker API): Calls Angel One RMS Funds API (`GET /rest/secure/angelbroking/user/v1/getRMS`) for available cash, and Margin Batch API (`POST /rest/secure/angelbroking/margin/v1/batch`) to verify exact broker-side margin required for the proposed basket.
+- **Where:** `AngelOneMarginService.java`, `AngelOneBrokerClient.java`, called by `RiskEngine.evaluateTrade(...)`.
+- **Why:** Eliminates hardcoded leverage assumptions (e.g. assuming fixed 5x leverage when specific stocks may only carry 3x or 1x MIS margin), preventing unexpected broker order rejections (`AB1004: Insufficient Funds`).
 
-##### D. Central Position Manager Service (`PositionManagerService`):
-- **Role:** Central service holding all `OPEN` positions across strategies.
-- **Tick-Level Monitoring:** Listens to incoming real-time ticks from `LiveMarketSnapshotService` (0 ms latency) for price-level target/stop hits.
-- **Minute-Boundary Monitoring:** Listens to 1-minute candle finalization events for structural invalidation and trailing ratchet updates.
-- **Delegation:** Resolves the owning strategy handler using `position.getStrategyId()` and dispatches evaluation to the handler.
+---
 
-##### E. Four Real-Data Replay Integration Scenarios:
+##### C. Item 2: Order Lifecycle Audit & Split Tranche Architecture (3 Orders: Entry, Partial Exit, Full Exit)
+- **What:** A strictly audited 3-order state machine with parent-child linkage in `orders` / `simulated_orders` and `positions` / `simulated_positions`:
+  1. **Order 1 (Position Open):** `BUY` order for full quantity $Q$ (`transaction_type = BUY`, `order_status = FILLED`).
+  2. **Order 2 (Target 1 Partial Exit):** When LTP reaches Target 1 (+1R), places `SELL` order for $Q/2$ at market (`parent_order_id = Order 1.id`, `transaction_type = SELL`). Position status transitions from `OPEN` to `PARTIALLY_CLOSED`, updating `current_quantity = Q - Q/2`.
+  3. **Order 3 (Final Exit):** For the remaining $Q/2$ quantity, triggered either by the ratcheted trailing stop, milestone lock, or the 15:00 hard cutoff (`parent_order_id = Order 1.id`, `transaction_type = SELL`, full exit). Position transitions to `CLOSED`.
+- **Where:** `OrderLifecycleService.java`, `CentralPositionManager.java`, `SimulatedTradeExecutionAdapter.java`, `BrokerTradeExecutionAdapter.java`.
+- **Why:** Provides complete auditability for partial profit booking without confusing exchange order books, avoiding orphan orders or double fills.
+
+---
+
+##### D. Item 3: Progressive Milestone Ratchets vs ATR Trailing Stop
+- **What:** A hybrid dual-layer stop protection combining deterministic milestones with continuous volatility trailing:
+  - **Layer 1 (Deterministic Milestone Ratchets):**
+    - $LTP < \text{Entry} + 0.8R$: Stop remains at Initial Stop Loss (FCL).
+    - $LTP \ge \text{Entry} + 0.8R$: Stop moves to Breakeven ($\text{Entry Price}$).
+    - $LTP \ge \text{Target 1 } (+1.0R)$: Target 1 booked (50% exit); remaining stop locked at $+\mathbf{0.2R}$ profit floor.
+    - $LTP \ge \text{Entry} + 1.5R$: Remaining stop locked at $+\mathbf{0.8R}$ profit floor.
+    - $LTP \ge \text{Entry} + 2.0R$: Remaining stop locked at $+\mathbf{1.3R}$ profit floor.
+  - **Layer 2 (Continuous 1M/5M ATR Trailing Stop):**
+    - Trails upward continuously on every 1M candle close at $\text{Low}_{1M} - (0.5 \times \text{ATR}_{5M})$.
+  - **Resolution:** $\text{Effective Stop} = \max(\text{Milestone Stop}, \text{ATR Trailing Stop})$. The stop is strictly monotonic (only moves upward, never downward).
+- **Where:** `FchbPositionHandler.java`, `CentralPositionManager.java`.
+- **Why:** Guarantees that large intraday rallies (e.g. running to 2.5R) lock in institutional-grade profit without giving back gains on midday pullbacks, while preserving freedom for outlier multi-R trend days.
+
+---
+
+##### E. Item 4: 3x Friction Viability Filter Calibration & Safety Verification
+- **What:** Mathematical pre-trade viability check:
+  $$\text{Expected } 1R \text{ Gross Profit} \ge 3 \times \text{Estimated Round-Trip Friction}$$
+  $$\text{Friction} = ₹60 \text{ (brokerage for 3 order legs)} + (\text{Turnover} \times 0.00035 \text{ STT/charges}) + \text{GST}$$
+- **Where:** `FchbStrategy.java`, validated in `StrategyValidator.java`.
+- **Why:** Prevents entering trades where high stock price and tight stop loss result in huge share quantities whose statutory turnover taxes exceed the trade's expected profit. On liquid equities with typical intraday stops ($0.3\% - 0.8\%$), $1R$ is Rs. 1,500–2,000 whereas 3-leg friction is Rs. 120–160 (profit $\approx 10\times - 15\times$ friction), passing the $3\times$ filter easily without requiring abnormal price runs.
+
+---
+
+##### F. Item 5: Pre-Market & Post-Market Lifecycle Integrity Gating (Embedded in Existing Stages)
+- **What:** All lifecycle resets and hygiene checks are strictly embedded inside existing daily stages:
+  - **Pre-Market (`premarket-housekeeping` @ 07:00 AM):** Resets WebSocket idle timestamps, clears stale tick buffers, resets in-memory portfolio quotas for the new date.
+  - **Pre-Market Data Preparation (`premarket-universe-sync` @ 08:00 AM):** Reconciles active universe tradability against EOD completeness and minimum daily history.
+  - **Post-Market (`eod-reconciliation` & `daily-cycle-complete` @ 16:00-23:45 PM):** In-memory position reconciliation, uncommitted buffer flushes, and broker token teardown.
+- **Where:** `PreMarketWorkflowService.java`, `PostMarketWorkflowService.java`, `RuntimeHousekeepingService.java`.
+- **Why:** Avoids creating untracked "floating" background tasks; every maintenance action is governed by fail-closed dependency gates in `workflow_status`.
+
+---
+
+##### G. Item 6: Double-Gate Tradability Filter (15-Day Minimum EOD Bar Check)
+- **What:** Defensive double-check before declaring any symbol tradable:
+  1. Gate 1: Prior day EOD completeness (`eod_data_entry.status = SUCCESS`).
+  2. Gate 2: Symbol must have at least 15 completed daily bars in `stock_prices` ($\ge 15$).
+- **Where:** `PreMarketWorkflowService.runPreMarketDataPipeline()`, `StockUniverseService.java`.
+- **Why:** Prevents runtime `IndexOutOfBoundsException` or `NullPointerException` when calculating 15-day resistance or 20-day ADV curves on newly listed or recently added scrips.
+
+---
+
+##### H. Item 7: Per-Symbol Concurrency Isolation (`ConcurrentHashMap<String, Object>`)
+- **What:** Fine-grained per-symbol synchronization locks for all real-time tick ingestion, candle accumulation, indicator calculation, and position updates.
+- **Where:** `LiveMarketCandleService.java`, `StockContextCache.java`, `CentralPositionManager.java`.
+- **Why:** Prevents global lock contention across 500 stocks during high-throughput tick bursts. A delayed calculation or exception on one symbol is completely isolated and cannot stall or crash other symbols.
+
+---
+
+##### I. Item 8: Aggressive 14:50 / 15:00 Hard Square-Off with Direct Broker API Polling Loop
+- **What:** Two-phase hard square-off protocol prior to broker auto square-off (which occurs at 15:10/15:15 IST):
+  - **Phase 1 (14:50 IST - Order Cancellation):** Cancel all resting pending orders on the exchange to prevent unintended duplicate fills.
+  - **Phase 2 (14:50–15:00 IST - Market Exits):** Issue unconditional `MARKET` sell orders for all remaining open positions.
+  - **Phase 3 (Immediate 1-Minute Polling Loop):** Poll Angel One Position API (`GET /rest/secure/angelbroking/order/v1/getPosition`) every 60 seconds until the broker confirms `netQuantity == 0` for all intraday positions and order book confirms 0 pending orders.
+- **Where:** `CentralPositionManager.java`, `BrokerTradeExecutionAdapter.java`.
+- **Why:** Prevents broker penalty charges for auto square-off and guarantees zero overnight position carryover in Indian intraday equity trading.
+
+---
+
+##### J. Item 9: Minute-by-Minute Persistence of Stop Loss & Target across Restarts
+- **What:** Persist dynamic stop losses and milestone targets directly into PostgreSQL (`positions` and `orders`) on every 1-minute candle close.
+- **Where:** `PositionManagerService.java`, `CentralPositionManager.java`.
+- **Why:** Ensures that if the host laptop or application restarts mid-session, `PositionManager` re-hydrates the exact ratcheted stop levels directly from the database without resetting stops back to initial entry levels.
+
+---
+
+##### K. Item 10: Calendar Data Integrity & Pruning of Obsolete Bootstrap Holidays
+- **What:** Fix hardcoded 2026 holiday typos in `NseHolidayCalendar.java` and implement automatic pruning of obsolete bootstrap dates during official NSE calendar synchronization:
+  - Remove `2026-10-12` (falsely labeled Dussehra; real Dussehra is `2026-10-20`).
+  - Correct `2026-11-09` to `2026-11-10` (Diwali-Balipratipada) and `2026-11-27` to `2026-11-24` (Guru Nanak Jayanti).
+  - Add prune logic in `MarketCalendarService` to delete any `STATIC_BOOTSTRAP` dates for the current year that do not exist in the official NSE feed.
+- **Where:** `NseHolidayCalendar.java`, `MarketCalendarService.java`, database cleanup script.
+- **Why:** Resolves the production outage of 2026-10-12 where Mithron falsely flagged today as a trading holiday and skipped all daily pre-market workflows.
+
+---
+
+##### L. Four Real-Data Replay Integration Scenarios:
 Before running end-to-end backtesting orchestration in V2.4, V2.3 proves the Risk Engine and Position Manager against 4 real-world market scenarios captured from the production database:
 1. **Scenario 1 (Strong Bullish Trend Day):** Nifty consistently above VWAP. Multiple stocks trigger FCHB with low/zero YELLOWs; positions hit Target 1 (+1R) and trail to multi-R profits.
 2. **Scenario 2 (Bearish / Trap Day):** Nifty opens or breaks below VWAP; FCHB signals blocked by the macro gate.

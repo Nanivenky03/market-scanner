@@ -45,8 +45,7 @@ class PositionManagerServiceTest {
     void testRegisterAndRetrievePosition() {
         PositionSnapshot position = new PositionSnapshot(
                 1, 2, "INFY", "NSE", "LONG", 20, 20,
-                1900.0, 1885.0, 1915.0, 1895.0, false, LocalDateTime.now()
-        );
+                1900.0, 1885.0, 1915.0, 1895.0, false, LocalDateTime.now());
 
         positionManager.registerPosition(PortfolioMode.PAPER, position);
 
@@ -62,8 +61,7 @@ class PositionManagerServiceTest {
     void testProcessTick_StopLossBreached() {
         PositionSnapshot position = new PositionSnapshot(
                 1, 2, "TCS", "NSE", "LONG", 10, 10,
-                3500.0, 3480.0, 3520.0, 3495.0, false, LocalDateTime.now()
-        );
+                3500.0, 3480.0, 3520.0, 3495.0, false, LocalDateTime.now());
         positionManager.registerPosition(PortfolioMode.PAPER, position);
 
         // Price ticks down to 3479.0 (below stop 3480.0)
@@ -84,15 +82,14 @@ class PositionManagerServiceTest {
     void testProcessMinuteCandleClose_StructuralInvalidation() {
         PositionSnapshot position = new PositionSnapshot(
                 1, 2, "SBIN", "NSE", "LONG", 50, 50,
-                805.0, 795.0, 815.0, 802.0, false, LocalDateTime.now()
-        );
+                805.0, 795.0, 815.0, 802.0, false, LocalDateTime.now());
         positionManager.registerPosition(PortfolioMode.PAPER, position);
 
-        // 1M candle closes at 801.0 (< FCH 802.0) while LTP is above stop (801.0 > 795.0)
+        // 1M candle closes at 801.0 (< FCH 802.0) while LTP is above stop (801.0 >
+        // 795.0)
         MarketCandle candle1m = create1mCandle(LocalDateTime.of(2026, 10, 11, 9, 36), 805.0, 806.0, 800.5, 801.0);
         PositionAction action = positionManager.processMinuteCandleClose(
-                PortfolioMode.PAPER, "SBIN", candle1m, 3.5, LocalTime.of(9, 36)
-        );
+                PortfolioMode.PAPER, "SBIN", candle1m, 3.5, LocalTime.of(9, 36));
 
         assertThat(action.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
         assertThat(action.reason()).isEqualTo("STRUCTURAL_INVALIDATION");
@@ -104,12 +101,13 @@ class PositionManagerServiceTest {
     void testTarget1PartialExit_And_AtrTrailingRatchet() {
         PositionSnapshot position = new PositionSnapshot(
                 1, 2, "RELIANCE", "NSE", "LONG", 20, 20,
-                2500.0, 2480.0, 2520.0, 2495.0, false, LocalDateTime.now()
-        );
+                2500.0, 2480.0, 2520.0, 2495.0, false, LocalDateTime.now());
         positionManager.registerPosition(PortfolioMode.PAPER, position);
 
-        // 1. Price ticks up to Target 1 (2520.0) -> PARTIAL EXIT 50% & SL moved to pure entry (2500.0)
-        PositionAction tickAction = positionManager.processTick(PortfolioMode.PAPER, "RELIANCE", 2520.0, LocalTime.of(9, 45));
+        // 1. Price ticks up to Target 1 (2520.0) -> PARTIAL EXIT 50% & SL moved to pure
+        // entry (2500.0)
+        PositionAction tickAction = positionManager.processTick(PortfolioMode.PAPER, "RELIANCE", 2520.0,
+                LocalTime.of(9, 45));
         assertThat(tickAction.type()).isEqualTo(PositionAction.ActionType.PARTIAL_EXIT);
         assertThat(tickAction.reason()).isEqualTo("TARGET_1_HIT");
 
@@ -118,11 +116,11 @@ class PositionManagerServiceTest {
         assertThat(partialSnapshot.target1Booked()).isTrue();
         assertThat(partialSnapshot.currentStopLoss()).isEqualTo(2500.0);
 
-        // 2. Next 1M candle moves higher: Low = 2530.0, ATR = 10.0 -> ATR stop = 2530 - (1.5 * 10) = 2515.0 (> 2500.0)
+        // 2. Next 1M candle moves higher: Low = 2530.0, ATR = 10.0 -> ATR stop = 2530 -
+        // (1.5 * 10) = 2515.0 (> 2500.0)
         MarketCandle nextCandle = create1mCandle(LocalDateTime.of(2026, 10, 11, 9, 48), 2525.0, 2535.0, 2530.0, 2532.0);
         PositionAction candleAction = positionManager.processMinuteCandleClose(
-                PortfolioMode.PAPER, "RELIANCE", nextCandle, 10.0, LocalTime.of(9, 48)
-        );
+                PortfolioMode.PAPER, "RELIANCE", nextCandle, 10.0, LocalTime.of(9, 48));
 
         assertThat(candleAction.type()).isEqualTo(PositionAction.ActionType.UPDATE_STOP);
         assertThat(candleAction.reason()).isEqualTo("ATR_TRAILING_STOP_RATCHET");

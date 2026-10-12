@@ -38,15 +38,13 @@ class RiskEngineTest {
                 entryPrice + (entryPrice - stopLoss),
                 entryPrice - 2.0,
                 100.0,
-                Map.of("yellowCount", yellowCount)
-        );
+                Map.of("yellowCount", yellowCount));
     }
 
     private PositionSnapshot createPosition(String symbol, int qty, double entry, double sl) {
         return new PositionSnapshot(
                 1, 2, symbol, "NSE", "LONG", qty, qty,
-                entry, sl, entry + (entry - sl), entry - 2.0, false, LocalDateTime.now()
-        );
+                entry, sl, entry + (entry - sl), entry - 2.0, false, LocalDateTime.now());
     }
 
     @Test
@@ -150,7 +148,8 @@ class RiskEngineTest {
         riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "STOCK1", createPosition("STOCK1", 45, 500.0, 490.0));
         riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "STOCK2", createPosition("STOCK2", 45, 500.0, 490.0));
 
-        // Candidate 3: entry 600, SL 595 (risk = 5 pts). Qty = floor(450 / 5) = 90. Actual risk = 90 * 5 = 450.
+        // Candidate 3: entry 600, SL 595 (risk = 5 pts). Qty = floor(450 / 5) = 90.
+        // Actual risk = 90 * 5 = 450.
         // Potential total risk = 900 + 450 = 1350 > 960!
         StrategyProposal candidate3 = createProposal("STOCK3", 600.0, 595.0, 0);
         RiskEvaluationResult result = riskEngine.evaluateProposal(candidate3, PortfolioMode.PAPER);
@@ -163,8 +162,7 @@ class RiskEngineTest {
         // Total open risk drops from 900 to 450.
         PositionSnapshot ratchetedStock1 = new PositionSnapshot(
                 1, 2, "STOCK1", "NSE", "LONG", 45, 45,
-                500.0, 500.0, 510.0, 498.0, true, LocalDateTime.now()
-        );
+                500.0, 500.0, 510.0, 498.0, true, LocalDateTime.now());
         riskEngine.updatePosition(PortfolioMode.PAPER, ratchetedStock1);
 
         // Candidate 3 evaluated again: potential risk = 450 + 450 = 900 <= 960!
@@ -175,16 +173,20 @@ class RiskEngineTest {
     @Test
     @DisplayName("Gate 7: Friction viability filter rejects trades where 1R < 3 * friction")
     void testGate7_FrictionTrapRejected() {
-        // High priced stock with tight stop distance generating massive turnover relative to risk:
+        // High priced stock with tight stop distance generating massive turnover
+        // relative to risk:
         // Entry = 2000.0, SL = 1998.0 (risk per share = 2.0).
         // Target risk = 450 -> Qty = floor(450 / 2.0) = 225 shares.
-        // Trade value = 225 * 2000 = 450,000. Required margin = 450,000 / 5 = 90,000 > 30,000 capital.
+        // Trade value = 225 * 2000 = 450,000. Required margin = 450,000 / 5 = 90,000 >
+        // 30,000 capital.
         // Let's test with low capital Rs. 15,000 where 1R = Rs. 225:
         riskEngine.initializePortfolio(PortfolioMode.PAPER, 15000.0, LocalDate.of(2026, 10, 11));
 
         // Entry = 600.0, SL = 594.0 -> risk = 6.0.
-        // Qty = floor(225 / 6.0) = 37. Trade value = 37 * 600 = 22,200. Turnover = 44,400.
-        // Friction: Brokerage = 60. Taxes = 44400 * 0.00035 = 15.54. GST = (60 + 2.6) * 0.18 = 11.27. Total friction ~ 86.8.
+        // Qty = floor(225 / 6.0) = 37. Trade value = 37 * 600 = 22,200. Turnover =
+        // 44,400.
+        // Friction: Brokerage = 60. Taxes = 44400 * 0.00035 = 15.54. GST = (60 + 2.6) *
+        // 0.18 = 11.27. Total friction ~ 86.8.
         // 3 * Friction = 3 * 86.8 = 260.4 > actual risk 222 (37 * 6.0)!
         StrategyProposal tightProposal = createProposal("TIGHT_STOCK", 600.0, 594.0, 0);
         RiskEvaluationResult result = riskEngine.evaluateProposal(tightProposal, PortfolioMode.PAPER);

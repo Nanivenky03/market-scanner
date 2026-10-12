@@ -9,7 +9,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Tracks intraday state and risk utilization for a specific portfolio mode (PAPER or LIVE).
+ * Tracks intraday state and risk utilization for a specific portfolio mode
+ * (PAPER or LIVE).
  */
 public class PortfolioState {
 
@@ -35,7 +36,8 @@ public class PortfolioState {
     /**
      * Calculates the total open downside risk across all currently open positions.
      * Formula: Sum(CurrentQuantity * max(0.0, EntryPrice - LiveTrailingStop))
-     * When trailing stop is moved to Entry (or above), risk drops to Rs. 0.0, freeing up risk capacity.
+     * When trailing stop is moved to Entry (or above), risk drops to Rs. 0.0,
+     * freeing up risk capacity.
      */
     public double calculateTotalOpenDownsideRisk() {
         return openPositions.values().stream()
