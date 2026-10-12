@@ -33,7 +33,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/admin/runtime")
-@RequiredArgsConstructor
 @Tag(name = "Runtime Admin", description = "Common runtime admin endpoints for production/live data operation")
 public class RuntimeAdminController {
 
@@ -48,6 +47,54 @@ public class RuntimeAdminController {
     private final LiveMarketSnapshotService liveMarketSnapshotService;
     private final WebSocketFrameCaptureService webSocketFrameCaptureService;
     private final EodReconciliationService eodReconciliationService;
+    private final com.trading.scanner.service.runtime.DayWorkflowRestartService dayWorkflowRestartService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RuntimeAdminController(
+            RuntimeAutomationService runtimeAutomationService,
+            RuntimeReadinessService runtimeReadinessService,
+            DailyStockContextService dailyStockContextService,
+            RuntimeSettingService runtimeSettingService,
+            RuntimeHousekeepingService runtimeHousekeepingService,
+            RuntimeAlertService runtimeAlertService,
+            AngelOneSessionService angelOneSessionService,
+            MarketCalendarService marketCalendarService,
+            LiveMarketSnapshotService liveMarketSnapshotService,
+            WebSocketFrameCaptureService webSocketFrameCaptureService,
+            EodReconciliationService eodReconciliationService,
+            com.trading.scanner.service.runtime.DayWorkflowRestartService dayWorkflowRestartService) {
+        this.runtimeAutomationService = runtimeAutomationService;
+        this.runtimeReadinessService = runtimeReadinessService;
+        this.dailyStockContextService = dailyStockContextService;
+        this.runtimeSettingService = runtimeSettingService;
+        this.runtimeHousekeepingService = runtimeHousekeepingService;
+        this.runtimeAlertService = runtimeAlertService;
+        this.angelOneSessionService = angelOneSessionService;
+        this.marketCalendarService = marketCalendarService;
+        this.liveMarketSnapshotService = liveMarketSnapshotService;
+        this.webSocketFrameCaptureService = webSocketFrameCaptureService;
+        this.eodReconciliationService = eodReconciliationService;
+        this.dayWorkflowRestartService = dayWorkflowRestartService;
+    }
+
+    // Convenience constructor for tests and backward compatibility
+    public RuntimeAdminController(
+            RuntimeAutomationService runtimeAutomationService,
+            RuntimeReadinessService runtimeReadinessService,
+            DailyStockContextService dailyStockContextService,
+            RuntimeSettingService runtimeSettingService,
+            RuntimeHousekeepingService runtimeHousekeepingService,
+            RuntimeAlertService runtimeAlertService,
+            AngelOneSessionService angelOneSessionService,
+            MarketCalendarService marketCalendarService,
+            LiveMarketSnapshotService liveMarketSnapshotService,
+            WebSocketFrameCaptureService webSocketFrameCaptureService,
+            EodReconciliationService eodReconciliationService) {
+        this(runtimeAutomationService, runtimeReadinessService, dailyStockContextService,
+                runtimeSettingService, runtimeHousekeepingService, runtimeAlertService,
+                angelOneSessionService, marketCalendarService, liveMarketSnapshotService,
+                webSocketFrameCaptureService, eodReconciliationService, null);
+    }
 
     public record UpsertRuntimeSettingRequest(
             @Schema(example = "websocket.connect.time") String key,
@@ -255,5 +302,13 @@ public class RuntimeAdminController {
     public ResponseEntity<EodReconciliationService.ReconciliationBatchResult> triggerEodReconciliation(
             @Parameter(description = "Trading date in yyyy-MM-dd format (defaults to previous/current trading day)", example = "2026-09-25") @RequestParam(required = false) LocalDate date) {
         return ResponseEntity.ok(eodReconciliationService.reconcileTradingDay(date));
+    }
+
+    @Operation(summary = "Restart today's entire workflow from scratch",
+            description = "Mid-day recovery endpoint. Cleans today's partial candles/status, re-executes all 6 pre-market stages, fetches 09:08 market quotes, connects live WebSocket, and queues morning backfill.")
+    @PostMapping("/day/restart-today-workflow")
+    public ResponseEntity<com.trading.scanner.service.runtime.DayWorkflowRestartService.DayRestartResult> restartTodayWorkflow(
+            @Parameter(description = "Trading date (strictly must be today)", example = "2026-10-12") @RequestParam(required = false) LocalDate date) {
+        return ResponseEntity.ok(dayWorkflowRestartService.restartTodayWorkflow(date));
     }
 }

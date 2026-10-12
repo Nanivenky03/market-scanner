@@ -126,10 +126,11 @@ public class RiskEngine {
             return RiskEvaluationResult.rejected("PORTFOLIO_OPEN_RISK_CAP_EXCEEDED", proposal);
         }
 
-        // Sizing & Margin: Check available capital against required intraday margin
+        // Sizing & Margin: Check available capital against required intraday margin + already committed margin
         double tradeValue = quantity * entryPrice;
         double requiredMargin = tradeValue / INTRADAY_LEVERAGE_FACTOR;
-        if (requiredMargin > capital) {
+        double committedMargin = portfolio.calculateTotalCommittedMargin(INTRADAY_LEVERAGE_FACTOR);
+        if ((committedMargin + requiredMargin) > capital) {
             return RiskEvaluationResult.rejected("INSUFFICIENT_MARGIN_CAPITAL", proposal);
         }
 
@@ -176,12 +177,38 @@ public class RiskEngine {
     }
 
     /**
+     * Records partial exit P&L credit to realized capital.
+     */
+    public synchronized void recordPartialExit(PortfolioMode mode, double pnl) {
+        PortfolioState portfolio = portfolios.get(mode);
+        if (portfolio != null) {
+            portfolio.recordPartialExit(pnl);
+        }
+    }
+
+    /**
      * Records position closure and realizes its P&L.
      */
     public synchronized void recordPositionClosed(PortfolioMode mode, String symbol, double pnl) {
         PortfolioState portfolio = portfolios.get(mode);
         if (portfolio != null) {
             portfolio.recordPositionClosed(symbol, pnl);
+        }
+    }
+
+    /**
+     * Resets risk quotas, daily trade counts, and symbol locks for a new trading day.
+     * Carries forward current capital into starting capital.
+     */
+    public synchronized void resetForNewDay(LocalDate newDate) {
+        for (PortfolioState portfolio : portfolios.values()) {
+            if (portfolio != null) {
+                try {
+                    portfolio.resetForNewDay(newDate, portfolio.getCurrentCapital());
+                } catch (Exception ex) {
+                    // Defensive guard: never fail JVM thread
+                }
+            }
         }
     }
 }

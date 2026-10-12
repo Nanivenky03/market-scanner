@@ -44,18 +44,26 @@ public class PositionManagerService {
         activePositions.put(PortfolioMode.LIVE, new ConcurrentHashMap<>());
     }
 
+    private final Map<String, Object> symbolLocks = new ConcurrentHashMap<>();
+
+    private Object getSymbolLock(String symbol) {
+        return symbolLocks.computeIfAbsent(symbol != null ? symbol : "DEFAULT", s -> new Object());
+    }
+
     /**
      * Registers a new open position snapshot into RAM and Risk Engine.
      */
-    public synchronized void registerPosition(PortfolioMode mode, PositionSnapshot position) {
+    public void registerPosition(PortfolioMode mode, PositionSnapshot position) {
         if (position == null || position.symbol() == null) {
             return;
         }
-        activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(position.symbol(), position);
-        riskEngine.recordTradeExecuted(mode, position.symbol(), position);
-        log.info("[{}] Registered open position for symbol={} side={} qty={} entry={} SL={}",
-                mode, position.symbol(), position.positionSide(), position.currentQuantity(),
-                position.entryPrice(), position.currentStopLoss());
+        synchronized (getSymbolLock(position.symbol())) {
+            activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(position.symbol(), position);
+            riskEngine.recordTradeExecuted(mode, position.symbol(), position);
+            log.info("[{}] Registered open position for symbol={} side={} qty={} entry={} SL={}",
+                    mode, position.symbol(), position.positionSide(), position.currentQuantity(),
+                    position.entryPrice(), position.currentStopLoss());
+        }
     }
 
     public Map<String, PositionSnapshot> getActivePositions(PortfolioMode mode) {
@@ -71,51 +79,55 @@ public class PositionManagerService {
     /**
      * Evaluates a real-time price tick for an open position.
      */
-    public synchronized PositionAction processTick(PortfolioMode mode, String symbol, double ltp,
+    public PositionAction processTick(PortfolioMode mode, String symbol, double ltp,
             LocalTime currentTime) {
-        PositionSnapshot position = getPosition(mode, symbol);
-        if (position == null) {
-            return PositionAction.hold();
-        }
+        synchronized (getSymbolLock(symbol)) {
+            PositionSnapshot position = getPosition(mode, symbol);
+            if (position == null) {
+                return PositionAction.hold();
+            }
 
-        StrategyPositionHandler handler = handlersByStrategyId.get(position.strategyId());
-        if (handler == null) {
-            log.warn("No PositionHandler registered for strategyId={}", position.strategyId());
-            return PositionAction.hold();
-        }
+            StrategyPositionHandler handler = handlersByStrategyId.get(position.strategyId());
+            if (handler == null) {
+                log.warn("No PositionHandler registered for strategyId={}", position.strategyId());
+                return PositionAction.hold();
+            }
 
-        PositionAction action = handler.evaluatePosition(position, ltp, null, null, currentTime,
-                Collections.emptyMap());
-        applyPositionAction(mode, position, action, ltp);
-        return action;
+            PositionAction action = handler.evaluatePosition(position, ltp, null, null, currentTime,
+                    Collections.emptyMap());
+            applyPositionAction(mode, position, action, ltp);
+            return action;
+        }
     }
 
     /**
      * Evaluates a completed 1-minute candle close for an open position (structural
      * invalidation and ATR trailing).
      */
-    public synchronized PositionAction processMinuteCandleClose(
+    public PositionAction processMinuteCandleClose(
             PortfolioMode mode,
             String symbol,
             MarketCandle candle1m,
             Double atr5m,
             LocalTime currentTime) {
-        PositionSnapshot position = getPosition(mode, symbol);
-        if (position == null || candle1m == null) {
-            return PositionAction.hold();
-        }
+        synchronized (getSymbolLock(symbol)) {
+            PositionSnapshot position = getPosition(mode, symbol);
+            if (position == null || candle1m == null) {
+                return PositionAction.hold();
+            }
 
-        StrategyPositionHandler handler = handlersByStrategyId.get(position.strategyId());
-        if (handler == null) {
-            log.warn("No PositionHandler registered for strategyId={}", position.strategyId());
-            return PositionAction.hold();
-        }
+            StrategyPositionHandler handler = handlersByStrategyId.get(position.strategyId());
+            if (handler == null) {
+                log.warn("No PositionHandler registered for strategyId={}", position.strategyId());
+                return PositionAction.hold();
+            }
 
-        double closePrice = candle1m.getClosePrice() != null ? candle1m.getClosePrice() : 0.0;
-        PositionAction action = handler.evaluatePosition(position, closePrice, candle1m, atr5m, currentTime,
-                Collections.emptyMap());
-        applyPositionAction(mode, position, action, closePrice);
-        return action;
+            double closePrice = candle1m.getClosePrice() != null ? candle1m.getClosePrice() : 0.0;
+            PositionAction action = handler.evaluatePosition(position, closePrice, candle1m, atr5m, currentTime,
+                    Collections.emptyMap());
+            applyPositionAction(mode, position, action, closePrice);
+            return action;
+        }
     }
 
     /**
@@ -143,6 +155,9 @@ public class PositionManagerService {
                 int remainingQty = position.currentQuantity() - exitQty;
                 double newSl = action.newStopLoss() != null ? action.newStopLoss() : position.entryPrice();
 
+                double partialPnl = (currentPrice - position.entryPrice()) * exitQty;
+                riskEngine.recordPartialExit(mode, partialPnl);
+
                 PositionSnapshot updated = new PositionSnapshot(
                         position.positionId(),
                         position.strategyId(),
@@ -159,8 +174,8 @@ public class PositionManagerService {
                         position.entryTime());
                 activePositions.get(mode).put(symbol, updated);
                 riskEngine.updatePosition(mode, updated);
-                log.info("[{}] PARTIAL EXIT booked for symbol={} exitQty={} remainingQty={} newStop={} reason={}",
-                        mode, symbol, exitQty, remainingQty, newSl, action.reason());
+                log.info("[{}] PARTIAL EXIT booked for symbol={} exitQty={} remainingQty={} newStop={} partialPnl={} reason={}",
+                        mode, symbol, exitQty, remainingQty, newSl, partialPnl, action.reason());
             }
             case UPDATE_STOP -> {
                 if (action.newStopLoss() != null && action.newStopLoss() > position.currentStopLoss()) {
@@ -190,17 +205,65 @@ public class PositionManagerService {
     }
 
     /**
+     * Active timer sweep to force-close any remaining open positions after cutoff time.
+     * Guarantees illiquid stocks with zero ticks do not leak past square-off.
+     */
+    public void closeExpiredPositions(PortfolioMode mode, LocalTime cutoffTime, Map<String, Double> lastKnownPrices) {
+        Map<String, PositionSnapshot> positions = activePositions.get(mode);
+        if (positions == null || positions.isEmpty()) {
+            return;
+        }
+
+        for (PositionSnapshot pos : List.copyOf(positions.values())) {
+            synchronized (getSymbolLock(pos.symbol())) {
+                if (activePositions.get(mode).containsKey(pos.symbol())) {
+                    double exitPrice = (lastKnownPrices != null && lastKnownPrices.containsKey(pos.symbol()))
+                            ? lastKnownPrices.get(pos.symbol())
+                            : pos.entryPrice();
+                    forceClosePosition(mode, pos.symbol(), exitPrice, "SCHEDULED_EOD_HARD_CLOSE_SWEEP");
+                }
+            }
+        }
+    }
+
+    /**
+     * Resets in-memory position state for a new trading day.
+     */
+    public void resetForNewDay() {
+        for (Map<String, PositionSnapshot> map : activePositions.values()) {
+            if (map != null) {
+                map.clear();
+            }
+        }
+        symbolLocks.clear();
+    }
+
+    /**
+     * Re-hydrates active positions into RAM upon crash recovery or application restart.
+     */
+    public void rehydrateActiveState(PortfolioMode mode, List<PositionSnapshot> openPositions) {
+        if (openPositions == null) {
+            return;
+        }
+        for (PositionSnapshot pos : openPositions) {
+            registerPosition(mode, pos);
+        }
+    }
+
+    /**
      * Immediately closes an open position (e.g. manual intervention or emergency
      * risk cutoff).
      */
-    public synchronized void forceClosePosition(PortfolioMode mode, String symbol, double exitPrice, String reason) {
-        PositionSnapshot position = getPosition(mode, symbol);
-        if (position != null) {
-            double pnl = (exitPrice - position.entryPrice()) * position.currentQuantity();
-            activePositions.get(mode).remove(symbol);
-            riskEngine.recordPositionClosed(mode, symbol, pnl);
-            log.warn("[{}] FORCE CLOSE symbol={} at price={} P&L={} reason={}",
-                    mode, symbol, exitPrice, pnl, reason);
+    public void forceClosePosition(PortfolioMode mode, String symbol, double exitPrice, String reason) {
+        synchronized (getSymbolLock(symbol)) {
+            PositionSnapshot position = getPosition(mode, symbol);
+            if (position != null) {
+                double pnl = (exitPrice - position.entryPrice()) * position.currentQuantity();
+                activePositions.get(mode).remove(symbol);
+                riskEngine.recordPositionClosed(mode, symbol, pnl);
+                log.warn("[{}] FORCE CLOSE symbol={} at price={} P&L={} reason={}",
+                        mode, symbol, exitPrice, pnl, reason);
+            }
         }
     }
 }

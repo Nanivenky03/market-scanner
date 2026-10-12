@@ -20,7 +20,7 @@ public class FchbPositionHandler implements StrategyPositionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(FchbPositionHandler.class);
 
-    private static final LocalTime HARD_CLOSE_TIME = LocalTime.of(15, 0, 0);
+    private static final LocalTime HARD_CLOSE_TIME = LocalTime.of(14, 55, 0);
     private static final LocalTime WIND_DOWN_TIME = LocalTime.of(14, 45, 0);
 
     @Override
@@ -46,7 +46,7 @@ public class FchbPositionHandler implements StrategyPositionHandler {
             return PositionAction.hold();
         }
 
-        // Priority 1: 15:00:00 Hard Close Cutoff
+        // Priority 1: 14:55:00 Hard Close Cutoff (15 min safety buffer before broker RMS)
         if (!currentTime.isBefore(HARD_CLOSE_TIME)) {
             return PositionAction.fullExit("HARD_CLOSE_TIME_CUTOFF");
         }
@@ -54,7 +54,7 @@ public class FchbPositionHandler implements StrategyPositionHandler {
         // Priority 2: 14:45:00 Wind-Down Cutoff
         if (!currentTime.isBefore(WIND_DOWN_TIME)) {
             if (position.currentStopLoss() != null && position.currentStopLoss() >= position.entryPrice()) {
-                // Profit protected at breakeven or better; allow trailing until 15:00
+                // Profit protected at breakeven or better; allow trailing until 14:55
             } else {
                 return PositionAction.fullExit("WIND_DOWN_EXIT");
             }
@@ -94,11 +94,28 @@ public class FchbPositionHandler implements StrategyPositionHandler {
             }
         }
 
-        // Priority 7: Target 2 ATR Trailing Ratchet (after Target 1 booked)
-        if (position.target1Booked() && last1mCandle != null && last1mCandle.getLowPrice() != null && latest5mAtr != null && latest5mAtr > 0.0) {
-            double candidateStop = last1mCandle.getLowPrice() - (0.5 * latest5mAtr);
+        // Priority 7: Progressive Milestone Ratchets + ATR Trailing Stop (after Target 1 booked)
+        if (position.target1Booked() && position.target1Price() != null) {
+            double initialRisk = position.target1Price() - position.entryPrice();
+            double milestoneFloor = position.entryPrice();
+
+            if (currentLtp >= (position.entryPrice() + (3.0 * initialRisk))) {
+                // At +3R or higher: lock in +2R
+                milestoneFloor = position.entryPrice() + (2.0 * initialRisk);
+            } else if (currentLtp >= (position.entryPrice() + (2.0 * initialRisk))) {
+                // At +2R or higher: lock in +1R
+                milestoneFloor = position.entryPrice() + (1.0 * initialRisk);
+            }
+
+            double candidateStop = milestoneFloor;
+            if (last1mCandle != null && last1mCandle.getLowPrice() != null && latest5mAtr != null && latest5mAtr > 0.0) {
+                double atrTrail = last1mCandle.getLowPrice() - (0.5 * latest5mAtr);
+                candidateStop = Math.max(milestoneFloor, atrTrail);
+            }
+
             if (position.currentStopLoss() == null || candidateStop > position.currentStopLoss()) {
-                return PositionAction.updateStop(candidateStop, "ATR_TRAILING_STOP_RATCHET");
+                String reason = candidateStop > milestoneFloor ? "ATR_TRAILING_STOP_RATCHET" : "MILESTONE_RATCHET";
+                return PositionAction.updateStop(candidateStop, reason);
             }
         }
 

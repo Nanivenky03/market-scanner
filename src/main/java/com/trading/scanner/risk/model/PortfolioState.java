@@ -42,12 +42,37 @@ public class PortfolioState {
     public double calculateTotalOpenDownsideRisk() {
         return openPositions.values().stream()
                 .mapToDouble(pos -> {
+                    if (pos == null || pos.entryPrice() == null || pos.currentStopLoss() == null
+                            || pos.currentQuantity() == null) {
+                        return 0.0;
+                    }
                     double entry = pos.entryPrice();
                     double sl = pos.currentStopLoss();
                     double downsidePerShare = Math.max(0.0, entry - sl);
                     return pos.currentQuantity() * downsidePerShare;
                 })
                 .sum();
+    }
+
+    /**
+     * Calculates total margin already committed by all active positions.
+     * Formula: Sum((CurrentQuantity * EntryPrice) / LeverageFactor)
+     */
+    public double calculateTotalCommittedMargin(double leverageFactor) {
+        double leverage = leverageFactor > 0.0 ? leverageFactor : 5.0;
+        return openPositions.values().stream()
+                .mapToDouble(pos -> {
+                    if (pos == null || pos.currentQuantity() == null || pos.entryPrice() == null) {
+                        return 0.0;
+                    }
+                    return (pos.currentQuantity() * pos.entryPrice()) / leverage;
+                })
+                .sum();
+    }
+
+    public synchronized void recordPartialExit(double pnl) {
+        this.realizedPnl += pnl;
+        this.currentCapital = this.initialCapital + this.realizedPnl;
     }
 
     public synchronized void recordTradeExecuted(String symbol, PositionSnapshot position) {

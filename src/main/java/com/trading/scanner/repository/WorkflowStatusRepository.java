@@ -37,4 +37,6 @@ public interface WorkflowStatusRepository
 
     List<WorkflowStatus> findByWorkflowGroupAndIsActiveTrueOrderByInsertTimestampAsc(
             String workflowGroup);
+
+    long deleteByProcessDate(String processDate);
 }

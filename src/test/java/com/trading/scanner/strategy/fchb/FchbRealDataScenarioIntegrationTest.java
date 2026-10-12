@@ -138,23 +138,26 @@ class FchbRealDataScenarioIntegrationTest {
         @Test
         @DisplayName("SCENARIO 2: Neutral Day with Multiple Positions -> Stop decay to entry frees portfolio risk capacity for 3rd trade")
         void testScenario2_NeutralMarketRiskDecayAndCapacity() {
+                // With committed margin check (Committed + Required <= Capital), 3 positions of ~20-22k trade value require adequate capital
+                riskEngine.initializePortfolio(PortfolioMode.PAPER, 60000.0, LocalDate.of(2026, 10, 11));
+
                 MarketState neutralMarket = new MarketState(
                                 LocalDate.of(2026, 10, 11), LocalDateTime.of(2026, 10, 11, 9, 35),
                                 25030.0, 25000.0, 0.12, true, MarketState.MarketRegime.NEUTRAL, true, "NIFTY neutral");
 
                 // Position 1 (INFY) and Position 2 (RELIANCE) are open with original stops
-                // Total open risk: 450 + 450 = Rs. 900 (close to 3.2% cap of Rs. 960)
+                // Total open risk: 900 + 900 = Rs. 1800 (close to 3.2% cap of Rs. 1920)
                 PositionSnapshot pos1 = new PositionSnapshot(
-                                1, 2, "INFY", "NSE", "LONG", 45, 45,
+                                1, 2, "INFY", "NSE", "LONG", 90, 90,
                                 1000.0, 990.0, 1010.0, 995.0, false, LocalDateTime.of(2026, 10, 11, 9, 30));
                 PositionSnapshot pos2 = new PositionSnapshot(
-                                2, 2, "RELIANCE", "NSE", "LONG", 45, 45,
-                                2000.0, 1990.0, 2010.0, 1995.0, false, LocalDateTime.of(2026, 10, 11, 9, 30));
+                                2, 2, "RELIANCE", "NSE", "LONG", 90, 90,
+                                1000.0, 990.0, 1010.0, 995.0, false, LocalDateTime.of(2026, 10, 11, 9, 30));
                 riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "INFY", pos1);
                 riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "RELIANCE", pos2);
 
-                // Candidate 3 arrives: entry 500, SL 495 -> risk = Rs. 450. Total risk would be
-                // 900 + 450 = 1350 > 960!
+                // Candidate 3 arrives: entry 500, SL 495 -> risk = Rs. 900. Total risk would be
+                // 1800 + 900 = 2700 > 1920!
                 StrategyProposal candidate3 = new StrategyProposal(
                                 "WIPRO", "NSE", 2, "FCHB", "BUY", 500.0, 495.0, 505.0, 498.0, 85.0,
                                 Map.of("yellowCount", 1L));
@@ -165,11 +168,11 @@ class FchbRealDataScenarioIntegrationTest {
                 // Now Position 1 (INFY) reaches Target 1: its stop ratchets to entry (1000.0)
                 // -> downside risk drops to Rs. 0!
                 PositionSnapshot pos1AtEntry = new PositionSnapshot(
-                                1, 2, "INFY", "NSE", "LONG", 45, 22,
+                                1, 2, "INFY", "NSE", "LONG", 90, 45,
                                 1000.0, 1000.0, 1010.0, 995.0, true, LocalDateTime.of(2026, 10, 11, 9, 30));
                 riskEngine.updatePosition(PortfolioMode.PAPER, pos1AtEntry);
 
-                // Open downside risk is now only 0 + 450 = Rs. 450. Candidate 3 re-evaluated:
+                // Open downside risk is now only 0 + 900 = Rs. 900. Candidate 3 re-evaluated:
                 RiskEvaluationResult approved3 = riskEngine.evaluateProposal(candidate3, PortfolioMode.PAPER);
                 assertThat(approved3.approved()).isTrue();
 

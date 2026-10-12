@@ -28,7 +28,6 @@ import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class PreMarketWorkflowService {
 
     private final MarketCalendarService marketCalendarService;
@@ -50,7 +49,82 @@ public class PreMarketWorkflowService {
     private final TimeProvider timeProvider;
     private final com.trading.scanner.service.data.EodReconciliationService eodReconciliationService;
 
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.risk.RiskEngine> riskEngineProvider;
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider;
+
     private final Object workflowLock = new Object();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PreMarketWorkflowService(
+            MarketCalendarService marketCalendarService,
+            TradingCalendar tradingCalendar,
+            RuntimeHousekeepingService runtimeHousekeepingService,
+            AngelOneInstrumentCatalogSyncService catalogSyncService,
+            InstrumentMasterSyncService instrumentMasterSyncService,
+            AngelOneSessionService angelOneSessionService,
+            InstrumentTokenSyncService instrumentTokenSyncService,
+            StockUniverseRepository stockUniverseRepository,
+            InstrumentMasterRepository instrumentMasterRepository,
+            EodDataEntryService eodDataEntryService,
+            VolumeBaselineService volumeBaselineService,
+            RuntimeSettingService runtimeSettingService,
+            WorkflowStatusService workflowStatusService,
+            RuntimeAutomationService runtimeAutomationService,
+            RuntimeAutomationProperties runtimeAutomationProperties,
+            AngelOneProperties angelOneProperties,
+            TimeProvider timeProvider,
+            com.trading.scanner.service.data.EodReconciliationService eodReconciliationService,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.risk.RiskEngine> riskEngineProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider) {
+        this.marketCalendarService = marketCalendarService;
+        this.tradingCalendar = tradingCalendar;
+        this.runtimeHousekeepingService = runtimeHousekeepingService;
+        this.catalogSyncService = catalogSyncService;
+        this.instrumentMasterSyncService = instrumentMasterSyncService;
+        this.angelOneSessionService = angelOneSessionService;
+        this.instrumentTokenSyncService = instrumentTokenSyncService;
+        this.stockUniverseRepository = stockUniverseRepository;
+        this.instrumentMasterRepository = instrumentMasterRepository;
+        this.eodDataEntryService = eodDataEntryService;
+        this.volumeBaselineService = volumeBaselineService;
+        this.runtimeSettingService = runtimeSettingService;
+        this.workflowStatusService = workflowStatusService;
+        this.runtimeAutomationService = runtimeAutomationService;
+        this.runtimeAutomationProperties = runtimeAutomationProperties;
+        this.angelOneProperties = angelOneProperties;
+        this.timeProvider = timeProvider;
+        this.eodReconciliationService = eodReconciliationService;
+        this.riskEngineProvider = riskEngineProvider;
+        this.positionManagerServiceProvider = positionManagerServiceProvider;
+    }
+
+    // Convenience constructor for tests and backward compatibility
+    public PreMarketWorkflowService(
+            MarketCalendarService marketCalendarService,
+            TradingCalendar tradingCalendar,
+            RuntimeHousekeepingService runtimeHousekeepingService,
+            AngelOneInstrumentCatalogSyncService catalogSyncService,
+            InstrumentMasterSyncService instrumentMasterSyncService,
+            AngelOneSessionService angelOneSessionService,
+            InstrumentTokenSyncService instrumentTokenSyncService,
+            StockUniverseRepository stockUniverseRepository,
+            InstrumentMasterRepository instrumentMasterRepository,
+            EodDataEntryService eodDataEntryService,
+            VolumeBaselineService volumeBaselineService,
+            RuntimeSettingService runtimeSettingService,
+            WorkflowStatusService workflowStatusService,
+            RuntimeAutomationService runtimeAutomationService,
+            RuntimeAutomationProperties runtimeAutomationProperties,
+            AngelOneProperties angelOneProperties,
+            TimeProvider timeProvider,
+            com.trading.scanner.service.data.EodReconciliationService eodReconciliationService) {
+        this(marketCalendarService, tradingCalendar, runtimeHousekeepingService, catalogSyncService,
+                instrumentMasterSyncService, angelOneSessionService, instrumentTokenSyncService,
+                stockUniverseRepository, instrumentMasterRepository, eodDataEntryService,
+                volumeBaselineService, runtimeSettingService, workflowStatusService,
+                runtimeAutomationService, runtimeAutomationProperties, angelOneProperties,
+                timeProvider, eodReconciliationService, null, null);
+    }
 
     /**
      * 07:00 AM Morning Maintenance Chain:
@@ -90,6 +164,26 @@ public class PreMarketWorkflowService {
             // Step 1: trading-day-init
             WorkflowStatus dayInit = executeStage(WorkflowStatusService.TRADING_DAY_INIT, today, null, () -> {
                 runtimeSettingService.setProcessDate(today);
+
+                // Fail-safe daily reset for Risk Engine and Position Manager
+                try {
+                    com.trading.scanner.risk.RiskEngine re = riskEngineProvider.getIfAvailable();
+                    if (re != null) {
+                        re.resetForNewDay(today);
+                    }
+                } catch (Exception ex) {
+                    log.warn("RiskEngine resetForNewDay warning: {}", ex.getMessage());
+                }
+
+                try {
+                    com.trading.scanner.position.PositionManagerService pms = positionManagerServiceProvider.getIfAvailable();
+                    if (pms != null) {
+                        pms.resetForNewDay();
+                    }
+                } catch (Exception ex) {
+                    log.warn("PositionManagerService resetForNewDay warning: {}", ex.getMessage());
+                }
+
                 return "Trading day initialized successfully for date: " + today;
             });
 

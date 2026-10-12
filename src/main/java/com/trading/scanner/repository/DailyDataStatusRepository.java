@@ -23,5 +23,7 @@ public interface DailyDataStatusRepository extends JpaRepository<DailyDataStatus
             LocalDate tradingDate,
             DataStatus status);
 
+    long deleteByTradingDate(LocalDate tradingDate);
+
     long deleteByTradingDateBefore(LocalDate tradingDate);
 }

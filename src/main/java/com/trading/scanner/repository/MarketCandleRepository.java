@@ -50,9 +50,15 @@ public interface MarketCandleRepository
                         CandleTimeframe timeframe,
                         String source);
 
-        long countBySource(String source);
+        long countByTimeframeAndCandleTime(
+                        CandleTimeframe timeframe,
+                        LocalDateTime candleTime);
 
         long deleteByTimeframeAndCandleTimeBefore(
                         CandleTimeframe timeframe,
                         LocalDateTime candleTime);
+
+        long deleteByCandleTimeBetween(
+                        LocalDateTime from,
+                        LocalDateTime to);
 }

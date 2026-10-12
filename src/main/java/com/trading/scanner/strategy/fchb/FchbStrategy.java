@@ -77,7 +77,10 @@ public class FchbStrategy implements Strategy {
         if (daily.getPrevDayRangePct() != null && daily.getPrevDayRangePct() > 4.0) {
             return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("PREV_DAY_RANGE_MAX_4"), "PREV_DAY_RANGE_EXCEEDS_4_PCT");
         }
-        if (daily.getDistFromResistancePct() != null && daily.getDistFromResistancePct() < 1.0) {
+        if (daily.getDistFromResistancePct() == null) {
+            return StrategyEvaluation.notEvaluable("RESISTANCE_DATA_INCOMPLETE");
+        }
+        if (daily.getDistFromResistancePct() < 1.0) {
             return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("RESISTANCE_DISTANCE_MIN_1"), "RESISTANCE_CLOSER_THAN_1_PCT");
         }
 

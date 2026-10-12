@@ -1248,7 +1248,7 @@ public class LiveMarketCandleService {
                 return CandleQualityStatus.LIVE;
         }
 
-        static void applyCandleStructure(
+        public static void applyCandleStructure(
                         MarketCandle candle) {
 
                 if (candle == null

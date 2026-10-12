@@ -23,7 +23,6 @@ import java.time.LocalTime;
 import java.util.UUID;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class RuntimeAutomationService {
 
@@ -68,6 +67,55 @@ public class RuntimeAutomationService {
         private final TimeProvider timeProvider;
 
         private final WorkflowStatusService workflowStatusService;
+
+        private final org.springframework.beans.factory.ObjectProvider<MarketQuoteSyncService> marketQuoteSyncServiceProvider;
+
+        @org.springframework.beans.factory.annotation.Autowired
+        public RuntimeAutomationService(
+                        AngelOneSessionService angelOneSessionService,
+                        AngelOneWebSocketService angelOneWebSocketService,
+                        UniverseWebSocketSubscriptionService universeWebSocketSubscriptionService,
+                        LiveMarketCandleService liveMarketCandleService,
+                        WebSocketFrameCaptureService webSocketFrameCaptureService,
+                        RuntimeSettingService runtimeSettingService,
+                        RuntimeAutomationProperties runtimeAutomationProperties,
+                        RuntimeReadinessService runtimeReadinessService,
+                        RuntimeBootstrapService runtimeBootstrapService,
+                        TimeProvider timeProvider,
+                        WorkflowStatusService workflowStatusService,
+                        org.springframework.beans.factory.ObjectProvider<MarketQuoteSyncService> marketQuoteSyncServiceProvider) {
+                this.angelOneSessionService = angelOneSessionService;
+                this.angelOneWebSocketService = angelOneWebSocketService;
+                this.universeWebSocketSubscriptionService = universeWebSocketSubscriptionService;
+                this.liveMarketCandleService = liveMarketCandleService;
+                this.webSocketFrameCaptureService = webSocketFrameCaptureService;
+                this.runtimeSettingService = runtimeSettingService;
+                this.runtimeAutomationProperties = runtimeAutomationProperties;
+                this.runtimeReadinessService = runtimeReadinessService;
+                this.runtimeBootstrapService = runtimeBootstrapService;
+                this.timeProvider = timeProvider;
+                this.workflowStatusService = workflowStatusService;
+                this.marketQuoteSyncServiceProvider = marketQuoteSyncServiceProvider;
+        }
+
+        // Convenience constructor for tests and backward compatibility
+        public RuntimeAutomationService(
+                        AngelOneSessionService angelOneSessionService,
+                        AngelOneWebSocketService angelOneWebSocketService,
+                        UniverseWebSocketSubscriptionService universeWebSocketSubscriptionService,
+                        LiveMarketCandleService liveMarketCandleService,
+                        WebSocketFrameCaptureService webSocketFrameCaptureService,
+                        RuntimeSettingService runtimeSettingService,
+                        RuntimeAutomationProperties runtimeAutomationProperties,
+                        RuntimeReadinessService runtimeReadinessService,
+                        RuntimeBootstrapService runtimeBootstrapService,
+                        TimeProvider timeProvider,
+                        WorkflowStatusService workflowStatusService) {
+                this(angelOneSessionService, angelOneWebSocketService, universeWebSocketSubscriptionService,
+                                liveMarketCandleService, webSocketFrameCaptureService, runtimeSettingService,
+                                runtimeAutomationProperties, runtimeReadinessService, runtimeBootstrapService,
+                                timeProvider, workflowStatusService, null);
+        }
 
         private volatile LocalDateTime nextWebsocketCloseCheckAt;
 
@@ -399,6 +447,16 @@ public class RuntimeAutomationService {
                         lastRecoverySuccessAt = timeProvider.nowDateTime();
 
                         lastRecoveryMessage = "Recovered live runtime successfully";
+
+                        // Disruption auto-recovery: sync 09:08 pre-market quotes if missing
+                        try {
+                                MarketQuoteSyncService quoteService = marketQuoteSyncServiceProvider.getIfAvailable();
+                                if (quoteService != null) {
+                                        quoteService.syncMarketQuotesIfMissing(now.toLocalDate());
+                                }
+                        } catch (Exception ex) {
+                                log.warn("Market quote sync check after live recovery warning: {}", ex.getMessage());
+                        }
 
                         return new RuntimeActionResult(
                                         "LIVE_RUNTIME_RECOVERY",

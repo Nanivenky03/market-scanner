@@ -34,4 +34,6 @@ public interface BackfillJobRepository extends JpaRepository<BackfillJob, Intege
         List<BackfillJob> findByStatusAndTradingDate(
                         BackfillJobStatus status,
                         LocalDate tradingDate);
+
+        long deleteByTradingDate(LocalDate tradingDate);
 }
