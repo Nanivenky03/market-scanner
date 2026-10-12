@@ -233,7 +233,7 @@ public class RuntimeAlertService {
 
                         upsertOpen(
                                         ALERT_KEY_CALENDAR_REFRESH_FAILED,
-                                        "HIGH",
+                                        "MEDIUM",
                                         "Official NSE holiday refresh failed",
                                         nullableDetails(
                                                         "lastRefreshAt",

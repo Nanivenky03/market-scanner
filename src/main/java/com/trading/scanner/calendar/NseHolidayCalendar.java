@@ -19,6 +19,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Manages the holiday and special session calendar for the National Stock
  * Exchange (NSE) of India.
@@ -26,6 +28,7 @@ import java.util.stream.Stream;
  * persisted in DB.
  */
 @RequiredArgsConstructor
+@Slf4j
 public class NseHolidayCalendar {
 
     private static final String EXCHANGE_NSE = "NSE";
@@ -109,7 +112,13 @@ public class NseHolidayCalendar {
 
     @PostConstruct
     void bootstrapPersistedHolidays() {
-        refreshPersistedHolidaysFromStaticAuthority();
+        long existingCount = exchangeHolidayRepository.countByExchange(EXCHANGE_NSE);
+        if (existingCount == 0) {
+            log.info("Exchange holiday table is empty for NSE. Bootstrapping initial holidays from static authority...");
+            refreshPersistedHolidaysFromStaticAuthority();
+        } else {
+            log.info("Exchange holiday table already seeded for NSE (count={}). Skipping static bootstrap to preserve runtime truth.", existingCount);
+        }
     }
 
     public HolidayRefreshResult refreshPersistedHolidaysFromStaticAuthority() {

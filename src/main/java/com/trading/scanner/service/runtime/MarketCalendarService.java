@@ -22,6 +22,12 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.net.CookieManager;
+import java.net.CookiePolicy;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -29,7 +35,7 @@ import java.util.Map;
 import java.util.Optional;
 
 @Service
-@RequiredArgsConstructor
+@Slf4j
 public class MarketCalendarService {
 
     private static final String EXCHANGE_NSE = "NSE";
@@ -64,6 +70,37 @@ public class MarketCalendarService {
 
     private final ObjectMapper objectMapper;
 
+    private final ObjectProvider<RuntimeAlertService> runtimeAlertServiceProvider;
+
+    @Autowired
+    public MarketCalendarService(
+            NseHolidayCalendar nseHolidayCalendar,
+            ExchangeHolidayRepository exchangeHolidayRepository,
+            RuntimeAutomationProperties runtimeAutomationProperties,
+            RuntimeSettingService runtimeSettingService,
+            TimeProvider timeProvider,
+            ObjectMapper objectMapper,
+            ObjectProvider<RuntimeAlertService> runtimeAlertServiceProvider) {
+        this.nseHolidayCalendar = nseHolidayCalendar;
+        this.exchangeHolidayRepository = exchangeHolidayRepository;
+        this.runtimeAutomationProperties = runtimeAutomationProperties;
+        this.runtimeSettingService = runtimeSettingService;
+        this.timeProvider = timeProvider;
+        this.objectMapper = objectMapper;
+        this.runtimeAlertServiceProvider = runtimeAlertServiceProvider;
+    }
+
+    public MarketCalendarService(
+            NseHolidayCalendar nseHolidayCalendar,
+            ExchangeHolidayRepository exchangeHolidayRepository,
+            RuntimeAutomationProperties runtimeAutomationProperties,
+            RuntimeSettingService runtimeSettingService,
+            TimeProvider timeProvider,
+            ObjectMapper objectMapper) {
+        this(nseHolidayCalendar, exchangeHolidayRepository, runtimeAutomationProperties,
+                runtimeSettingService, timeProvider, objectMapper, null);
+    }
+
     @Transactional(readOnly = true)
     public List<ExchangeHoliday> holidays(
             LocalDate fromDate,
@@ -94,25 +131,44 @@ public class MarketCalendarService {
 
         Map<LocalDate, String> parsedHolidays = new LinkedHashMap<>();
 
-        parsedHolidays.putAll(
-                parseOfficialNseTradingHolidayPayload(
-                        fetchOfficialNseTradingHolidayPayload(
-                                now.getYear())));
+        Map<LocalDate, String> currentYearHolidays = parseOfficialNseTradingHolidayPayload(
+                fetchOfficialNseTradingHolidayPayload(now.getYear()));
+
+        if (currentYearHolidays == null || currentYearHolidays.size() < 10) {
+            throw new IllegalStateException("Parsed holiday count for year " + now.getYear()
+                    + " is unexpectedly low (" + (currentYearHolidays == null ? 0 : currentYearHolidays.size())
+                    + "). Aborting sync to prevent data corruption.");
+        }
+        parsedHolidays.putAll(currentYearHolidays);
 
         if (now.getMonthValue() == 12) {
-            parsedHolidays.putAll(
-                    parseOfficialNseTradingHolidayPayload(
-                            fetchOfficialNseTradingHolidayPayload(
-                                    now.getYear() + 1)));
+            try {
+                Map<LocalDate, String> nextYearHolidays = parseOfficialNseTradingHolidayPayload(
+                        fetchOfficialNseTradingHolidayPayload(now.getYear() + 1));
+                if (nextYearHolidays != null && nextYearHolidays.size() >= 10) {
+                    parsedHolidays.putAll(nextYearHolidays);
+                } else {
+                    log.warn("Next year holiday count is low ({}). Skipping next year payload to avoid corruption.",
+                            nextYearHolidays == null ? 0 : nextYearHolidays.size());
+                }
+            } catch (Exception ex) {
+                log.warn("Failed to fetch next year's holiday calendar in December: {}", ex.getMessage());
+            }
         }
 
         int inserted = 0;
         int updated = 0;
 
-        for (Map.Entry<LocalDate, String> entry : parsedHolidays.entrySet()) {
+        LocalDate today = now.toLocalDate();
 
+        for (Map.Entry<LocalDate, String> entry : parsedHolidays.entrySet()) {
             LocalDate tradingDate = entry.getKey();
             String description = entry.getValue();
+
+            // Strictly synchronize upcoming holidays (>= today); past historical holidays are immutable
+            if (tradingDate.isBefore(today)) {
+                continue;
+            }
 
             Optional<ExchangeHoliday> existing = exchangeHolidayRepository
                     .findByExchangeAndTradingDate(
@@ -121,19 +177,14 @@ public class MarketCalendarService {
 
             if (existing.isPresent()) {
                 ExchangeHoliday holiday = existing.get();
-
                 boolean changed = false;
 
-                if (!description.equals(
-                        holiday.getDescription())) {
-
+                if (!description.equals(holiday.getDescription())) {
                     holiday.setDescription(description);
                     changed = true;
                 }
 
-                if (!SOURCE_OFFICIAL_NSE.equals(
-                        holiday.getSource())) {
-
+                if (!SOURCE_OFFICIAL_NSE.equals(holiday.getSource())) {
                     holiday.setSource(SOURCE_OFFICIAL_NSE);
                     changed = true;
                 }
@@ -143,7 +194,6 @@ public class MarketCalendarService {
                     exchangeHolidayRepository.save(holiday);
                     updated++;
                 }
-
             } else {
                 exchangeHolidayRepository.save(
                         ExchangeHoliday.builder()
@@ -154,16 +204,14 @@ public class MarketCalendarService {
                                 .createdAt(now)
                                 .updatedAt(now)
                                 .build());
-
                 inserted++;
             }
         }
 
-        int currentYear = now.getYear();
-        LocalDate rangeStart = LocalDate.of(currentYear, 1, 1);
+        LocalDate rangeStart = today; // Strictly from today onwards; past historical dates are immutable!
         LocalDate rangeEnd = (now.getMonthValue() == 12)
-                ? LocalDate.of(currentYear + 1, 12, 31)
-                : LocalDate.of(currentYear, 12, 31);
+                ? LocalDate.of(now.getYear() + 1, 12, 31)
+                : LocalDate.of(now.getYear(), 12, 31);
 
         List<ExchangeHoliday> existingForRange = exchangeHolidayRepository
                 .findByExchangeAndTradingDateBetweenOrderByTradingDateAsc(
@@ -206,31 +254,6 @@ public class MarketCalendarService {
 
         LocalDate currentDate = currentDateTime.toLocalDate();
 
-        LocalTime currentTime = currentDateTime.toLocalTime();
-
-        LocalTime configuredTime = LocalTime.parse(
-                runtimeAutomationProperties
-                        .getCalendar()
-                        .getRefreshCheckTime());
-
-        if (currentDate.getDayOfWeek() != DayOfWeek.MONDAY) {
-            return new ScheduledCalendarRefreshResult(
-                    "NO_ACTION",
-                    0,
-                    0,
-                    0,
-                    "Skipped calendar refresh because today is not Monday");
-        }
-
-        if (currentTime.isBefore(configuredTime)) {
-            return new ScheduledCalendarRefreshResult(
-                    "NO_ACTION",
-                    0,
-                    0,
-                    0,
-                    "Skipped calendar refresh because current time is before configured refresh time");
-        }
-
         String refreshWeekKey = currentDate
                 .with(TemporalAdjusters.previousOrSame(
                         DayOfWeek.MONDAY))
@@ -246,7 +269,7 @@ public class MarketCalendarService {
                     0,
                     0,
                     0,
-                    "Skipped calendar refresh because this Monday was already refreshed");
+                    "Skipped calendar refresh because current week (" + refreshWeekKey + ") was already refreshed");
         }
 
         try {
@@ -280,6 +303,8 @@ public class MarketCalendarService {
                     "Last official holiday refresh message",
                     UPDATED_BY_SYSTEM);
 
+            evaluateAlertsIfAvailable();
+
             return new ScheduledCalendarRefreshResult(
                     "REFRESHED",
                     result.parsedHolidays(),
@@ -288,6 +313,8 @@ public class MarketCalendarService {
                     "Calendar refreshed from official NSE source");
 
         } catch (Exception ex) {
+            log.error("Official NSE holiday refresh failed during scheduled check: {}", ex.getMessage());
+
             runtimeSettingService.upsert(
                     KEY_LAST_OFFICIAL_REFRESH_AT,
                     currentDateTime.toString(),
@@ -309,53 +336,115 @@ public class MarketCalendarService {
                     "Last official holiday refresh message",
                     UPDATED_BY_SYSTEM);
 
-            throw ex;
+            evaluateAlertsIfAvailable();
+
+            return new ScheduledCalendarRefreshResult(
+                    "FAILED",
+                    0,
+                    0,
+                    0,
+                    "Failed to refresh calendar from official NSE source: " + ex.getMessage());
         }
     }
 
-    protected String fetchOfficialNseTradingHolidayPayload(
-            int year) {
+    private void evaluateAlertsIfAvailable() {
+        if (runtimeAlertServiceProvider != null) {
+            RuntimeAlertService alertService = runtimeAlertServiceProvider.getIfAvailable();
+            if (alertService != null) {
+                try {
+                    alertService.evaluateNow();
+                } catch (Exception ex) {
+                    log.warn("Failed to evaluate alerts after calendar refresh: {}", ex.getMessage());
+                }
+            }
+        }
+    }
 
+    protected String fetchOfficialNseTradingHolidayPayload(int year) {
+        int maxAttempts = 3;
+        long waitMs = 1000L;
+        Exception lastException = null;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return executeNseHolidayFetch(year);
+            } catch (Exception ex) {
+                lastException = ex;
+                log.warn("Attempt {}/{} to fetch official NSE holiday payload for year {} failed: {}",
+                        attempt, maxAttempts, year, ex.getMessage());
+                if (attempt < maxAttempts) {
+                    try {
+                        Thread.sleep(waitMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("Interrupted while waiting to retry NSE holiday fetch", ie);
+                    }
+                    waitMs *= 2;
+                }
+            }
+        }
+        throw new IllegalStateException("Failed to fetch official NSE trading holiday API after "
+                + maxAttempts + " attempts: " + (lastException != null ? lastException.getMessage() : "Unknown error"),
+                lastException);
+    }
+
+    private String executeNseHolidayFetch(int year) throws Exception {
+        CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
+        HttpClient client = HttpClient.newBuilder()
+                .cookieHandler(cookieManager)
+                .followRedirects(HttpClient.Redirect.ALWAYS)
+                .connectTimeout(Duration.ofMillis(runtimeAutomationProperties.getCalendar().getRefreshTimeoutMs()))
+                .build();
+
+        // 1. Warm up browser session to acquire Akamai cookies
         try {
-            String url = String.format(
-                    runtimeAutomationProperties
-                            .getCalendar()
-                            .getOfficialNseTradingApiUrlTemplate(),
-                    year);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofMillis(
-                            runtimeAutomationProperties
-                                    .getCalendar()
-                                    .getRefreshTimeoutMs()))
-                    .header("User-Agent", "Mozilla/5.0")
-                    .header(
-                            "Accept",
-                            "application/json,text/plain,*/*")
+            HttpRequest homeRequest = HttpRequest.newBuilder()
+                    .uri(URI.create("https://www.nseindia.com"))
+                    .timeout(Duration.ofMillis(runtimeAutomationProperties.getCalendar().getRefreshTimeoutMs()))
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                    .header("Accept-Language", "en-US,en;q=0.9")
+                    .header("Cache-Control", "no-cache")
+                    .header("Pragma", "no-cache")
                     .GET()
                     .build();
 
-            HttpResponse<String> response = HttpClient.newHttpClient()
-                    .send(
-                            request,
-                            HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() < 200
-                    || response.statusCode() >= 300) {
-
-                throw new IllegalStateException(
-                        "Official NSE holiday API returned HTTP "
-                                + response.statusCode());
-            }
-
-            return response.body();
-
+            client.send(homeRequest, HttpResponse.BodyHandlers.discarding());
         } catch (Exception ex) {
-            throw new IllegalStateException(
-                    "Failed to fetch official NSE trading holiday API",
-                    ex);
+            log.debug("NSE session warmup warning (proceeding to API call): {}", ex.getMessage());
         }
+
+        // 2. Query holiday API with browser headers, referer, and cookies
+        String url = String.format(
+                runtimeAutomationProperties
+                        .getCalendar()
+                        .getOfficialNseTradingApiUrlTemplate(),
+                year);
+
+        HttpRequest apiRequest = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofMillis(
+                        runtimeAutomationProperties
+                                .getCalendar()
+                                .getRefreshTimeoutMs()))
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                .header("Accept", "application/json,text/plain,*/*")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Referer", "https://www.nseindia.com/resources/exchange-communication-holidays")
+                .header("Cache-Control", "no-cache")
+                .GET()
+                .build();
+
+        HttpResponse<String> response = client.send(
+                apiRequest,
+                HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalStateException(
+                    "Official NSE holiday API returned HTTP " + response.statusCode());
+        }
+
+        return response.body();
     }
 
     protected Map<LocalDate, String> parseOfficialNseTradingHolidayPayload(

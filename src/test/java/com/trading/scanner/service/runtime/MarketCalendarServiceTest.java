@@ -100,7 +100,7 @@ class MarketCalendarServiceTest {
 
         @Test
         void refreshFromOfficialNseSource_shouldInsertParsedHolidays_fromRealFixture() throws Exception {
-                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
+                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 1, 1, 9, 0));
 
                 String payload = loadFixture("contracts/nse-holiday-trading-2026.json");
                 doReturn(payload).when(marketCalendarService).fetchOfficialNseTradingHolidayPayload(2026);
@@ -125,7 +125,7 @@ class MarketCalendarServiceTest {
 
         @Test
         void refreshFromOfficialNseSource_shouldUpdateExistingHolidayWhenDescriptionChanges() throws Exception {
-                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
+                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 1, 1, 9, 0));
 
                 String payload = loadFixture("contracts/nse-holiday-trading-2026.json");
                 doReturn(payload).when(marketCalendarService).fetchOfficialNseTradingHolidayPayload(2026);
@@ -156,6 +156,25 @@ class MarketCalendarServiceTest {
         }
 
         @Test
+        void refreshFromOfficialNseSource_shouldSkipPastHolidays_whenRunningMidYear() throws Exception {
+                // Running on July 8, 2026
+                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
+
+                String payload = loadFixture("contracts/nse-holiday-trading-2026.json");
+                doReturn(payload).when(marketCalendarService).fetchOfficialNseTradingHolidayPayload(2026);
+
+                when(exchangeHolidayRepository.findByExchangeAndTradingDate(anyString(), any(LocalDate.class)))
+                                .thenReturn(Optional.empty());
+
+                MarketCalendarService.OfficialHolidayRefreshResult result = marketCalendarService
+                                .refreshFromOfficialNseSource();
+
+                // Exactly 8 holidays occur after July 8, 2026 in the fixture
+                assertEquals(8, result.insertedHolidays());
+                assertEquals(REAL_CM_FIXTURE_HOLIDAY_COUNT, result.parsedHolidays());
+        }
+
+        @Test
         void refreshFromOfficialNseSource_shouldPruneObsoleteOrInvalidHolidays() throws Exception {
                 when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
 
@@ -174,7 +193,7 @@ class MarketCalendarServiceTest {
 
                 when(exchangeHolidayRepository.findByExchangeAndTradingDateBetweenOrderByTradingDateAsc(
                                 eq("NSE"),
-                                eq(LocalDate.of(2026, 1, 1)),
+                                eq(LocalDate.of(2026, 7, 8)),
                                 eq(LocalDate.of(2026, 12, 31))))
                                 .thenReturn(List.of(obsoleteHoliday));
 
@@ -183,6 +202,31 @@ class MarketCalendarServiceTest {
 
                 verify(exchangeHolidayRepository, times(1)).delete(obsoleteHoliday);
                 assertTrue(result.message().contains("deleted=1"));
+        }
+
+        @Test
+        void refreshFromOfficialNseSource_whenParsedCountTooLow_shouldAbortWithCircuitBreaker() throws Exception {
+                when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
+
+                // Corrupted or incomplete payload returning only 2 holidays
+                String smallPayload = """
+                        {
+                            "CM": [
+                                { "tradingDate": "26-Jan-2026", "description": "Republic Day" },
+                                { "tradingDate": "15-Aug-2026", "description": "Independence Day" }
+                            ]
+                        }
+                        """;
+                doReturn(smallPayload).when(marketCalendarService).fetchOfficialNseTradingHolidayPayload(2026);
+
+                try {
+                        marketCalendarService.refreshFromOfficialNseSource();
+                } catch (IllegalStateException ex) {
+                        assertTrue(ex.getMessage().contains("unexpectedly low"));
+                }
+
+                // Verify circuit breaker prevented any deletion or alteration in DB
+                verify(exchangeHolidayRepository, never()).delete(any());
         }
 
         @Test
@@ -198,39 +242,20 @@ class MarketCalendarServiceTest {
         }
 
         @Test
-        void refreshFromOfficialSourceIfDue_shouldSkipWhenNotConfiguredDay() {
-                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 25, 20, 0);
+        void refreshFromOfficialSourceIfDue_shouldSkipWhenAutoRefreshDisabled() {
+                runtimeAutomationProperties.getCalendar().setAutoRefresh(false);
+                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 27, 7, 0);
 
                 MarketCalendarService.ScheduledCalendarRefreshResult result = marketCalendarService
                                 .refreshFromOfficialSourceIfDue(currentDateTime);
 
                 assertEquals("NO_ACTION", result.action());
-        }
-
-        @Test
-        void refreshFromOfficialSourceIfDue_shouldSkipWhenNotLastConfiguredDayOfMonth() {
-                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 19, 20, 0);
-
-                MarketCalendarService.ScheduledCalendarRefreshResult result = marketCalendarService
-                                .refreshFromOfficialSourceIfDue(currentDateTime);
-
-                assertEquals("NO_ACTION", result.action());
-        }
-
-        @Test
-        void refreshFromOfficialSourceIfDue_shouldSkipWhenBeforeConfiguredTime() {
-                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 27, 5, 30);
-
-                MarketCalendarService.ScheduledCalendarRefreshResult result = marketCalendarService
-                                .refreshFromOfficialSourceIfDue(
-                                                currentDateTime);
-
-                assertEquals("NO_ACTION", result.action());
+                assertTrue(result.message().contains("auto-refresh is disabled"));
         }
 
         @Test
         void refreshFromOfficialSourceIfDue_shouldSkipWhenWeekAlreadyRefreshed() {
-                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 27, 6, 30);
+                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 27, 7, 0);
 
                 when(runtimeSettingService.getString(
                                 "calendar.last.official.refresh.week",
@@ -242,22 +267,13 @@ class MarketCalendarServiceTest {
                                                 currentDateTime);
 
                 assertEquals("NO_ACTION", result.action());
+                assertTrue(result.message().contains("already refreshed"));
         }
 
         @Test
-        void refreshFromOfficialSourceIfDue_shouldSkipWhenNotMonday() {
-                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 19, 20, 0);
-
-                MarketCalendarService.ScheduledCalendarRefreshResult result = marketCalendarService
-                                .refreshFromOfficialSourceIfDue(
-                                                currentDateTime);
-
-                assertEquals("NO_ACTION", result.action());
-        }
-
-        @Test
-        void refreshFromOfficialSourceIfDue_shouldRefreshOnMondayAfterConfiguredTime() {
-                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 27, 6, 30);
+        void refreshFromOfficialSourceIfDue_shouldRefreshOnTuesdayIfWeekNotYetRefreshed() {
+                // Tuesday morning boot when Monday was offline
+                LocalDateTime tuesdayMorning = LocalDateTime.of(2026, 7, 28, 7, 0);
 
                 when(runtimeSettingService.getString(
                                 "calendar.last.official.refresh.week",
@@ -274,7 +290,40 @@ class MarketCalendarServiceTest {
 
                 MarketCalendarService.ScheduledCalendarRefreshResult result = marketCalendarService
                                 .refreshFromOfficialSourceIfDue(
-                                                currentDateTime);
+                                                tuesdayMorning);
+
+                assertEquals("REFRESHED", result.action());
+                assertEquals(12, result.parsedHolidays());
+
+                // Records Monday of current week as the key
+                verify(runtimeSettingService, times(1)).upsert(
+                                eq("calendar.last.official.refresh.week"),
+                                eq("2026-07-27"),
+                                eq("DATE"),
+                                anyString(),
+                                eq("system"));
+        }
+
+        @Test
+        void refreshFromOfficialSourceIfDue_shouldRefreshOnMondayAtMorningMaintenance() {
+                LocalDateTime mondayMorning = LocalDateTime.of(2026, 7, 27, 7, 0);
+
+                when(runtimeSettingService.getString(
+                                "calendar.last.official.refresh.week",
+                                ""))
+                                .thenReturn("");
+
+                doReturn(new MarketCalendarService.OfficialHolidayRefreshResult(
+                                12,
+                                2,
+                                1,
+                                "Exchange holidays refreshed from official NSE source"))
+                                .when(marketCalendarService)
+                                .refreshFromOfficialNseSource();
+
+                MarketCalendarService.ScheduledCalendarRefreshResult result = marketCalendarService
+                                .refreshFromOfficialSourceIfDue(
+                                                mondayMorning);
 
                 assertEquals("REFRESHED", result.action());
                 assertEquals(12, result.parsedHolidays());
@@ -298,7 +347,7 @@ class MarketCalendarServiceTest {
 
         @Test
         void refreshFromOfficialSourceIfDue_shouldMarkFailureWhenRefreshThrows() {
-                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 27, 6, 30);
+                LocalDateTime currentDateTime = LocalDateTime.of(2026, 7, 27, 7, 0);
 
                 when(runtimeSettingService.getString(
                                 "calendar.last.official.refresh.week",
@@ -309,14 +358,12 @@ class MarketCalendarServiceTest {
                                 .when(marketCalendarService)
                                 .refreshFromOfficialNseSource();
 
-                try {
-                        marketCalendarService.refreshFromOfficialSourceIfDue(
-                                        currentDateTime);
-                } catch (IllegalStateException ex) {
-                        assertEquals(
-                                        "NSE source unavailable",
-                                        ex.getMessage());
-                }
+                MarketCalendarService.ScheduledCalendarRefreshResult result = marketCalendarService
+                                .refreshFromOfficialSourceIfDue(
+                                                currentDateTime);
+
+                assertEquals("FAILED", result.action());
+                assertTrue(result.message().contains("NSE source unavailable"));
 
                 verify(runtimeSettingService, times(1)).upsert(
                                 eq("calendar.last.official.refresh.status"),

@@ -73,4 +73,25 @@ class NseHolidayCalendarTest {
         assertEquals("STATIC_BOOTSTRAP", saved.get(0).getSource());
         assertEquals(saved.size(), result.insertedHolidays());
     }
+
+    @Test
+    void bootstrapPersistedHolidays_whenAlreadySeeded_shouldSkipStaticSeeding() {
+        when(exchangeHolidayRepository.countByExchange("NSE")).thenReturn(15L);
+
+        nseHolidayCalendar.bootstrapPersistedHolidays();
+
+        verify(exchangeHolidayRepository, never()).findByExchangeOrderByTradingDateAsc(anyString());
+        verify(exchangeHolidayRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    void bootstrapPersistedHolidays_whenEmpty_shouldSeedFromStaticAuthority() {
+        when(exchangeHolidayRepository.countByExchange("NSE")).thenReturn(0L);
+        when(exchangeHolidayRepository.findByExchangeOrderByTradingDateAsc("NSE")).thenReturn(List.of());
+        when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 7, 8, 9, 0));
+
+        nseHolidayCalendar.bootstrapPersistedHolidays();
+
+        verify(exchangeHolidayRepository, times(1)).saveAll(anyList());
+    }
 }
