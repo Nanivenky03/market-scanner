@@ -775,6 +775,7 @@ Before running end-to-end backtesting orchestration in V2.4, V2.3 proves the Ris
 | `/admin/runtime/connect-and-subscribe` | `POST` | Manually connect WebSocket and subscribe active universe |
 | `/admin/runtime/flush-and-disconnect` | `POST` | Manually flush live candles and disconnect WebSocket |
 | `/admin/runtime/eod/reconcile` | `POST` | Trigger on-demand 375-minute EOD reconciliation for any trading date |
+| `/admin/runtime/day/restart-today-workflow` | `POST` | Restart entire today's workflow from scratch (purge partial candles/context, run premarket 1-6, fetch 09:08 auction quotes, connect WS, queue morning backfill) |
 | `/admin/runtime/housekeeping/run` | `POST` | Run historical data housekeeping purge on demand |
 | `/admin/runtime/alerts` | `GET` | List all runtime alerts and their current resolution status |
 
@@ -816,7 +817,7 @@ Before running end-to-end backtesting orchestration in V2.4, V2.3 proves the Ris
 - [x] **V2.1: Domain Contracts & Evaluation Infrastructure** `[COMPLETED + TESTED]` (MarketState, StockContext, 0-DB backfill tracking, lock-free cache, 326 unit tests passing)
 - [x] **V2.1-FIX: Production Reliability & Hygiene Fixes** `[COMPLETED + TESTED]` (WebSocket timestamp reset & premarket transition order; 327 unit tests passing)
 - [x] **V2.2: FCHB Strategy Module (Entry Rules & Position Handler)** `[COMPLETED + TESTED]` (361 unit tests passing)
-- [ ] **V2.3: Portfolio Risk Engine & Central Position Manager** `[PLANNED]` (Dual Paper/Live PortfolioState separation)
+- [x] **V2.3: Portfolio Risk Engine, Resilience & Mid-Day Recovery** `[COMPLETED + TESTED]` (376 unit tests passing)
 - [ ] **V2.4: Master Workflow Orchestrator & Execution Adapters** `[PLANNED]`
 - [ ] **V2.5: Hardening & Historical Simulation Verification** `[PLANNED]`
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`
