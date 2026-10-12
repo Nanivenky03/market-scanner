@@ -178,7 +178,7 @@ public class PreMarketWorkflowService {
                 try {
                     com.trading.scanner.position.PositionManagerService pms = positionManagerServiceProvider.getIfAvailable();
                     if (pms != null) {
-                        pms.resetForNewDay();
+                        pms.resetForNewDay(today);
                     }
                 } catch (Exception ex) {
                     log.warn("PositionManagerService resetForNewDay warning: {}", ex.getMessage());

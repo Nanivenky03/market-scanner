@@ -9,6 +9,8 @@ import com.trading.scanner.repository.*;
 import com.trading.scanner.service.data.BackfillQueueService;
 import com.trading.scanner.service.data.LiveMarketCandleService;
 import com.trading.scanner.service.provider.angelone.AngelOneWebSocketService;
+import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
+import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
 import com.trading.scanner.strategy.cache.StockContextCache;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,6 +42,8 @@ class DayWorkflowRestartServiceTest {
 
     private StockContextCache stockContextCache;
     private LiveMarketCandleService liveMarketCandleService;
+    private LiveMarketSnapshotService liveMarketSnapshotService;
+    private WebSocketFrameCaptureService webSocketFrameCaptureService;
     private AngelOneWebSocketService angelOneWebSocketService;
     private RuntimeAutomationService runtimeAutomationService;
     private ObjectProvider<PositionManagerService> positionManagerServiceProvider;
@@ -64,6 +68,8 @@ class DayWorkflowRestartServiceTest {
 
         stockContextCache = mock(StockContextCache.class);
         liveMarketCandleService = mock(LiveMarketCandleService.class);
+        liveMarketSnapshotService = mock(LiveMarketSnapshotService.class);
+        webSocketFrameCaptureService = mock(WebSocketFrameCaptureService.class);
         angelOneWebSocketService = mock(AngelOneWebSocketService.class);
         runtimeAutomationService = mock(RuntimeAutomationService.class);
         positionManagerServiceProvider = mock(ObjectProvider.class);
@@ -82,6 +88,8 @@ class DayWorkflowRestartServiceTest {
                 stockUniverseRepository,
                 stockContextCache,
                 liveMarketCandleService,
+                liveMarketSnapshotService,
+                webSocketFrameCaptureService,
                 angelOneWebSocketService,
                 runtimeAutomationService,
                 positionManagerServiceProvider
@@ -111,7 +119,7 @@ class DayWorkflowRestartServiceTest {
     }
 
     @Test
-    @DisplayName("Should suspend watchdog, teardown ingestion, purge DB & RAM caches, re-run stages, and prioritize backfills")
+    @DisplayName("Should acquire and release watchdog hold, teardown ingestion, purge DB & RAM caches, re-run stages, and prioritize backfills")
     void restartTodayWorkflow_fullLifecycleExecution() {
         LocalDate today = LocalDate.of(2026, 10, 12);
         LocalDateTime now = LocalDateTime.of(2026, 10, 12, 11, 30);
@@ -149,9 +157,9 @@ class DayWorkflowRestartServiceTest {
         assertEquals(5L, result.deletedWorkflowStages());
         assertEquals(2, result.backfillJobsQueued());
 
-        // 1. Verify watchdog was suspended and then resumed
-        verify(runtimeAutomationService).suspendWatchdogUntil(now.plusMinutes(2));
-        verify(runtimeAutomationService).resumeWatchdog();
+        // 1. Verify watchdog was placed on HOLD and then released
+        verify(runtimeAutomationService).acquireWatchdogHold();
+        verify(runtimeAutomationService).releaseWatchdogHold();
 
         // 2. Verify ingestion teardown without dirty flush
         verify(angelOneWebSocketService).disconnect();
@@ -159,6 +167,8 @@ class DayWorkflowRestartServiceTest {
 
         // 3. Verify in-memory cache clearing
         verify(stockContextCache).clear();
+        verify(liveMarketSnapshotService).clear();
+        verify(webSocketFrameCaptureService).clear();
 
         // 4. Verify pre-market workflow stages re-run
         verify(preMarketWorkflowService).runMorningMaintenance();
@@ -176,8 +186,8 @@ class DayWorkflowRestartServiceTest {
     }
 
     @Test
-    @DisplayName("Purge should delete today's DB records and clear in-memory cache without impacting previous days")
-    void purgeTodayState_shouldDeleteOnlyTodayAndClearCache() {
+    @DisplayName("Purge should delete today's DB records and clear all in-memory caches without impacting previous days")
+    void purgeTodayState_shouldDeleteOnlyTodayAndClearAllCaches() {
         LocalDate today = LocalDate.of(2026, 10, 12);
         when(marketCandleRepository.deleteByCandleTimeBetween(
                 eq(today.atStartOfDay()), eq(today.atTime(23, 59, 59)))).thenReturn(500L);
@@ -189,5 +199,7 @@ class DayWorkflowRestartServiceTest {
         verify(dailyDataStatusRepository).deleteByTradingDate(today);
         verify(backfillJobRepository).deleteByTradingDate(today);
         verify(stockContextCache).clear();
+        verify(liveMarketSnapshotService).clear();
+        verify(webSocketFrameCaptureService).clear();
     }
 }

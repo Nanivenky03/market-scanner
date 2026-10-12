@@ -8,6 +8,8 @@ import com.trading.scanner.repository.*;
 import com.trading.scanner.service.data.BackfillQueueService;
 import com.trading.scanner.service.data.LiveMarketCandleService;
 import com.trading.scanner.service.provider.angelone.AngelOneWebSocketService;
+import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
+import com.trading.scanner.service.provider.angelone.WebSocketFrameCaptureService;
 import com.trading.scanner.strategy.cache.StockContextCache;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,12 +23,13 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Service to execute the mid-day restart of today's workflow from scratch.
  * Safely purges today's partial data (with zero impact on previous days or production order tables),
- * cleans in-memory candle sliding windows and accumulators, suspends recovery watchdogs,
- * re-executes premarket stages, synchronizes 09:08 premarket quotes,
+ * cleans all in-memory candle sliding windows, tick accumulators, snapshots and frame captures,
+ * puts recovery watchdogs on explicit HOLD, re-executes premarket stages, synchronizes 09:08 premarket quotes,
  * connects WebSocket live streaming, and enqueues prioritized historical backfills.
  */
 @Service
@@ -49,9 +52,13 @@ public class DayWorkflowRestartService {
 
     private final StockContextCache stockContextCache;
     private final LiveMarketCandleService liveMarketCandleService;
+    private final LiveMarketSnapshotService liveMarketSnapshotService;
+    private final WebSocketFrameCaptureService webSocketFrameCaptureService;
     private final AngelOneWebSocketService angelOneWebSocketService;
     private final RuntimeAutomationService runtimeAutomationService;
     private final ObjectProvider<PositionManagerService> positionManagerServiceProvider;
+
+    private final AtomicBoolean isRestartInProgress = new AtomicBoolean(false);
 
     @Value("${runtime.simulation.enabled:false}")
     private boolean simulationEnabled;
@@ -68,31 +75,36 @@ public class DayWorkflowRestartService {
 
     /**
      * Executes mid-day workflow restart for today.
-     * Strictly fails if date is not today or not a trading day.
+     * Strictly fails if date is not today or not a trading day, or if a restart is already in progress.
      */
     public DayRestartResult restartTodayWorkflow(LocalDate requestedDate) {
-        LocalDate today = timeProvider.today();
-        LocalDate targetDate = requestedDate != null ? requestedDate : today;
-
-        // Safety Gate: strictly only today is allowed
-        if (!targetDate.equals(today)) {
-            throw new IllegalArgumentException(
-                    "Workflow restart is strictly permitted only for today (" + today + "). Requested: " + targetDate);
-        }
-
-        if (!tradingCalendar.isTradingDay(targetDate)) {
-            throw new IllegalStateException("Today (" + targetDate + ") is not an active trading day");
-        }
-
-        LocalDateTime now = timeProvider.nowDateTime();
-        log.info("Starting mid-day workflow restart for date={} (simulationEnabled={})", targetDate, simulationEnabled);
-
-        // 1. Suspend watchdog for 2 minutes to prevent race conditions during restart
-        if (runtimeAutomationService != null) {
-            runtimeAutomationService.suspendWatchdogUntil(now.plusMinutes(2));
+        if (!isRestartInProgress.compareAndSet(false, true)) {
+            throw new IllegalStateException(
+                    "A mid-day workflow restart is already in progress. Concurrent restart requests are rejected.");
         }
 
         try {
+            LocalDate today = timeProvider.today();
+            LocalDate targetDate = requestedDate != null ? requestedDate : today;
+
+            // Safety Gate: strictly only today is allowed
+            if (!targetDate.equals(today)) {
+                throw new IllegalArgumentException(
+                        "Workflow restart is strictly permitted only for today (" + today + "). Requested: " + targetDate);
+            }
+
+            if (!tradingCalendar.isTradingDay(targetDate)) {
+                throw new IllegalStateException("Today (" + targetDate + ") is not an active trading day");
+            }
+
+            LocalDateTime now = timeProvider.nowDateTime();
+            log.info("Starting mid-day workflow restart for date={} (simulationEnabled={})", targetDate, simulationEnabled);
+
+            // 1. Put watchdog on explicit HOLD to prevent race conditions during restart
+            if (runtimeAutomationService != null) {
+                runtimeAutomationService.acquireWatchdogHold();
+            }
+
             // 2. Teardown active ingestion: disconnect WebSocket and discard open candles without DB flush
             if (angelOneWebSocketService != null) {
                 try {
@@ -110,7 +122,7 @@ public class DayWorkflowRestartService {
                 }
             }
 
-            // 3. Purge today's state cleanly and clear in-memory caches
+            // 3. Purge today's state cleanly and clear all in-memory caches
             long deletedCandles = purgeTodayState(targetDate);
             long deletedStages = workflowStatusRepository.deleteByProcessDate(targetDate.toString());
 
@@ -153,9 +165,10 @@ public class DayWorkflowRestartService {
                     queuedBackfills,
                     "Today's workflow restarted successfully. Live WebSocket active and prioritized backfills queued.");
         } finally {
-            // Always ensure watchdog is resumed
+            isRestartInProgress.set(false);
+            // Always ensure watchdog hold is released
             if (runtimeAutomationService != null) {
-                runtimeAutomationService.resumeWatchdog();
+                runtimeAutomationService.releaseWatchdogHold();
             }
         }
     }
@@ -173,12 +186,18 @@ public class DayWorkflowRestartService {
         dailyDataStatusRepository.deleteByTradingDate(targetDate);
         backfillJobRepository.deleteByTradingDate(targetDate);
 
-        // Clear in-memory sliding candle windows
+        // Clear all in-memory caches and state across services
         if (stockContextCache != null) {
             stockContextCache.clear();
         }
+        if (liveMarketSnapshotService != null) {
+            liveMarketSnapshotService.clear();
+        }
+        if (webSocketFrameCaptureService != null) {
+            webSocketFrameCaptureService.clear();
+        }
 
-        log.info("Purged today's state for date={}: deletedCandles={}, stockContextCache cleared", targetDate, deletedCandles);
+        log.info("Purged today's state for date={}: deletedCandles={}, all in-memory caches cleared", targetDate, deletedCandles);
         return deletedCandles;
     }
 

@@ -60,11 +60,26 @@ public class AngelOneInstrumentCatalogSyncService {
                 this(objectMapper, apiExecutor, angelOneProperties, instrumentMasterRepository, null);
         }
 
+        private volatile java.time.LocalDate lastCatalogSyncDate;
+
         @Transactional
         public CatalogSyncResult syncNseCatalog() {
                 if (!angelOneProperties.enabled()) {
                         throw new ProviderException(
                                         "Angel One provider is disabled");
+                }
+
+                java.time.LocalDate today = java.time.LocalDate.now();
+                if (today.equals(lastCatalogSyncDate) && instrumentMasterRepository.count() > 1000) {
+                        boolean niftyPresent = instrumentMasterRepository
+                                        .findBySymbolAndExchange("NIFTY", "NSE")
+                                        .isPresent();
+                        if (niftyPresent) {
+                                int count = (int) instrumentMasterRepository.count();
+                                log.info("NSE instrument catalog already synchronized for today ({}). Skipping 25MB HTTP re-download.", today);
+                                return new CatalogSyncResult(count, count, 0, 0, 0, true,
+                                                "NSE catalog already fresh for today. Re-download skipped.");
+                        }
                 }
 
                 String body = apiExecutor.getJsonForBody(
@@ -190,6 +205,8 @@ public class AngelOneInstrumentCatalogSyncService {
                 log.info(
                                 "SmartAPI NSE instrument catalog synchronized: {}",
                                 result);
+
+                this.lastCatalogSyncDate = today;
 
                 return result;
         }

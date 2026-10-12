@@ -129,7 +129,23 @@ public class RuntimeAutomationService {
 
         private volatile String lastRecoveryMessage;
 
+        private final java.util.concurrent.atomic.AtomicBoolean watchdogHold = new java.util.concurrent.atomic.AtomicBoolean(false);
         private volatile LocalDateTime watchdogSuspendedUntil;
+
+        public void acquireWatchdogHold() {
+                this.watchdogHold.set(true);
+                log.info("Runtime watchdog placed on HOLD for workflow restart");
+        }
+
+        public void releaseWatchdogHold() {
+                this.watchdogHold.set(false);
+                this.watchdogSuspendedUntil = null;
+                log.info("Runtime watchdog HOLD released; normal monitoring resumed");
+        }
+
+        public boolean isWatchdogHeld() {
+                return watchdogHold.get();
+        }
 
         public void suspendWatchdogUntil(LocalDateTime until) {
                 this.watchdogSuspendedUntil = until;
@@ -137,12 +153,11 @@ public class RuntimeAutomationService {
         }
 
         public void resumeWatchdog() {
-                this.watchdogSuspendedUntil = null;
-                log.info("Runtime watchdog resumed");
+                releaseWatchdogHold();
         }
 
         public boolean isWatchdogSuspended(LocalDateTime now) {
-                return watchdogSuspendedUntil != null && now.isBefore(watchdogSuspendedUntil);
+                return isWatchdogHeld() || (watchdogSuspendedUntil != null && now.isBefore(watchdogSuspendedUntil));
         }
 
         public RuntimeActionResult warmUpBrokerSession() {

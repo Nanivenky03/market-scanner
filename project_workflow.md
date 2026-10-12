@@ -827,11 +827,14 @@ Before running end-to-end backtesting orchestration in V2.4, V2.3 proves the Ris
     - Future-Only Pruning & Year Transition: Past trading records remain strictly immutable; synchronizes future holidays for current and $T+1$ year (active during December) to prevent Jan 1st lockout.
     - Clean Scheduling: Runs every Monday at 06:00 AM regardless of trading day status, retiring redundant Sunday checks and arbitrary 17:00 cutoffs.
   - **Track B: Mid-Day Restart & Market Quote Synchronization Hardening**
+    - Atomic Concurrency Guard: Enforced an atomic mutex (`isRestartInProgress.compareAndSet`) on `restartTodayWorkflow` preventing race conditions from duplicate or concurrent operator triggers.
+    - Explicit Watchdog HOLD Protocol: Replaced rigid timer suspensions with an active mutex hold (`acquireWatchdogHold` / `releaseWatchdogHold`); watchdogs stay on hold for the exact duration of the restart and release immediately upon completion.
+    - Comprehensive In-Memory Purge: Wipes all in-memory caches across all services during mid-day purge (`StockContextCache`, `LiveMarketCandleService.openCandles`, `LiveMarketSnapshotService.latestSnapshots`, `WebSocketFrameCaptureService`).
+    - Mid-Day Trade Count & Position Preservation: Guarded `RiskEngine.resetForNewDay(newDate)` and `PositionManagerService.resetForNewDay(newDate)` so quotas and counters only reset on strictly new calendar dates; mid-day restarts preserve `dailyTradeCount` and open positions.
+    - Smart Daily Catalog Cache Guard: Added a same-day cache check in `AngelOneInstrumentCatalogSyncService.syncNseCatalog()`; mid-day restarts skip the 25 MB JSON re-download, reducing Stage 3 execution from 8 seconds to 0.01 seconds.
     - Paced Market Quote Batching: Added 120 ms inter-batch pauses across 50-stock chunks in `AngelOneMarketDataProvider.fetchMarketQuotes` to strictly respect Angel One's 10 req/s rate limit.
-    - Lifecycle Teardown & In-Memory Purge: Cleanly disconnects WebSocket and wipes in-memory accumulators (`clearOpenCandlesWithoutPersisting`) and sliding windows (`stockContextCache.clear()`) during mid-day restarts.
-    - Watchdog Race Elimination: Automatically suspends the 60-second recovery watchdog for 2 minutes during workflow restarts to eliminate re-connection races mid-purge.
     - Prioritized Morning Backfill: Backfill queue assigns Priority 0 to tradable symbols and Priority 10 to the wider universe, unblocking strategy evaluations in ~12 seconds rather than >3 minutes.
-    - Production Order Table Preservation: Guarantees zero deletions from production order/position tables during today-only data purges, enabling immediate re-hydration.
+    - Production Order Table Preservation: Guarantees zero deletions from production order/position tables during today-only data purges.
 - [ ] **V2.4: Master Workflow Orchestrator & Execution Adapters** `[PLANNED]`
 - [ ] **V2.5: Hardening & Historical Simulation Verification** `[PLANNED]`
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`

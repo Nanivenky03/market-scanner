@@ -5,6 +5,7 @@ import com.trading.scanner.risk.model.PortfolioState;
 import com.trading.scanner.risk.model.RiskEvaluationResult;
 import com.trading.scanner.strategy.model.PositionSnapshot;
 import com.trading.scanner.strategy.model.StrategyProposal;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -20,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * or execution.
  */
 @Service
+@Slf4j
 public class RiskEngine {
 
     public static final int MAX_CONCURRENT_POSITIONS = 3;
@@ -201,10 +203,21 @@ public class RiskEngine {
      * Carries forward current capital into starting capital.
      */
     public synchronized void resetForNewDay(LocalDate newDate) {
+        if (newDate == null) {
+            return;
+        }
         for (PortfolioState portfolio : portfolios.values()) {
             if (portfolio != null) {
                 try {
-                    portfolio.resetForNewDay(newDate, portfolio.getCurrentCapital());
+                    // Strictly only reset if transitioning to a NEW calendar date!
+                    // Mid-day restarts on the same date preserve today's trade count and open positions.
+                    if (portfolio.getTradingDate() == null || newDate.isAfter(portfolio.getTradingDate())) {
+                        portfolio.resetForNewDay(newDate, portfolio.getCurrentCapital());
+                        log.info("[{}] Reset quotas for new trading day: {}", portfolio.getMode(), newDate);
+                    } else {
+                        log.info("[{}] Mid-day restart detected for date {}: preserved dailyTradeCount={}, openPositions={}",
+                                portfolio.getMode(), newDate, portfolio.getDailyTradeCount(), portfolio.getOpenPositions().size());
+                    }
                 } catch (Exception ex) {
                     // Defensive guard: never fail JVM thread
                 }

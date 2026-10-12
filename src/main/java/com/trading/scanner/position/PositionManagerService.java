@@ -226,16 +226,29 @@ public class PositionManagerService {
         }
     }
 
+    private volatile java.time.LocalDate currentTradingDate;
+
     /**
      * Resets in-memory position state for a new trading day.
+     * Strictly only clears if date is a new calendar day.
      */
-    public void resetForNewDay() {
-        for (Map<String, PositionSnapshot> map : activePositions.values()) {
-            if (map != null) {
-                map.clear();
+    public synchronized void resetForNewDay(java.time.LocalDate newDate) {
+        if (newDate != null && (currentTradingDate == null || newDate.isAfter(currentTradingDate))) {
+            for (Map<String, PositionSnapshot> map : activePositions.values()) {
+                if (map != null) {
+                    map.clear();
+                }
             }
+            symbolLocks.clear();
+            currentTradingDate = newDate;
+            log.info("PositionManagerService reset for new trading day {}", newDate);
+        } else {
+            log.info("PositionManagerService mid-day restart detected for date {}: preserved open positions", newDate);
         }
-        symbolLocks.clear();
+    }
+
+    public void resetForNewDay() {
+        resetForNewDay(java.time.LocalDate.now());
     }
 
     /**
