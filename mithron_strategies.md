@@ -97,24 +97,38 @@ Monthly expiry (last Thursday of month):
 
 ```
 Available Capital & Margin Management:
-  - Mithron tracks total trading capital, intraday margin availability (Angel One MIS provides up to 5x leverage for approved equities), margin currently committed to open positions, and unencumbered free cash.
-  - Sizing is calculated dynamically per trade based on available unencumbered capital rather than a hardcoded static amount.
+  - Mithron tracks total starting capital, live broker cash via SmartAPI RMS, margin currently committed to active positions, and unencumbered available buying power.
+  - Sizing is calculated dynamically per trade based on available margin rather than a hardcoded static amount:
+      AvailableMargin = min(LiveBrokerCash, RAM_Cash - TotalCommittedMargin)
+  - Intraday margin committed per open position (MIS 5x leverage):
+      CommittedMargin = (Quantity × EntryPrice) / 5.0
 
-Formulas:
-  riskRupees = availableTradingCapital × 0.015  (1.5% risk per trade)
-  riskPerShare = entryPrice - stopLossPrice
-  qtyRaw = riskRupees / riskPerShare
-  qtyFinal = floor(qtyRaw)
+Universal Dual-Directional Sizing Formulas:
+  riskRupees = availableTradingCapital × 0.010  (1.0% risk per trade)
+  For LONG:  riskPerShare = entryPrice - stopLossPrice
+  For SHORT: riskPerShare = stopLossPrice - entryPrice
+  qtyStandard = floor(riskRupees / riskPerShare)
 
-Hard Minimum Quantity Gate:
-  qtyFinal must be >= 2.
-  Reason: First partial profit target (Target 1) sells exactly 50% of the position. With qty = 1, splitting is mathematically impossible.
-  If qtyFinal < 2 → Trade is skipped entirely.
+Smart Downsizing Under Capital Constraints:
+  If (qtyStandard × entryPrice / 5.0) > AvailableMargin:
+    qtyDownsized = floor((AvailableMargin × 5.0) / entryPrice)
+  Else:
+    qtyDownsized = qtyStandard
 
-Margin Verification via SmartAPI:
-  Before submitting or approving any trade proposal, Mithron queries SmartAPI's Margin Calculator API:
-    POST /rest/secure/angelbroking/margin/v1/batch
-  If required margin > available margin in the target portfolio → Trade is rejected immediately.
+Hard Safety Gates on Downsized Trades:
+  1. Minimum Quantity Gate: qtyFinal must be >= 2.
+     Reason: Target 1 sells 50% of the position. With qty = 1, splitting is mathematically impossible.
+     If qtyFinal < 2 → Trade rejected ("INSUFFICIENT_MARGIN_CAPITAL").
+  2. 3x Friction Filter on Downsized Shares:
+     Expected 1R Gross Profit = qtyFinal × riskPerShare
+     Estimated Friction = Rs. 40 (flat brokerage) + (2 × qtyFinal × entryPrice × 0.0003)
+     If 1R < 3 × Estimated Friction → Trade rejected ("EXCESSIVE_FRICTION_DRAG").
+     Prevents taking heavily downsized positions where statutory taxes and broker fees consume the edge.
+
+Margin Verification via Angel One SmartAPI RMS:
+  Before executing or evaluating signals, Mithron queries Angel One RMS Limits:
+    GET /rest/secure/angelbroking/user/v1/getRMS
+  Available cash is synchronized into PortfolioState, eliminating blind reliance on in-memory estimates.
 ```
 
 ---
@@ -226,25 +240,26 @@ Why Portfolios Must Be Decoupled:
   Both portfolios execute the exact same risk rules, but against their own isolated state machines.
 ```
 
-### Five Pre-Trade Risk Gates (Evaluated per Portfolio):
+### Eight Pre-Trade Risk Gates (Evaluated per Portfolio):
 
-All five gates must pass. A single failure immediately rejects the proposal:
+All eight gates must pass. A single failure immediately rejects the proposal:
 
 ```
 Gate 1: Open positions < 3
   Maximum 3 concurrent open positions at any given moment.
 
-Gate 2: Total current risk < 3.2% of capital
+Gate 2: Worst-Case Daily Loss Gate (Realized P&L - Open Downside Risk)
   Calculated using CURRENT live trailing stop levels relative to entry across all open positions:
-    Total Open Risk = Sum(Quantity × max(0.0, Entry Price - Current Trailing Stop))
-  Measures true downside exposure from entry if all active stops fire simultaneously.
-  Never drops artificially as a stock falls toward its stop; strictly decays toward 0% only when trailing stops ratchet upward toward and past breakeven.
-  A 0.8% buffer (3.2% vs 4.0% daily kill switch) protects against a cluster of simultaneous stop hits wiping out daily risk in a single adverse market tick.
+    For LONG:  OpenRisk = Quantity × max(0.0, Entry Price - Current Trailing Stop)
+    For SHORT: OpenRisk = Quantity × max(0.0, Current Trailing Stop - Entry Price)
+    Total Open Risk = Sum(OpenRisk)
+  Worst-Case Loss Check:
+    If (realizedPnl - Total Open Risk - candidateProposalRisk) <= -4.0% × StartingCapital:
+      Proposal rejected ("MAX_DAILY_LOSS_BREACHED").
+  Protects the account from simultaneous stop breaches across multiple open positions wiping out daily capital.
 
-Gate 3: Daily cumulative loss < 4% of capital
-  Sum of realized losses today + unrealized loss on open positions.
-  If >= 4%: Day kill-switch engages immediately. No new entries permitted for the rest of the session.
-  Existing open positions continue to be managed strictly by their trailing stops.
+Gate 3: Open Downside Risk Exposure < 3.2% of capital
+  Ensures that active unratcheted stop exposure across all open positions does not exceed 3.2% of capital, leaving a 0.8% protective buffer before the 4% hard kill-switch.
 
 Gate 4: Total executed trades today < 5 (Trade Quota & YELLOW Handoff)
   Maximum 5 executed trades per day.
@@ -254,15 +269,46 @@ Gate 4: Total executed trades today < 5 (Trade Quota & YELLOW Handoff)
     - The Strategy layer evaluates purely against a 2-YELLOW budget and emits proposal metadata (yellowCount).
     - The Risk Engine receives current daily trade count (1-5).
     - If trade count >= 3 (evaluating for trade 4 or 5) AND yellowCount > 0: Risk Engine REJECTS the trade.
-    - This keeps the Strategy pure/stateless and places quota enforcement squarely in Layer 4.
 
-Gate 5: 3x Friction Viability Filter
+Gate 5: Directional Structure & Target Validity
+  For LONG:  Entry > InitialStopLoss AND Target1 > Entry (strictly positive risk and reward).
+  For SHORT: Entry < InitialStopLoss AND Target1 < Entry (strictly positive risk and reward).
+  If invalid: Proposal rejected ("INVALID_PRICE_LEVELS").
+
+Gate 6: Dynamic Available Margin Check & Smart Downsizing
+  AvailableMargin = min(LiveBrokerCash, RAM_Cash - TotalCommittedMargin)
+  If RequiredMargin > AvailableMargin:
+    Downsize to available buying power (min 2 shares).
+    If buying power cannot fund at least 2 shares: Proposal rejected ("INSUFFICIENT_MARGIN_CAPITAL").
+
+Gate 7: 3x Friction Viability Filter
   Expected 1R Gross Profit >= 3 × Estimated Round-Trip Friction (using conservative 3-leg formula).
-  Guarantees edge is not eroded by turnover-based statutory taxes and brokerage.
+  If 1R < 3 × Friction: Proposal rejected ("EXCESSIVE_FRICTION_DRAG").
+  Guarantees edge is not eroded by turnover-based statutory taxes and brokerage on downsized trades.
 
-Gate 6: Symbol Lock (One Entry Per Stock Per Day)
+Gate 8: Symbol Lock (One Entry Per Stock Per Day)
   Strictly one entry per stock per day across all strategies combined in that portfolio.
   Phantom Signal Protection: If a limit or proposed entry was cancelled without executing, the symbol is NOT locked. Only a FILLED execution locks the symbol for the remainder of the day.
+```
+
+### Serialized Single-Writer Execution Gateway (`OrderExecutionGateway`):
+
+```
+The Concurrent Candidate Signal Race Condition:
+  When multiple strategies or multiple symbols trigger breakout signals at the exact same 5-minute candle close (09:35:00):
+  - If strategy threads evaluate available margin in parallel, both threads read the same available capital.
+  - Both proposals pass Risk Engine gates simultaneously.
+  - Both fire market orders to the broker simultaneously, causing the second order to be rejected with "Insufficient Margin" or creating an over-leveraged account.
+
+The Institutional Gateway Solution:
+  Mithron routes all qualified strategy proposals through OrderExecutionGateway:
+    synchronized (executionGatewayMutex) {
+        1. Evaluate proposal against RiskEngine (allocates margin & locks symbol upfront).
+        2. If approved, place order with broker / simulation engine.
+        3. On fill: PositionManagerService records position & reconciles trade book.
+        4. On failure/rejection: RiskEngine unlocks symbol immediately.
+    }
+  Signals are processed sequentially in microseconds, eliminating race conditions while allowing position management and tick streaming to run fully concurrently per symbol.
 ```
 
 ---

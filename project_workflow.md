@@ -394,51 +394,77 @@ Strategies operate as **pure decision functions**, decoupled from application ti
 
 ---
 
-##### Detailed Implementation Breakdown
+##### Detailed Architectural Breakdown
 
 1. **Universal Dual-Directional Risk & Position Engine:**
    - **RiskEngine Validation (Gate 5):**
-     - For `LONG`: `entryPrice > initialStopLoss` AND `target1Price > entryPrice`.
-     - For `SHORT`: `entryPrice < initialStopLoss` AND `target1Price < entryPrice`.
-   - **Downside Risk & Committed Margin:**
-     - `PortfolioState.calculateTotalOpenDownsideRisk()` evaluates side-aware downside risk:
+     - Symmetrical validation ensures short strategies (`FCLB`, etc.) are treated as first-class citizens alongside long strategies (`FCHB`).
+     - For `LONG`: Requires $\text{entryPrice} > \text{initialStopLoss}$ AND $\text{target1Price} > \text{entryPrice}$.
+     - For `SHORT`: Requires $\text{entryPrice} < \text{initialStopLoss}$ AND $\text{target1Price} < \text{entryPrice}$.
+   - **Side-Aware Downside Risk & Capital Commitment:**
+     - `PortfolioState.calculateTotalOpenDownsideRisk()` evaluates total active exposure based on live trailing stops:
        $$\text{Risk}_{\text{LONG}} = (\text{entryPrice} - \text{currentStopLoss}) \times \text{currentQuantity}$$
        $$\text{Risk}_{\text{SHORT}} = (\text{currentStopLoss} - \text{entryPrice}) \times \text{currentQuantity}$$
-     - Margin committed per position:
+       $$\text{TotalOpenDownsideRisk} = \sum_{\text{pos} \in \text{openPositions}} \max(0.0, \text{Risk}_{\text{pos}})$$
+     - Committed intraday margin per position (accounting for MIS 5x leverage):
        $$\text{Margin}_{\text{pos}} = \frac{\text{currentQuantity} \times \text{entryPrice}}{\text{INTRADAY\_LEVERAGE\_FACTOR}}$$
-   - **Monotonic Ratcheting:**
-     - For `LONG`: `newStopLoss >= currentStopLoss` (ratchets UP only).
-     - For `SHORT`: `newStopLoss <= currentStopLoss` (ratchets DOWN only).
-   - **FchbPositionHandler Priority Order:**
-     - Evaluates Wind-down (14:45 / 14:15 expiry), Stop Hit (LTP $\le$ SL for LONG, LTP $\ge$ SL for SHORT), Structural Invalidation (1M Close $<$ FCH for LONG, 1M Close $>$ FCL for SHORT), Target 1 Partial (+1R), Breakeven Ratchet (+0.8R), and Milestone Floors (+2R, +3R) with symmetrical dual-directional precision.
+       $$\text{TotalCommittedMargin} = \sum_{\text{pos} \in \text{openPositions}} \text{Margin}_{\text{pos}}$$
+   - **Side-Aware Monotonic Ratcheting:**
+     - Trailing stops must strictly move toward profitability and never retreat:
+     - For `LONG`: Requires $\text{newStopLoss} \ge \text{currentStopLoss}$ (ratchets UP only).
+     - For `SHORT`: Requires $\text{newStopLoss} \le \text{currentStopLoss}$ (ratchets DOWN only).
+   - **`FchbPositionHandler` Priority Exit Hierarchy (Side-Aware):**
+     1. *Priority 1 (Hard Close):* 14:55:00 unconditional market exit across all positions.
+     2. *Priority 2 (Wind-Down Cutoff):* 14:45:00 (14:15:00 on expiry). If unratcheted (LONG: $\text{SL} < \text{Entry}$; SHORT: $\text{SL} > \text{Entry}$) $\to$ full exit; if ratcheted $\ge$ breakeven $\to$ trail until 14:55:00.
+     3. *Priority 3 (Stop Loss Hit):* Real-time tick breach (LONG: $\text{LTP} \le \text{SL}$; SHORT: $\text{LTP} \ge \text{SL}$) $\to$ full exit.
+     4. *Priority 4 (Structural Invalidation - Fast Cut):* Active only while stop $<$ entry: 1M close (LONG: $\text{Close} < \text{FCH}$; SHORT: $\text{Close} > \text{FCL}$) $\to$ full exit.
+     5. *Priority 5 (Target 1 Partial Exit):* LTP hits +1R (LONG: $\text{LTP} \ge \text{Target 1}$; SHORT: $\text{LTP} \le \text{Target 1}$) $\to$ exit 50% at market, lock stop at entry (breakeven).
+     6. *Priority 6 (Breakeven Ratchet):* LTP hits +0.8R prior to Target 1 $\to$ ratchet stop to entry price.
+     7. *Priority 7 (Target 2 ATR Trailing & Milestone Floors):* Post-Target 1 booked $\to$ milestone floors at $+2R \implies \text{SL at } +1R$, $+3R \implies \text{SL at } +2R$, trailed with $1\text{M Extreme} \pm (0.5 \times 5\text{M ATR})$.
 
-2. **Dynamic Buying Power & Smart Downsizing:**
-   - Evaluates standard 1% risk quantity: $Q = \lfloor \frac{\text{Capital} \times 0.01}{\text{RiskPerShare}} \rfloor$.
-   - Calculates required margin: $M = \frac{Q \times \text{Price}}{\text{LEVERAGE}}$.
-   - If $M > \text{AvailableMargin}$, computes downsized quantity: $Q_{\text{downsized}} = \lfloor \frac{\text{AvailableMargin} \times \text{LEVERAGE}}{\text{Price}} \rfloor$.
-   - **3x Friction Threshold:** If $Q_{\text{downsized}} \ge 2$, computes expected $1R = Q_{\text{downsized}} \times \text{RiskPerShare}$ and round-trip brokerage friction:
-     $$\text{friction} = 40.0 + (0.0003 \times Q_{\text{downsized}} \times \text{Price} \times 2)$$
-     If $1R < 3 \times \text{friction}$, the proposal is rejected with `"EXCESSIVE_FRICTION_DRAG"`.
+2. **Dynamic Buying Power Accounting & Smart Downsizing with 3x Friction Filter:**
+   - **Dynamic Available Margin:**
+     $$\text{AvailableMargin} = \min(\text{LiveBrokerCash}, \text{RAM Cash} - \text{CommittedMargin})$$
+   - Sizing starts with the standard 1% risk allocation:
+     $$\text{RiskPerShare} = |\text{entryPrice} - \text{initialStopLoss}|$$
+     $$Q = \left\lfloor \frac{\text{Capital} \times 0.01}{\text{RiskPerShare}} \right\rfloor$$
+     $$\text{RequiredMargin} = \frac{Q \times \text{entryPrice}}{\text{LEVERAGE}}$$
+   - **Smart Downsizing:** If $\text{RequiredMargin} > \text{AvailableMargin}$, the engine does not immediately reject the candidate if capital is merely constrained. Instead, it computes the maximum shares the remaining buying power can fund:
+     $$Q_{\text{downsized}} = \left\lfloor \frac{\text{AvailableMargin} \times \text{LEVERAGE}}{\text{entryPrice}} \right\rfloor$$
+   - **3x Friction Safety Filter:** Downsizing is only accepted if the setup remains statistically viable after statutory friction:
+     - Minimum share requirement: $Q_{\text{downsized}} \ge 2$ shares (allowing 50% partial exit).
+     - Expected 1R Gross Profit: $1R = Q_{\text{downsized}} \times \text{RiskPerShare}$.
+     - Conservative round-trip friction (brokerage + STT + exchange + SEBI + GST):
+       $$\text{Friction} = 40.0 + (0.0003 \times Q_{\text{downsized}} \times \text{entryPrice} \times 2)$$
+     - **Viability Condition:** $1R \ge 3 \times \text{Friction}$. If violated, the trade is rejected with `"EXCESSIVE_FRICTION_DRAG"` to protect the account from high-turnover churn traps.
 
-3. **Single-Writer Serialized Execution Gateway (`OrderExecutionGateway`):**
-   - Coordinates signal evaluation through a synchronized mutex:
-     ```java
-     synchronized (executionGatewayMutex) {
-         RiskEvaluationResult eval = riskEngine.evaluateProposal(proposal, mode);
-         if (!eval.isApproved()) return eval;
-         // Submit order to broker / simulator
-         // On fill: positionManagerService.recordBrokerFill(...)
-         // On failure: riskEngine.unlockSymbol(...)
-     }
-     ```
-   - Prevents concurrent strategy threads from double-allocating buying power while keeping per-symbol tick processing fully concurrent.
+3. **Total Worst-Case Exposure Gate (Gate 2 Hardening):**
+   - Traditional risk engines evaluate only closed realized losses, allowing accounts to suffer severe drawdown if multiple open positions hit stops simultaneously.
+   - Mithron's Gate 2 enforces total open downside risk:
+     $$\text{WorstCaseLoss} = \text{realizedPnl} - \text{TotalOpenDownsideRisk} - (\text{proposalRisk})$$
+     $$\text{WorstCaseLoss} > -0.04 \times \text{StartingCapital} \quad (\text{Max 4% Daily Loss})$$
+   - If existing positions plus the new trade would breach the -4% hard threshold upon stop hit, the proposal is immediately rejected with `"MAX_DAILY_LOSS_BREACHED"`.
 
-4. **Authoritative Angel One RMS & Trade Book Reconciliation:**
-   - Added `RMS_LIMITS` and `TRADE_BOOK` endpoints to `AngelOneApiExecutor` with strict rate limits (1 req/s, 20 req/min).
-   - `PreMarketWorkflowService` syncs live cash during Stage 6 (`premarket-live-start`).
-   - `PositionManagerService.recordBrokerFill()` reconciles actual executed price (`averagePrice`) from trade book, updating in-memory models and re-anchoring profit targets without moving the structural stop.
+4. **Single-Writer Serialized Execution Gateway (`OrderExecutionGateway`):**
+   - **Concurrence Hazard:** Parallel strategy evaluations firing simultaneous signals could both observe identical available margin, leading to double-allocation and exchange margin rejections.
+   - **Single-Writer Gateway Solution:**
+     - Signal intake, risk evaluation, symbol lock acquisition, order placement, fill recording, and margin commitment are serialized via a dedicated `executionGatewayMutex`.
+     - Symbol is locked upfront in `RiskEngine`.
+     - Upon successful broker fill, `positionManagerService.recordBrokerFill(...)` registers the active position.
+     - Upon failure or rejection, `riskEngine.unlockSymbol(...)` releases the symbol lock immediately.
+   - **Per-Symbol Concurrency Isolation:**
+     - While order intake is strictly serialized, live position monitoring utilizes `ConcurrentHashMap<String, Object>` per-symbol locks in `PositionManagerService`.
+     - Real-time tick ingestion and trailing stop calculations on TCS never stall or wait for RELIANCE.
 
-5. **Active Scheduled EOD Sweep:**
+5. **Authoritative Broker Synchronization (RMS Margin & Trade Book Execution):**
+   - Zero blind trust in RAM data or cached assumptions.
+   - Added `RMS_LIMITS` and `TRADE_BOOK` endpoints in `AngelOneApiExecutor` with strict rate limits (1 req/s, 20 req/min).
+   - Pre-market Stage 6 (`premarket-live-start`) synchronizes live cash via `GET /rest/secure/angelbroking/user/v1/getRMS`.
+   - Post-order execution reconciles exact fill prices (`averagePrice`) from `GET /rest/secure/angelbroking/order/v1/getTradeBook`:
+     - Structural invalidation stop remains **strictly fixed** to the analytical chart level.
+     - Entry price, actual downside risk, Target 1, Target 2, and breakeven levels dynamically re-anchor to the executed fill price.
+
+6. **Active Scheduled 14:55:00 EOD Hard Close Sweep:**
    - In `MarketScheduler`:
      ```java
      @Scheduled(fixedDelay = 30000)
@@ -450,45 +476,26 @@ Strategies operate as **pure decision functions**, decoupled from application ti
          }
      }
      ```
+   - Sweeps every 30 seconds between 14:55:00 and 15:15:00 IST to ensure illiquid stocks with zero incoming ticks are forcefully exited before Angel One RMS auto-square-off penalties.
 
-6. **Test Suite Verification:**
-   - Complete test suite passed: **395 tests run, 394 passed, 0 failures, 0 errors, 1 skipped (100% pass rate)**.
-
-
-##### G. Item 6: Double-Gate Tradability Filter (15-Day Minimum EOD Bar Check)
-- **What:** Defensive double-check before declaring any symbol tradable:
-  1. Gate 1: Prior day EOD completeness (`eod_data_entry.status = SUCCESS`).
-  2. Gate 2: Symbol must have at least 15 completed daily bars in `stock_prices` ($\ge 15$).
-- **Where:** `PreMarketWorkflowService.runPreMarketDataPipeline()`, `StockUniverseService.java`.
-- **Why:** Prevents runtime `IndexOutOfBoundsException` or `NullPointerException` when calculating 15-day resistance or 20-day ADV curves on newly listed or recently added scrips.
+7. **Crash Recovery & Active Position Rehydration:**
+   - In `StartupRecoveryService`: Invokes `positionManagerService.rehydrateActiveState(...)` on application boot.
+   - Restores active positions, ratcheted stop loss levels, and daily executed trade quotas from PostgreSQL into RAM and `RiskEngine`, guaranteeing seamless trailing stop protection across mid-session restarts.
 
 ---
 
-##### H. Item 7: Per-Symbol Concurrency Isolation (`ConcurrentHashMap<String, Object>`)
-- **What:** Fine-grained per-symbol synchronization locks for all real-time tick ingestion, candle accumulation, indicator calculation, and position updates.
-- **Where:** `LiveMarketCandleService.java`, `StockContextCache.java`, `CentralPositionManager.java`.
-- **Why:** Prevents global lock contention across 500 stocks during high-throughput tick bursts. A delayed calculation or exception on one symbol is completely isolated and cannot stall or crash other symbols.
+##### Four Real-Data Replay Integration Scenarios `[VERIFIED]`
+Before advancing to full orchestration, V2.3 validated the Risk Engine and Position Manager against 4 real-world market scenarios captured from production database candles:
+1. **Scenario 1 (Strong Bullish Trend Day):** Nifty consistently above VWAP. Multiple stocks trigger FCHB with low/zero YELLOWs; positions hit Target 1 (+1R), ratchet to breakeven, and trail via ATR to multi-R profits.
+2. **Scenario 2 (Bearish / Trap Day):** Nifty opens or breaks below VWAP; FCHB signals blocked cleanly by the macro gate.
+3. **Scenario 3 (Range-Bound / Choppy Day):** Narrow market ranges; verified tight stops, the 3x friction filter blocking excessive turnover traps, and breakeven ratchets preventing givebacks.
+4. **Scenario 4 (Stock-Level Trap on Bullish Day):** Nifty is strongly bullish above VWAP (macro filter passes), but an individual stock experiences an absorption failure (1M candle immediately closes below FCH after entry). Structural invalidation fires instantly on the 1M candle close, cutting loss to a small fraction of -1R.
 
 ---
 
-##### I. Item 8: Aggressive 14:50 / 15:00 Hard Square-Off with Direct Broker API Polling Loop
-- **What:** Two-phase hard square-off protocol prior to broker auto square-off (which occurs at 15:10/15:15 IST):
-  - **Phase 1 (14:50 IST - Order Cancellation):** Cancel all resting pending orders on the exchange to prevent unintended duplicate fills.
-  - **Phase 2 (14:50–15:00 IST - Market Exits):** Issue unconditional `MARKET` sell orders for all remaining open positions.
-  - **Phase 3 (Immediate 1-Minute Polling Loop):** Poll Angel One Position API (`GET /rest/secure/angelbroking/order/v1/getPosition`) every 60 seconds until the broker confirms `netQuantity == 0` for all intraday positions and order book confirms 0 pending orders.
-- **Where:** `CentralPositionManager.java`, `BrokerTradeExecutionAdapter.java`.
-- **Why:** Prevents broker penalty charges for auto square-off and guarantees zero overnight position carryover in Indian intraday equity trading.
+#### 6.1 Operational Reliability & Runtime Recovery Enhancements `[COMPLETED + TESTED ✅]`
 
----
-
-##### J. Item 9: Minute-by-Minute Persistence of Stop Loss & Target across Restarts
-- **What:** Persist dynamic stop losses and milestone targets directly into PostgreSQL (`positions` and `orders`) on every 1-minute candle close.
-- **Where:** `PositionManagerService.java`, `CentralPositionManager.java`.
-- **Why:** Ensures that if the host laptop or application restarts mid-session, `PositionManager` re-hydrates the exact ratcheted stop levels directly from the database without resetting stops back to initial entry levels.
-
----
-
-##### K. Item 10: Calendar Data Integrity, Resilient Synchronization & Alerting `[COMPLETED + TESTED ✅]`
+##### A. Calendar Data Integrity & Resilient Holiday Synchronization
 - **Incident & RCA (2026-10-12 Outage):**
   - Hardcoded typo in `NseHolidayCalendar.java` had `2026-10-12` designated as Dussehra (actual Dussehra is `2026-10-20`).
   - `@PostConstruct bootstrapPersistedHolidays()` inserted row into `exchange_holiday` (`STATIC_BOOTSTRAP`).
@@ -505,9 +512,7 @@ Strategies operate as **pure decision functions**, decoupled from application ti
   9. **MEDIUM-Priority Email Alerting:** If the sync fails after all retries, the error is logged and a MEDIUM-priority alert and email is dispatched via `RuntimeAlertService` without disrupting or crashing the daily workflow.
   10. **Hotfix & 100% Test Coverage:** Production hotfix deployed (`Mithron-1.3.9.jar`) on PID 19092; 18 unit tests verified in `MarketCalendarServiceTest` and `NseHolidayCalendarTest`.
 
----
-
-##### L. Mid-Day Workflow Restart, Disruption Recovery & Quote Data Sync `[COMPLETED + TESTED ✅]`
+##### B. Mid-Day Workflow Restart, Disruption Recovery & Quote Data Sync (`POST /admin/runtime/day/restart-today-workflow`)
 - **Context & Operational Need:**
   - If the application starts late, crashes, or suffers a network disruption between 09:00 AM and mid-day, the official 09:08 pre-market uncrossed auction candle is missed, and minute candles up to the reconnection time are unrecorded.
   - While live ticks resume on reconnection, gap detection only catches gaps between existing candles, leaving the morning (09:15 to restart) and 09:08 open prices missing until 17:00 EOD.
@@ -528,15 +533,6 @@ Strategies operate as **pure decision functions**, decoupled from application ti
   - **Single Run Guard:** If 09:08 candles exist, skips the Quote API entirely (0 ms, 0 API calls). If missing (due to early morning outage), runs once to restore authoritative open prices and `stock_prices`.
 - **EOD Reconciliation Quote Updates:**
   - In `EodReconciliationService`, ensure `stock_prices`, missing 09:08 candles, and context updates are flushed per-symbol after each iteration/pass rather than waiting for the entire multi-attempt cycle to conclude.
-
----
-
-##### L. Four Real-Data Replay Integration Scenarios:
-Before running end-to-end backtesting orchestration in V2.4, V2.3 proves the Risk Engine and Position Manager against 4 real-world market scenarios captured from the production database:
-1. **Scenario 1 (Strong Bullish Trend Day):** Nifty consistently above VWAP. Multiple stocks trigger FCHB with low/zero YELLOWs; positions hit Target 1 (+1R) and trail to multi-R profits.
-2. **Scenario 2 (Bearish / Trap Day):** Nifty opens or breaks below VWAP; FCHB signals blocked by the macro gate.
-3. **Scenario 3 (Range-Bound / Choppy Day):** Narrow market ranges; tests tight stops, the 3x friction filter blocking excessive turnover traps, and breakeven ratchets.
-4. **Scenario 4 (Stock-Level Trap on Bullish Day):** Nifty is strongly bullish above VWAP (macro filter passes), but an individual stock experiences an absorption failure (1M candle immediately closes below FCH after entry). Tests that early structural invalidation fires instantly and cuts loss to a small fraction of -1R.
 
 ---
 

@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-09-29  
-Status: **Version 1.0 Complete** (Data & Market Lifecycle Foundation — 320 unit tests passing).
+Last audited: 2026-10-13  
+Status: **Version 2.3 Complete** (Strategy Intelligence, Institutional Risk Engine, Dual-Directional Position Management & Order Gateway — 394 unit tests passing).
 
 ---
 
@@ -143,12 +143,17 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
       - Pure Strategy Evaluator (`FchbStrategy`): 5M breakout trigger, Candle 1 reference (turnover >= Rs. 1 Cr, range 0.15%-3.0%), 7-factor Red/Yellow/Green Traffic-Light Quality Gate, Two-Factor Volume model (VOL_X >= 1.8 hard gate + time-weighted Candle 1 ratio).
       - Decoupled Position Handler (`FchbPositionHandler`): 7-step priority exits (15:00 hard close, 14:45/14:15 wind-down, tick stop breach, 1M structural invalidation fast cut, Target 1 +1R 50% partial exit with immediate breakeven stop lock, +0.8R breakeven ratchet, and 1M ATR trailing ratchet for the remaining 50% runner).
       - Unit Test Coverage: 32 dedicated unit test cases (21 strategy tests, 11 position handler tests), 359/359 test suite passing.
-    • V2.3 Portfolio Risk Engine, Position Manager & Simulation Testing: CURRENT STAGE
-      - Dual Portfolio State Separation (`PortfolioState` for PAPER vs LIVE).
-      - 7 Pre-Trade Risk Gates: Max 3 open positions, 5-trade daily quota with Trade 4-5 ALL GREEN handoff, 3.2% live downside portfolio risk cap (Entry - TrailingStop), 4% daily kill switch, Symbol Lock (1 entry/symbol/day), Phantom signal protection, and Conservative 3x Friction Viability Filter (Rs. 60 + Turnover × 0.00035 + GST).
-      - Central Position Manager Service (`PositionManagerService`): In-memory active position registry dispatching ticks for target/stop hits and 1M candle closes for structural invalidation and trailing stops. Single-order state machine and server-side GTT crash protection.
-      - 4 Real-Data Replay Integration Scenarios using captured database candles: Bullish Trend Day, Bearish Trap Day, Range-Bound Day, and Stock-Level Trap on Bullish Day.
-    • V2.4 Master Workflow Orchestrator & Execution Adapters: PLANNED (Conductor, simulation database adapter, and REST simulation replay).
+    • V2.3 Portfolio Risk Engine, Institutional Position Manager & Dual-Directional Hardening: COMPLETED ✅
+      - Universal Dual-Directional Geometry: Side-aware sizing, downside risk, P&L, monotonic ratchets (UP for LONG, DOWN for SHORT), and exit rules for both LONG and SHORT strategies.
+      - Dynamic Buying Power & Smart Downsizing: Evaluates live available margin against committed margin; downsizes sizing to buying power with strict 3x Friction filter (rejecting high-friction churn traps with `EXCESSIVE_FRICTION_DRAG`).
+      - Gate 2 Total Worst-Case Loss Gate: Evaluates `realizedPnl - openDownsideRisk <= -4%` across all open positions and candidate risk, preventing multi-position stop gap drawdowns.
+      - Single-Writer Serialized Execution Gateway (`OrderExecutionGateway`): Serializes candidate proposal evaluation, symbol lock acquisition, order placement, and margin commits via mutex while preserving per-symbol concurrency for tick monitoring.
+      - Authoritative Angel One Sync: Live RMS margin sync (`getRMS`) and Trade Book fill reconciliation (`getTradeBook`); fixed structural stops with fill-anchored targets.
+      - Active 14:55:00 Scheduled EOD Hard Close Sweep: Sweeps every 30s in `MarketScheduler` to exit illiquid positions before broker auto-square-off penalties.
+      - Startup Active Position Rehydration: Automatically restores active positions, ratcheted stops, and daily trade quotas from PostgreSQL into RAM and RiskEngine on boot.
+      - 4 Real-Data Replay Integration Scenarios verified using captured database candles.
+      - 394/395 test suite passing (100% pass rate).
+    • V2.4 Master Workflow Orchestrator & Execution Adapters: NEXT STAGE (Conductor, simulation database adapter, and REST simulation replay).
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
   - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies
