@@ -35,8 +35,10 @@ public class PortfolioState {
 
     /**
      * Calculates the total open downside risk across all currently open positions.
-     * Formula: Sum(CurrentQuantity * max(0.0, EntryPrice - LiveTrailingStop))
-     * When trailing stop is moved to Entry (or above), risk drops to Rs. 0.0,
+     * Side-aware:
+     * - LONG: Sum(CurrentQuantity * max(0.0, EntryPrice - LiveTrailingStop))
+     * - SHORT: Sum(CurrentQuantity * max(0.0, LiveTrailingStop - EntryPrice))
+     * When trailing stop is moved to Entry (or locked into profit), risk drops to Rs. 0.0,
      * freeing up risk capacity.
      */
     public double calculateTotalOpenDownsideRisk() {
@@ -48,10 +50,17 @@ public class PortfolioState {
                     }
                     double entry = pos.entryPrice();
                     double sl = pos.currentStopLoss();
-                    double downsidePerShare = Math.max(0.0, entry - sl);
+                    boolean isShort = isShortSide(pos.positionSide());
+                    double downsidePerShare = isShort
+                            ? Math.max(0.0, sl - entry)
+                            : Math.max(0.0, entry - sl);
                     return pos.currentQuantity() * downsidePerShare;
                 })
                 .sum();
+    }
+
+    private static boolean isShortSide(String side) {
+        return side != null && ("SHORT".equalsIgnoreCase(side) || "SELL".equalsIgnoreCase(side));
     }
 
     /**
@@ -70,6 +79,14 @@ public class PortfolioState {
                 .sum();
     }
 
+    /**
+     * Calculates remaining available margin for new positions.
+     * Formula: max(0.0, CurrentCapital - CommittedMargin)
+     */
+    public double calculateAvailableMargin(double leverageFactor) {
+        return Math.max(0.0, this.currentCapital - calculateTotalCommittedMargin(leverageFactor));
+    }
+
     public synchronized void recordPartialExit(double pnl) {
         this.realizedPnl += pnl;
         this.currentCapital = this.initialCapital + this.realizedPnl;
@@ -79,6 +96,18 @@ public class PortfolioState {
         tradedSymbolsToday.add(symbol);
         dailyTradeCount++;
         openPositions.put(symbol, position);
+    }
+
+    /**
+     * Unlocks a symbol if an order was rejected or cancelled before execution.
+     */
+    public synchronized void unlockSymbol(String symbol) {
+        if (symbol != null) {
+            tradedSymbolsToday.remove(symbol);
+            if (!openPositions.containsKey(symbol) && dailyTradeCount > 0) {
+                dailyTradeCount--;
+            }
+        }
     }
 
     public synchronized void updatePosition(PositionSnapshot updatedPosition) {
@@ -95,6 +124,44 @@ public class PortfolioState {
 
     public boolean hasTradedSymbolToday(String symbol) {
         return tradedSymbolsToday.contains(symbol);
+    }
+
+    /**
+     * Syncs capital with live broker RMS cash/net balance.
+     */
+    public synchronized void syncBrokerCapital(double liveBrokerCapital) {
+        if (liveBrokerCapital > 0.0) {
+            this.currentCapital = liveBrokerCapital;
+            if (this.initialCapital <= 0.0) {
+                this.initialCapital = liveBrokerCapital;
+            }
+        }
+    }
+
+    /**
+     * Rehydrates state upon application restart or mid-day crash recovery.
+     */
+    public synchronized void rehydrate(java.util.List<PositionSnapshot> positions, Integer tradeCount, java.util.Set<String> symbols, Double liveCapital) {
+        if (liveCapital != null && liveCapital > 0.0) {
+            this.currentCapital = liveCapital;
+            if (this.initialCapital <= 0.0) {
+                this.initialCapital = liveCapital;
+            }
+        }
+        if (tradeCount != null && tradeCount >= 0) {
+            this.dailyTradeCount = tradeCount;
+        }
+        if (symbols != null) {
+            this.tradedSymbolsToday.addAll(symbols);
+        }
+        if (positions != null) {
+            for (PositionSnapshot pos : positions) {
+                if (pos != null && pos.symbol() != null) {
+                    this.openPositions.put(pos.symbol(), pos);
+                    this.tradedSymbolsToday.add(pos.symbol());
+                }
+            }
+        }
     }
 
     public synchronized void resetForNewDay(LocalDate newDate, double startingCapital) {

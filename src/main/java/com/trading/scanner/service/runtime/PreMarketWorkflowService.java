@@ -51,6 +51,7 @@ public class PreMarketWorkflowService {
 
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.risk.RiskEngine> riskEngineProvider;
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider;
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.service.provider.angelone.AngelOneMarketDataProvider> angelOneMarketDataProvider;
 
     private final Object workflowLock = new Object();
 
@@ -75,7 +76,8 @@ public class PreMarketWorkflowService {
             TimeProvider timeProvider,
             com.trading.scanner.service.data.EodReconciliationService eodReconciliationService,
             org.springframework.beans.factory.ObjectProvider<com.trading.scanner.risk.RiskEngine> riskEngineProvider,
-            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider) {
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.service.provider.angelone.AngelOneMarketDataProvider> angelOneMarketDataProvider) {
         this.marketCalendarService = marketCalendarService;
         this.tradingCalendar = tradingCalendar;
         this.runtimeHousekeepingService = runtimeHousekeepingService;
@@ -96,6 +98,7 @@ public class PreMarketWorkflowService {
         this.eodReconciliationService = eodReconciliationService;
         this.riskEngineProvider = riskEngineProvider;
         this.positionManagerServiceProvider = positionManagerServiceProvider;
+        this.angelOneMarketDataProvider = angelOneMarketDataProvider;
     }
 
     // Convenience constructor for tests and backward compatibility
@@ -123,7 +126,7 @@ public class PreMarketWorkflowService {
                 stockUniverseRepository, instrumentMasterRepository, eodDataEntryService,
                 volumeBaselineService, runtimeSettingService, workflowStatusService,
                 runtimeAutomationService, runtimeAutomationProperties, angelOneProperties,
-                timeProvider, eodReconciliationService, null, null);
+                timeProvider, eodReconciliationService, null, null, null);
     }
 
     /**
@@ -384,6 +387,25 @@ public class PreMarketWorkflowService {
                 if (!result.websocketConnected()) {
                     throw new IllegalStateException("WebSocket connection failed: " + result.message());
                 }
+
+                // Synchronize live opening trading capital from Angel One RMS
+                try {
+                    com.trading.scanner.risk.RiskEngine re = riskEngineProvider != null ? riskEngineProvider.getIfAvailable() : null;
+                    com.trading.scanner.service.provider.angelone.AngelOneMarketDataProvider dp = angelOneMarketDataProvider != null ? angelOneMarketDataProvider.getIfAvailable() : null;
+                    if (re != null && dp != null && dp.isAvailable()) {
+                        com.trading.scanner.service.provider.angelone.dto.AngelOneMarketDtos.AngelOneRmsResponse rms = dp.fetchLiveRmsLimits();
+                        if (rms != null && rms.data() != null) {
+                            Double liveCash = rms.data().getAvailableCashAsDouble();
+                            if (liveCash != null && liveCash > 0.0) {
+                                re.syncBrokerCapital(com.trading.scanner.risk.model.PortfolioMode.LIVE, liveCash);
+                                log.info("Synchronized LIVE portfolio capital from Angel One RMS: Rs. {}", liveCash);
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    log.warn("Angel One RMS live capital sync warning: {}", ex.getMessage());
+                }
+
                 return "Live WebSocket connected and active universe subscribed successfully: " + result.message();
             });
 

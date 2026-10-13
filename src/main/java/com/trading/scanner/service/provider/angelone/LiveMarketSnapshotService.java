@@ -480,6 +480,16 @@ public class LiveMarketSnapshotService {
                                 .toList();
         }
 
+        public Map<String, Double> getLatestTickPrices() {
+                Map<String, Double> prices = new HashMap<>();
+                for (SnapshotView snapshot : latestSnapshots.values()) {
+                        if (snapshot != null && snapshot.symbol() != null && snapshot.lastPrice() != null) {
+                                prices.put(snapshot.symbol(), snapshot.lastPrice());
+                        }
+                }
+                return prices;
+        }
+
         @Transactional(readOnly = true)
         public List<MarketMinuteSnapshot> recentPersisted(
                         int limit) {

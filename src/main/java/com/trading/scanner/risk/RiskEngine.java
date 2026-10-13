@@ -70,8 +70,11 @@ public class RiskEngine {
         }
 
         // Gate 2: Daily Loss Kill Switch (4.0% of Initial Capital)
+        // Evaluates realized loss + current open downside risk evaluated from trailing stops
         double maxLossLimitRupees = portfolio.getInitialCapital() * (DAILY_LOSS_LIMIT_PCT / 100.0);
-        if (portfolio.getRealizedPnl() <= -maxLossLimitRupees) {
+        double currentOpenRisk = portfolio.calculateTotalOpenDownsideRisk();
+        double worstCaseLoss = portfolio.getRealizedPnl() - currentOpenRisk;
+        if (worstCaseLoss <= -maxLossLimitRupees) {
             return RiskEvaluationResult.rejected("DAILY_LOSS_KILL_SWITCH_TRIGGERED", proposal);
         }
 
@@ -99,19 +102,50 @@ public class RiskEngine {
             return RiskEvaluationResult.rejected("SYMBOL_ALREADY_TRADED_TODAY", proposal);
         }
 
-        // Gate 5: Price Validity & Sizing Calculation
+        // Gate 5: Price Validity & Sizing Calculation (Dual-Directional: LONG vs SHORT)
         Double entryPrice = proposal.entryPrice();
         Double stopLoss = proposal.initialStopLoss();
-        if (entryPrice == null || stopLoss == null || entryPrice <= 0.0 || stopLoss <= 0.0 || entryPrice <= stopLoss) {
+        if (entryPrice == null || stopLoss == null || entryPrice <= 0.0 || stopLoss <= 0.0) {
             return RiskEvaluationResult.rejected("INVALID_PRICE_OR_STOP", proposal);
         }
 
-        double riskPerShare = entryPrice - stopLoss;
+        boolean isShort = proposal.direction() != null
+                && ("SHORT".equalsIgnoreCase(proposal.direction()) || "SELL".equalsIgnoreCase(proposal.direction()));
+
+        double riskPerShare;
+        if (isShort) {
+            if (stopLoss <= entryPrice) {
+                return RiskEvaluationResult.rejected("INVALID_PRICE_OR_STOP", proposal);
+            }
+            if (proposal.initialTarget() != null && proposal.initialTarget() >= entryPrice) {
+                return RiskEvaluationResult.rejected("INVALID_PRICE_OR_STOP", proposal);
+            }
+            riskPerShare = stopLoss - entryPrice;
+        } else {
+            if (entryPrice <= stopLoss) {
+                return RiskEvaluationResult.rejected("INVALID_PRICE_OR_STOP", proposal);
+            }
+            if (proposal.initialTarget() != null && proposal.initialTarget() <= entryPrice) {
+                return RiskEvaluationResult.rejected("INVALID_PRICE_OR_STOP", proposal);
+            }
+            riskPerShare = entryPrice - stopLoss;
+        }
+
         double capital = portfolio.getCurrentCapital();
         double targetRiskRupees = capital * RISK_PER_TRADE_FRACTION; // 1R (e.g. Rs. 450 on Rs. 30k)
 
-        // Fixed Fractional Sizing: Quantity = floor(targetRiskRupees / riskPerShare)
-        int quantity = (int) Math.floor(targetRiskRupees / riskPerShare);
+        // Sizing quantity based on 1R risk target
+        int qtyByRisk = (int) Math.floor(targetRiskRupees / riskPerShare);
+
+        // Check remaining available margin (accounting for active positions)
+        double availableMargin = portfolio.calculateAvailableMargin(INTRADAY_LEVERAGE_FACTOR);
+        if (availableMargin <= 0.0) {
+            return RiskEvaluationResult.rejected("INSUFFICIENT_MARGIN_CAPITAL", proposal);
+        }
+        int maxQtyByMargin = (int) Math.floor((availableMargin * INTRADAY_LEVERAGE_FACTOR) / entryPrice);
+
+        // Smart downsizing: constrained by available margin
+        int quantity = Math.min(qtyByRisk, maxQtyByMargin);
         if (quantity < 2) {
             // Need at least 2 shares to perform 50% partial exit at Target 1
             return RiskEvaluationResult.rejected("QUANTITY_LESS_THAN_MINIMUM_2", proposal);
@@ -119,22 +153,15 @@ public class RiskEngine {
 
         double actualRiskRupees = quantity * riskPerShare;
 
-        // Gate 6: Total Current Portfolio Open Downside Risk (< 3.2% of Initial
-        // Capital)
-        double currentOpenRisk = portfolio.calculateTotalOpenDownsideRisk();
+        // Gate 6: Total Current Portfolio Open Downside Risk (< 3.2% of Initial Capital)
         double potentialTotalRisk = currentOpenRisk + actualRiskRupees;
         double maxAllowedOpenRiskRupees = portfolio.getInitialCapital() * (MAX_PORTFOLIO_OPEN_RISK_PCT / 100.0);
         if (potentialTotalRisk > maxAllowedOpenRiskRupees) {
             return RiskEvaluationResult.rejected("PORTFOLIO_OPEN_RISK_CAP_EXCEEDED", proposal);
         }
 
-        // Sizing & Margin: Check available capital against required intraday margin + already committed margin
         double tradeValue = quantity * entryPrice;
         double requiredMargin = tradeValue / INTRADAY_LEVERAGE_FACTOR;
-        double committedMargin = portfolio.calculateTotalCommittedMargin(INTRADAY_LEVERAGE_FACTOR);
-        if ((committedMargin + requiredMargin) > capital) {
-            return RiskEvaluationResult.rejected("INSUFFICIENT_MARGIN_CAPITAL", proposal);
-        }
 
         // Gate 7: 3x Friction Viability Filter
         // Estimated round-trip turnover = 2 * (Quantity * EntryPrice)
@@ -159,12 +186,52 @@ public class RiskEngine {
     }
 
     /**
+     * Gateway mutex to guarantee single-threaded execution from signal evaluation
+     * to broker fill to position registration.
+     */
+    private final Object executionGatewayMutex = new Object();
+
+    public Object getExecutionGatewayMutex() {
+        return executionGatewayMutex;
+    }
+
+    /**
      * Records order execution into the active portfolio state.
      */
     public synchronized void recordTradeExecuted(PortfolioMode mode, String symbol, PositionSnapshot position) {
         PortfolioState portfolio = portfolios.get(mode);
         if (portfolio != null) {
             portfolio.recordTradeExecuted(symbol, position);
+        }
+    }
+
+    /**
+     * Unlocks a symbol if an order was rejected or cancelled before execution.
+     */
+    public synchronized void unlockSymbol(PortfolioMode mode, String symbol) {
+        PortfolioState portfolio = portfolios.get(mode);
+        if (portfolio != null) {
+            portfolio.unlockSymbol(symbol);
+        }
+    }
+
+    /**
+     * Synchronizes portfolio capital with live broker RMS cash/net balance.
+     */
+    public synchronized void syncBrokerCapital(PortfolioMode mode, double liveBrokerCapital) {
+        PortfolioState portfolio = portfolios.get(mode);
+        if (portfolio != null) {
+            portfolio.syncBrokerCapital(liveBrokerCapital);
+        }
+    }
+
+    /**
+     * Rehydrates portfolio state upon application restart or mid-day crash recovery.
+     */
+    public synchronized void rehydrateState(PortfolioMode mode, java.util.List<PositionSnapshot> positions, Integer tradeCount, java.util.Set<String> symbols, Double liveCapital) {
+        PortfolioState portfolio = portfolios.get(mode);
+        if (portfolio != null) {
+            portfolio.rehydrate(positions, tradeCount, symbols, liveCapital);
         }
     }
 

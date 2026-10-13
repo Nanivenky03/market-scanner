@@ -30,7 +30,9 @@ public class AngelOneApiExecutor {
                 SEARCH_SCRIP,
                 HISTORICAL_CANDLE,
                 INSTRUMENT_MASTER,
-                MARKET_DATA_QUOTE
+                MARKET_DATA_QUOTE,
+                RMS_LIMITS,
+                TRADE_BOOK
         }
 
         private final ObjectMapper objectMapper;
@@ -148,6 +150,22 @@ public class AngelOneApiExecutor {
                         throw new ProviderException(
                                         "Failed to parse Angel One API JSON response",
                                         ex);
+                }
+        }
+
+        public <T> T getJson(
+                        ApiEndpoint endpoint,
+                        String url,
+                        Map<String, String> headers,
+                        Class<T> responseType) {
+                RawApiResponse raw = executeRawRequest("GET", url, headers, null);
+                if (raw == null || raw.body() == null || raw.body().isBlank()) {
+                        throw new ProviderException("Angel One API returned empty response for GET " + url);
+                }
+                try {
+                        return objectMapper.readValue(raw.body().trim(), responseType);
+                } catch (Exception ex) {
+                        throw new ProviderException("Failed to parse Angel One GET response: " + ex.getMessage(), ex);
                 }
         }
 
@@ -540,6 +558,7 @@ public class AngelOneApiExecutor {
                         case INSTRUMENT_MASTER ->
                                 instrumentMasterRateMs;
                         case MARKET_DATA_QUOTE -> quoteRateMs;
+                        case RMS_LIMITS, TRADE_BOOK -> authRateMs;
                 };
         }
 
@@ -557,6 +576,7 @@ public class AngelOneApiExecutor {
                                 instrumentMasterRequestsPerSecond;
                         case MARKET_DATA_QUOTE ->
                                 quoteRequestsPerSecond;
+                        case RMS_LIMITS, TRADE_BOOK -> 1;
                 };
         }
 
@@ -574,6 +594,7 @@ public class AngelOneApiExecutor {
                                 instrumentMasterRequestsPerMinute;
                         case MARKET_DATA_QUOTE ->
                                 quoteRequestsPerMinute;
+                        case RMS_LIMITS, TRADE_BOOK -> 30;
                 };
         }
 
@@ -591,6 +612,7 @@ public class AngelOneApiExecutor {
                                 instrumentMasterMaxAttempts;
                         case MARKET_DATA_QUOTE ->
                                 quoteMaxAttempts;
+                        case RMS_LIMITS, TRADE_BOOK -> 2;
                 };
         }
 

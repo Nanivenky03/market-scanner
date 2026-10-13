@@ -129,4 +129,61 @@ class PositionManagerServiceTest {
         PositionSnapshot ratchetedSnapshot = positionManager.getPosition(PortfolioMode.PAPER, "RELIANCE");
         assertThat(ratchetedSnapshot.currentStopLoss()).isEqualTo(2525.0);
     }
+
+    @Test
+    @DisplayName("SHORT Position: Full exit on profit generates positive P&L")
+    void testShortPosition_FullExit_GeneratesPositivePnl() {
+        // Short position: Sell at 500.0, Stop at 510.0, Qty = 20
+        PositionSnapshot shortPos = new PositionSnapshot(
+                1, 2, "SHORT_STOCK", "NSE", "SHORT", 20, 20,
+                500.0, 510.0, 490.0, 515.0, false, LocalDateTime.now());
+        positionManager.registerPosition(PortfolioMode.PAPER, shortPos);
+
+        // Price drops to 480.0 (profit of +20 pts per share)
+        // Manual force close at 480.0
+        positionManager.forceClosePosition(PortfolioMode.PAPER, "SHORT_STOCK", 480.0, "TAKE_PROFIT");
+
+        assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).isEmpty();
+        // P&L = (500 - 480) * 20 = +400.0 (strictly POSITIVE!)
+        assertThat(riskEngine.getPortfolioState(PortfolioMode.PAPER).getRealizedPnl()).isEqualTo(400.0);
+    }
+
+    @Test
+    @DisplayName("SHORT Position: Monotonic ratchet moves stop DOWN, rejects upward move")
+    void testShortPosition_MonotonicStopRatchetMovesDown() {
+        // Short position: Entry 500, Stop 510
+        PositionSnapshot shortPos = new PositionSnapshot(
+                1, 2, "SHORT_RATCHET", "NSE", "SHORT", 20, 20,
+                500.0, 510.0, 490.0, 515.0, false, LocalDateTime.now());
+        positionManager.registerPosition(PortfolioMode.PAPER, shortPos);
+
+        // LTP reaches Target 1 (490.0)
+        PositionAction partial = positionManager.processTick(PortfolioMode.PAPER, "SHORT_RATCHET", 490.0, LocalTime.of(10, 0));
+        assertThat(partial.type()).isEqualTo(PositionAction.ActionType.PARTIAL_EXIT);
+
+        PositionSnapshot posAfterPartial = positionManager.getPosition(PortfolioMode.PAPER, "SHORT_RATCHET");
+        // For short, stop is locked at entry (500.0) or lower (< 510.0)
+        assertThat(posAfterPartial.currentStopLoss()).isLessThanOrEqualTo(500.0);
+    }
+
+    @Test
+    @DisplayName("Authoritative Broker Fill: Re-anchors Target 1 while keeping structural stop fixed")
+    void testRecordBrokerFill_ReAnchorsTargetAndKeepsStructuralStop() {
+        // Pre-signal snapshot at price 100.0 with structural stop at 95.0 (risk 5.0) -> Target 1 = 105.0
+        PositionSnapshot preSignal = new PositionSnapshot(
+                1, 2, "SLIP_STOCK", "NSE", "LONG", 50, 50,
+                100.0, 95.0, 105.0, 96.0, false, LocalDateTime.now());
+        positionManager.registerPosition(PortfolioMode.PAPER, preSignal);
+
+        // Exchange execution fills with slippage at average price 100.50
+        positionManager.recordBrokerFill(PortfolioMode.PAPER, "SLIP_STOCK", 100.50, 50, 25.0);
+
+        PositionSnapshot reconciled = positionManager.getPosition(PortfolioMode.PAPER, "SLIP_STOCK");
+        assertThat(reconciled.entryPrice()).isEqualTo(100.50);
+        // Structural stop stays strictly fixed at 95.0!
+        assertThat(reconciled.currentStopLoss()).isEqualTo(95.0);
+        // Actual risk per share = 100.50 - 95.0 = 5.50
+        // Target 1 re-anchored to fill price + actual risk = 100.50 + 5.50 = 106.00!
+        assertThat(reconciled.target1Price()).isEqualTo(106.00);
+    }
 }

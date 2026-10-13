@@ -106,4 +106,78 @@ public final class AngelOneMarketDtos {
                         Double totalTradedValue,
                         Double totalTradedVolume) {
         }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public record AngelOneRmsResponse(
+                        Boolean status,
+                        String message,
+                        String errorcode,
+                        AngelOneRmsData data) {
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public record AngelOneRmsData(
+                        String net,
+                        String availablecash,
+                        String availablemargin,
+                        String collateral,
+                        String m2munrealized,
+                        String m2mrealized,
+                        String utiliseddebits) {
+
+                public Double getAvailableCashAsDouble() {
+                        try {
+                                if (availablecash != null && !availablecash.isBlank()) {
+                                        return Double.parseDouble(availablecash);
+                                }
+                                if (net != null && !net.isBlank()) {
+                                        return Double.parseDouble(net);
+                                }
+                        } catch (Exception ignored) {
+                        }
+                        return 0.0;
+                }
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public record AngelOneTradeBookResponse(
+                        Boolean status,
+                        String message,
+                        String errorcode,
+                        List<AngelOneTradeBookItem> data) {
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public record AngelOneTradeBookItem(
+                        String exchange,
+                        @JsonProperty("producttype") String productType,
+                        @JsonProperty("tradingsymbol") String tradingSymbol,
+                        @JsonProperty("symboltoken") String symbolToken,
+                        @JsonProperty("orderid") String orderId,
+                        @JsonProperty("tradeid") String tradeId,
+                        @JsonProperty("fillprice") String fillPrice,
+                        @JsonProperty("fillsize") String fillSize,
+                        @JsonProperty("filltime") String fillTime,
+                        @JsonProperty("tradevalue") String tradeValue) {
+
+                public Double getFillPriceAsDouble() {
+                        try {
+                                if (fillPrice != null && !fillPrice.isBlank()) {
+                                        return Double.parseDouble(fillPrice);
+                                }
+                        } catch (Exception ignored) {
+                        }
+                        return 0.0;
+                }
+
+                public Integer getFillSizeAsInt() {
+                        try {
+                                if (fillSize != null && !fillSize.isBlank()) {
+                                        return Integer.parseInt(fillSize);
+                                }
+                        } catch (Exception ignored) {
+                        }
+                        return 0;
+                }
+        }
 }

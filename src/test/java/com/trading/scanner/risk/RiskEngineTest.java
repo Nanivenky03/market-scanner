@@ -214,4 +214,106 @@ class RiskEngineTest {
         RiskEvaluationResult liveResult = riskEngine.evaluateProposal(proposal, PortfolioMode.LIVE);
         assertThat(liveResult.approved()).isTrue();
     }
+
+    @Test
+    @DisplayName("Gate 5: Correctly approves and sizes SHORT proposal with stop above entry")
+    void testGate5_ShortProposal_ApprovedAndSized() {
+        // SHORT setup: Entry at 500.0, Stop Loss at 510.0 (risk = 10 pts)
+        // Capital = 30k -> 1R = 450. Quantity = floor(450 / 10) = 45 shares.
+        StrategyProposal shortProposal = new StrategyProposal(
+                "INFY",
+                "NSE",
+                3,
+                "SHORT_STRATEGY",
+                "SHORT",
+                500.0,
+                510.0, // Stop above entry
+                490.0, // Target below entry
+                512.0,
+                100.0,
+                Map.of("yellowCount", 0L)
+        );
+
+        RiskEvaluationResult result = riskEngine.evaluateProposal(shortProposal, PortfolioMode.PAPER);
+        assertThat(result.approved()).isTrue();
+        assertThat(result.allocatedQuantity()).isEqualTo(45);
+        assertThat(result.riskPerShare()).isEqualTo(10.0);
+        assertThat(result.actualRiskRupees()).isEqualTo(450.0);
+    }
+
+    @Test
+    @DisplayName("Gate 5: Rejects invalid SHORT proposal where stop is below or equal to entry")
+    void testGate5_ShortProposal_InvalidStopRejected() {
+        StrategyProposal invalidShort = new StrategyProposal(
+                "INFY",
+                "NSE",
+                3,
+                "SHORT_STRATEGY",
+                "SHORT",
+                500.0,
+                495.0, // Invalid: stop below entry for short
+                490.0,
+                512.0,
+                100.0,
+                Map.of("yellowCount", 0L)
+        );
+
+        RiskEvaluationResult result = riskEngine.evaluateProposal(invalidShort, PortfolioMode.PAPER);
+        assertThat(result.approved()).isFalse();
+        assertThat(result.rejectionReason()).isEqualTo("INVALID_PRICE_OR_STOP");
+    }
+
+    @Test
+    @DisplayName("Margin & Sizing: Downsizes quantity when committed margin from position 1 constrains position 2")
+    void testDynamicAvailableMargin_ConstrainsSubsequentPosition() {
+        // Capital = 30k. Position 1 commits margin:
+        // Position 1: qty = 260, entry = 500. Trade value = 130,000. Margin @ 5x = 26,000.
+        // Remaining available margin = 30,000 - 26,000 = Rs. 4,000.
+        PositionSnapshot pos1 = new PositionSnapshot(
+                1, 2, "POS1", "NSE", "LONG", 260, 260,
+                500.0, 500.0, 510.0, 495.0, true, LocalDateTime.now());
+        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "POS1", pos1);
+
+        // Position 2 proposal: entry = 500.0, stop = 490.0 (risk per share = 10.0)
+        // By pure 1R risk: 450 / 10 = 45 shares. Required margin = (45 * 500) / 5 = 4,500.
+        // But remaining margin is only 4,000!
+        // Max qty by margin = (4,000 * 5) / 500 = 40 shares.
+        // Engine should smart downsize from 45 to 40 shares!
+        StrategyProposal pos2Proposal = createProposal("POS2", 500.0, 490.0, 0);
+        RiskEvaluationResult result = riskEngine.evaluateProposal(pos2Proposal, PortfolioMode.PAPER);
+
+        assertThat(result.approved()).isTrue();
+        assertThat(result.allocatedQuantity()).isEqualTo(40);
+        assertThat(result.requiredMargin()).isLessThanOrEqualTo(4000.0);
+    }
+
+    @Test
+    @DisplayName("Gate 2: Daily loss kill switch triggers when realized loss + open downside risk breaches 4%")
+    void testGate2_DailyLossKillSwitch_IncludesOpenDownsideRisk() {
+        // Initial capital = 30,000. 4% loss limit = Rs. 1,200.
+        // Realized loss = Rs. 800.
+        riskEngine.recordPositionClosed(PortfolioMode.PAPER, "REALIZED_LOSS", -800.0);
+
+        // Open position 1 has downside risk of Rs. 450 (entry 500, stop 490, qty 45)
+        // Total worst-case loss = -800 - 450 = -1,250 <= -1,200 limit!
+        PositionSnapshot openPos = createPosition("OPEN_STOCK", 45, 500.0, 490.0);
+        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "OPEN_STOCK", openPos);
+
+        StrategyProposal candidate = createProposal("CANDIDATE", 200.0, 195.0, 0);
+        RiskEvaluationResult result = riskEngine.evaluateProposal(candidate, PortfolioMode.PAPER);
+
+        assertThat(result.approved()).isFalse();
+        assertThat(result.rejectionReason()).isEqualTo("DAILY_LOSS_KILL_SWITCH_TRIGGERED");
+    }
+
+    @Test
+    @DisplayName("Syncs LIVE portfolio capital directly from Angel One RMS balance")
+    void testSyncBrokerCapital() {
+        PortfolioState liveState = riskEngine.getPortfolioState(PortfolioMode.LIVE);
+        assertThat(liveState.getCurrentCapital()).isEqualTo(30000.0);
+
+        // Broker RMS reports live balance of Rs. 48,500
+        riskEngine.syncBrokerCapital(PortfolioMode.LIVE, 48500.0);
+        assertThat(liveState.getCurrentCapital()).isEqualTo(48500.0);
+    }
 }

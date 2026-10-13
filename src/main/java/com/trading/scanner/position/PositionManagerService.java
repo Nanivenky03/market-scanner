@@ -143,7 +143,7 @@ public class PositionManagerService {
         String symbol = position.symbol();
         switch (action.type()) {
             case FULL_EXIT -> {
-                double pnl = (currentPrice - position.entryPrice()) * position.currentQuantity();
+                double pnl = calculatePnl(position, currentPrice, position.currentQuantity());
                 activePositions.get(mode).remove(symbol);
                 riskEngine.recordPositionClosed(mode, symbol, pnl);
                 log.info("[{}] FULL EXIT executed for symbol={} at price={} P&L={} reason={}",
@@ -155,7 +155,7 @@ public class PositionManagerService {
                 int remainingQty = position.currentQuantity() - exitQty;
                 double newSl = action.newStopLoss() != null ? action.newStopLoss() : position.entryPrice();
 
-                double partialPnl = (currentPrice - position.entryPrice()) * exitQty;
+                double partialPnl = calculatePnl(position, currentPrice, exitQty);
                 riskEngine.recordPartialExit(mode, partialPnl);
 
                 PositionSnapshot updated = new PositionSnapshot(
@@ -178,29 +178,97 @@ public class PositionManagerService {
                         mode, symbol, exitQty, remainingQty, newSl, partialPnl, action.reason());
             }
             case UPDATE_STOP -> {
-                if (action.newStopLoss() != null && action.newStopLoss() > position.currentStopLoss()) {
-                    PositionSnapshot updated = new PositionSnapshot(
-                            position.positionId(),
-                            position.strategyId(),
-                            position.symbol(),
-                            position.exchange(),
-                            position.positionSide(),
-                            position.initialQuantity(),
-                            position.currentQuantity(),
-                            position.entryPrice(),
-                            action.newStopLoss(),
-                            position.target1Price(),
-                            position.firstCandleHigh(),
-                            position.target1Booked(),
-                            position.entryTime());
-                    activePositions.get(mode).put(symbol, updated);
-                    riskEngine.updatePosition(mode, updated);
-                    log.info("[{}] Ratcheted Stop Loss for symbol={} from {} to {} reason={}",
-                            mode, symbol, position.currentStopLoss(), action.newStopLoss(), action.reason());
+                if (action.newStopLoss() != null && position.currentStopLoss() != null) {
+                    boolean isShort = isShortSide(position.positionSide());
+                    boolean isMonotonicMove = isShort
+                            ? action.newStopLoss() < position.currentStopLoss()
+                            : action.newStopLoss() > position.currentStopLoss();
+                    if (isMonotonicMove) {
+                        PositionSnapshot updated = new PositionSnapshot(
+                                position.positionId(),
+                                position.strategyId(),
+                                position.symbol(),
+                                position.exchange(),
+                                position.positionSide(),
+                                position.initialQuantity(),
+                                position.currentQuantity(),
+                                position.entryPrice(),
+                                action.newStopLoss(),
+                                position.target1Price(),
+                                position.firstCandleHigh(),
+                                position.target1Booked(),
+                                position.entryTime());
+                        activePositions.get(mode).put(symbol, updated);
+                        riskEngine.updatePosition(mode, updated);
+                        log.info("[{}] Ratcheted Stop Loss for symbol={} from {} to {} reason={}",
+                                mode, symbol, position.currentStopLoss(), action.newStopLoss(), action.reason());
+                    }
                 }
             }
             default -> {
             }
+        }
+    }
+
+    private double calculatePnl(PositionSnapshot position, double exitPrice, int quantity) {
+        boolean isShort = isShortSide(position.positionSide());
+        return isShort
+                ? (position.entryPrice() - exitPrice) * quantity
+                : (exitPrice - position.entryPrice()) * quantity;
+    }
+
+    private static boolean isShortSide(String side) {
+        return side != null && ("SHORT".equalsIgnoreCase(side) || "SELL".equalsIgnoreCase(side));
+    }
+
+    /**
+     * Records authoritative broker execution fill and re-anchors targets/actual risk
+     * while keeping the stop-loss fixed at the structural invalidation level.
+     */
+    public void recordBrokerFill(
+            PortfolioMode mode,
+            String symbol,
+            double executedPrice,
+            int executedQty,
+            double actualCharges
+    ) {
+        if (symbol == null) {
+            return;
+        }
+        synchronized (getSymbolLock(symbol)) {
+            PositionSnapshot position = getPosition(mode, symbol);
+            if (position == null) {
+                return;
+            }
+            boolean isShort = isShortSide(position.positionSide());
+            double structuralStop = position.currentStopLoss();
+            double actualRiskPerShare = isShort
+                    ? Math.max(0.01, structuralStop - executedPrice)
+                    : Math.max(0.01, executedPrice - structuralStop);
+
+            double reAnchoredTarget1 = isShort
+                    ? executedPrice - actualRiskPerShare
+                    : executedPrice + actualRiskPerShare;
+
+            PositionSnapshot reAnchored = new PositionSnapshot(
+                    position.positionId(),
+                    position.strategyId(),
+                    position.symbol(),
+                    position.exchange(),
+                    position.positionSide(),
+                    executedQty,
+                    executedQty,
+                    executedPrice,
+                    structuralStop,
+                    reAnchoredTarget1,
+                    position.firstCandleHigh(),
+                    position.target1Booked(),
+                    position.entryTime()
+            );
+            activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(symbol, reAnchored);
+            riskEngine.updatePosition(mode, reAnchored);
+            log.info("[{}] Broker fill recorded for symbol={} fillPrice={} actualRisk={} target1={} charges={}",
+                    mode, symbol, executedPrice, actualRiskPerShare, reAnchoredTarget1, actualCharges);
         }
     }
 
@@ -259,8 +327,14 @@ public class PositionManagerService {
             return;
         }
         for (PositionSnapshot pos : openPositions) {
-            registerPosition(mode, pos);
+            if (pos != null && pos.symbol() != null) {
+                synchronized (getSymbolLock(pos.symbol())) {
+                    activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(pos.symbol(), pos);
+                }
+            }
         }
+        riskEngine.rehydrateState(mode, openPositions, null, null, null);
+        log.info("[{}] Rehydrated {} active positions into RAM and RiskEngine", mode, openPositions.size());
     }
 
     /**
@@ -271,7 +345,7 @@ public class PositionManagerService {
         synchronized (getSymbolLock(symbol)) {
             PositionSnapshot position = getPosition(mode, symbol);
             if (position != null) {
-                double pnl = (exitPrice - position.entryPrice()) * position.currentQuantity();
+                double pnl = calculatePnl(position, exitPrice, position.currentQuantity());
                 activePositions.get(mode).remove(symbol);
                 riskEngine.recordPositionClosed(mode, symbol, pnl);
                 log.warn("[{}] FORCE CLOSE symbol={} at price={} P&L={} reason={}",

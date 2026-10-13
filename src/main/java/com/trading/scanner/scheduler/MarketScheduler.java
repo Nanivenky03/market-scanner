@@ -49,6 +49,7 @@ public class MarketScheduler implements SchedulingConfigurer {
     private final PreMarketWorkflowService preMarketWorkflowService;
     private final RuntimeSettingService runtimeSettingService;
     private final com.trading.scanner.service.data.LiveMarketCandleService liveMarketCandleService;
+    private final com.trading.scanner.position.PositionManagerService positionManagerService;
 
     @Override
     public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
@@ -256,6 +257,34 @@ public class MarketScheduler implements SchedulingConfigurer {
     @Scheduled(fixedDelayString = "${runtime.alert.evaluation-interval-ms:60000}", initialDelayString = "${runtime.alert.evaluation-interval-ms:60000}")
     public void scheduledAlertEvaluation() {
         runtimeAlertService.scheduledEvaluate();
+    }
+
+    @Scheduled(cron = "${runtime.schedule.eod-hard-close-cron:0/30 * 14-15 * * MON-FRI}", zone = "${runtime.schedule.zone}")
+    public void scheduledEodHardCloseSweep() {
+        java.time.LocalDate today = timeProvider.today();
+        if (!tradingCalendar.isTradingDay(today)) {
+            return;
+        }
+        java.time.LocalTime now = timeProvider.nowDateTime().toLocalTime();
+        if (now.isBefore(java.time.LocalTime.of(14, 55)) || now.isAfter(java.time.LocalTime.of(15, 15))) {
+            return;
+        }
+
+        try {
+            java.util.Map<String, Double> lastKnownPrices = liveMarketSnapshotService.getLatestTickPrices();
+            positionManagerService.closeExpiredPositions(
+                    com.trading.scanner.risk.model.PortfolioMode.PAPER,
+                    java.time.LocalTime.of(14, 55),
+                    lastKnownPrices
+            );
+            positionManagerService.closeExpiredPositions(
+                    com.trading.scanner.risk.model.PortfolioMode.LIVE,
+                    java.time.LocalTime.of(14, 55),
+                    lastKnownPrices
+            );
+        } catch (Exception ex) {
+            log.error("Scheduled EOD hard close sweep encountered an error: {}", ex.getMessage(), ex);
+        }
     }
 
     @Scheduled(cron = "${runtime.schedule.eod-reconciliation-cron}", zone = "${runtime.schedule.zone}")

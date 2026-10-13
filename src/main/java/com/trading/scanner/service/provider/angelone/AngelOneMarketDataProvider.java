@@ -617,6 +617,44 @@ public class AngelOneMarketDataProvider
                 return resultMap;
         }
 
+        public AngelOneMarketDtos.AngelOneRmsResponse fetchLiveRmsLimits() {
+                requireProviderEnabled();
+                try {
+                        AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService
+                                        .createSessionTokens();
+                        String url = properties.baseUrl() + "/rest/secure/angelbroking/user/v1/getRMS";
+                        Map<String, String> headers = createHeaders(sessionTokens.jwtToken());
+
+                        return angelOneApiExecutor.getJson(
+                                        AngelOneApiExecutor.ApiEndpoint.RMS_LIMITS,
+                                        url,
+                                        headers,
+                                        AngelOneMarketDtos.AngelOneRmsResponse.class);
+                } catch (Exception ex) {
+                        log.warn("Failed to fetch live RMS limits from Angel One: {}", ex.getMessage(), ex);
+                        return null;
+                }
+        }
+
+        public AngelOneMarketDtos.AngelOneTradeBookResponse fetchTradeBook() {
+                requireProviderEnabled();
+                try {
+                        AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService
+                                        .createSessionTokens();
+                        String url = properties.baseUrl() + "/rest/secure/angelbroking/order/v1/getTradeBook";
+                        Map<String, String> headers = createHeaders(sessionTokens.jwtToken());
+
+                        return angelOneApiExecutor.getJson(
+                                        AngelOneApiExecutor.ApiEndpoint.TRADE_BOOK,
+                                        url,
+                                        headers,
+                                        AngelOneMarketDtos.AngelOneTradeBookResponse.class);
+                } catch (Exception ex) {
+                        log.warn("Failed to fetch trade book from Angel One: {}", ex.getMessage(), ex);
+                        return null;
+                }
+        }
+
         private AngelOneMarketDtos.AngelOneCandleResponse callHistoricalCandleApi(
                         String jwtToken,
                         String exchange,

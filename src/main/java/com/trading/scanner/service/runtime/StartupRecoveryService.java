@@ -17,7 +17,6 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class StartupRecoveryService {
 
@@ -28,6 +27,39 @@ public class StartupRecoveryService {
     private final PreMarketWorkflowService preMarketWorkflowService;
     private final EodReconciliationService eodReconciliationService;
     private final WorkflowStatusService workflowStatusService;
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public StartupRecoveryService(
+            TimeProvider timeProvider,
+            TradingCalendar tradingCalendar,
+            BackfillQueueService backfillQueueService,
+            LiveMarketSnapshotService liveMarketSnapshotService,
+            PreMarketWorkflowService preMarketWorkflowService,
+            EodReconciliationService eodReconciliationService,
+            WorkflowStatusService workflowStatusService,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider) {
+        this.timeProvider = timeProvider;
+        this.tradingCalendar = tradingCalendar;
+        this.backfillQueueService = backfillQueueService;
+        this.liveMarketSnapshotService = liveMarketSnapshotService;
+        this.preMarketWorkflowService = preMarketWorkflowService;
+        this.eodReconciliationService = eodReconciliationService;
+        this.workflowStatusService = workflowStatusService;
+        this.positionManagerServiceProvider = positionManagerServiceProvider;
+    }
+
+    public StartupRecoveryService(
+            TimeProvider timeProvider,
+            TradingCalendar tradingCalendar,
+            BackfillQueueService backfillQueueService,
+            LiveMarketSnapshotService liveMarketSnapshotService,
+            PreMarketWorkflowService preMarketWorkflowService,
+            EodReconciliationService eodReconciliationService,
+            WorkflowStatusService workflowStatusService) {
+        this(timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
+                preMarketWorkflowService, eodReconciliationService, workflowStatusService, null);
+    }
 
     @EventListener(ApplicationReadyEvent.class)
     public void recoverAtStartup() {
@@ -78,6 +110,19 @@ public class StartupRecoveryService {
                 } catch (Exception ex) {
                     log.warn("Auto-catchup EOD reconciliation for today ({}) had issues: {}", today, ex.getMessage(),
                             ex);
+                }
+            }
+
+            // 4. Rehydrate active positions into RAM upon crash recovery
+            if (positionManagerServiceProvider != null) {
+                try {
+                    com.trading.scanner.position.PositionManagerService pms = positionManagerServiceProvider.getIfAvailable();
+                    if (pms != null) {
+                        pms.rehydrateActiveState(com.trading.scanner.risk.model.PortfolioMode.PAPER, java.util.List.of());
+                        pms.rehydrateActiveState(com.trading.scanner.risk.model.PortfolioMode.LIVE, java.util.List.of());
+                    }
+                } catch (Exception ex) {
+                    log.warn("Position rehydration on startup warning: {}", ex.getMessage());
                 }
             }
         }
