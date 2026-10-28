@@ -271,9 +271,14 @@ class FchbRealDataScenarioIntegrationTest {
                 PositionAction action = positionHandler.evaluatePosition(
                                 position, 1498.0, failed1mCandle, 6.0, LocalTime.of(9, 36), Collections.emptyMap());
 
-                // Immediate Structural Invalidation fast cut! Cuts loss to -5 pts instead of
-                // -25.5 pts!
-                assertThat(action.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
-                assertThat(action.reason()).isEqualTo("STRUCTURAL_INVALIDATION");
+                // Institutional Rule: Pure Monotonic Stop Loss. Retests above stop loss hold without false shakeout.
+                assertThat(action.type()).isEqualTo(PositionAction.ActionType.HOLD);
+                assertThat(action.reason()).isEqualTo("HOLD");
+
+                // When price later breaks through the stop loss (e.g. 1475.0 <= 1477.5), full stop exit triggers
+                PositionAction stopLossAction = positionHandler.evaluatePosition(
+                                position, 1475.0, null, 6.0, LocalTime.of(9, 40), Collections.emptyMap());
+                assertThat(stopLossAction.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
+                assertThat(stopLossAction.reason()).isEqualTo("STOP_LOSS_HIT");
         }
 }

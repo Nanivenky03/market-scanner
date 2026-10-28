@@ -104,16 +104,15 @@ class FchbPositionHandlerTest {
     }
 
     @Test
-    @DisplayName("GIVEN 1M candle close < FCH WHEN evaluate THEN returns FULL_EXIT due to structural invalidation")
-    void testStructuralInvalidation() {
+    @DisplayName("GIVEN 1M candle close < FCH AND LTP > stopLoss WHEN evaluate THEN holds position (retest allowed)")
+    void testBreakoutRetestHoldingWhenAboveStopLoss() {
         PositionSnapshot position = createDefaultPosition(); // FCH = 99.5, stop = 98.0
         LocalTime time = LocalTime.of(9, 45, 0);
         MarketCandle broken1m = createCandle(99.6, 99.8, 99.1, 99.2); // close 99.2 < FCH 99.5, LTP 99.2 > SL 98.0
 
         PositionAction action = handler.evaluatePosition(position, 99.2, broken1m, 1.0, time, Collections.emptyMap());
 
-        assertThat(action.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
-        assertThat(action.reason()).isEqualTo("STRUCTURAL_INVALIDATION");
+        assertThat(action.type()).isEqualTo(PositionAction.ActionType.HOLD);
     }
 
     @Test

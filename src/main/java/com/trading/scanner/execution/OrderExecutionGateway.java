@@ -59,6 +59,9 @@ public class OrderExecutionGateway {
         }
     }
 
+    private static final long RMS_DEBOUNCE_INTERVAL_MS = 5000L;
+    private volatile long lastRmsSyncMs = 0L;
+
     /**
      * Executes the candidate StrategyProposal through the atomic execution gateway.
      */
@@ -71,22 +74,26 @@ public class OrderExecutionGateway {
         synchronized (riskEngine.getExecutionGatewayMutex()) {
             String symbol = proposal.symbol();
 
-            // 1. In LIVE mode, fetch live RMS free margin from Angel One to ensure ground truth
+            // 1. In LIVE mode, fetch live RMS free margin from Angel One with 5-second debounce
             if (mode == PortfolioMode.LIVE) {
-                try {
-                    AngelOneMarketDataProvider provider = angelOneMarketDataProvider.getIfAvailable();
-                    if (provider != null && provider.isAvailable()) {
-                        AngelOneMarketDtos.AngelOneRmsResponse rms = provider.fetchLiveRmsLimits();
-                        if (rms != null && rms.data() != null) {
-                            Double liveCash = rms.data().getAvailableCashAsDouble();
-                            if (liveCash != null && liveCash > 0.0) {
-                                riskEngine.syncBrokerCapital(mode, liveCash);
-                                log.debug("[LIVE] Synced free margin from Angel One RMS: Rs. {}", liveCash);
+                long nowMs = System.currentTimeMillis();
+                if (nowMs - lastRmsSyncMs >= RMS_DEBOUNCE_INTERVAL_MS) {
+                    try {
+                        AngelOneMarketDataProvider provider = angelOneMarketDataProvider.getIfAvailable();
+                        if (provider != null && provider.isAvailable()) {
+                            AngelOneMarketDtos.AngelOneRmsResponse rms = provider.fetchLiveRmsLimits();
+                            if (rms != null && rms.data() != null) {
+                                Double liveCash = rms.data().getAvailableCashAsDouble();
+                                if (liveCash != null && liveCash > 0.0) {
+                                    riskEngine.syncBrokerCapital(mode, liveCash);
+                                    lastRmsSyncMs = nowMs;
+                                    log.debug("[LIVE] Synced free margin from Angel One RMS: Rs. {}", liveCash);
+                                }
                             }
                         }
+                    } catch (Exception ex) {
+                        log.warn("Failed to sync Angel One RMS limits before evaluating {}: {}", symbol, ex.getMessage());
                     }
-                } catch (Exception ex) {
-                    log.warn("Failed to sync Angel One RMS limits before evaluating {}: {}", symbol, ex.getMessage());
                 }
             }
 

@@ -96,6 +96,25 @@ public class MasterMarketFilterService {
         }
 
         MarketCandle latest5m = nifty5mCandles.get(nifty5mCandles.size() - 1);
+
+        if (latest5m.getCandleTime() == null || java.time.Duration.between(latest5m.getCandleTime(), now).toMinutes() > 10) {
+            long minutesOld = latest5m.getCandleTime() != null
+                    ? java.time.Duration.between(latest5m.getCandleTime(), now).toMinutes()
+                    : -1;
+            log.warn("[MACRO_DATA_STALE] Latest NIFTY 5M candle is {} minutes old. Market state invalidated.", minutesOld);
+            return new MarketState(
+                    tradingDate,
+                    now,
+                    latest5m.getClosePrice(),
+                    latest5m.getVwap(),
+                    null,
+                    false,
+                    MarketState.MarketRegime.UNKNOWN,
+                    false,
+                    String.format("NIFTY macro candle data is STALE (%d min old, max allowed 10 min)", minutesOld)
+            );
+        }
+
         Double close = latest5m.getClosePrice();
         Double vwap = latest5m.getVwap();
 

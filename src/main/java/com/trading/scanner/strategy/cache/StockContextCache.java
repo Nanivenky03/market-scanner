@@ -106,7 +106,7 @@ public class StockContextCache {
     }
 
     public void onCandleFinalized(MarketCandle candle) {
-        if (candle == null || candle.getSymbol() == null) {
+        if (candle == null || candle.getSymbol() == null || candle.getCandleTime() == null) {
             return;
         }
 

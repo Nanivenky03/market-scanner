@@ -19,6 +19,7 @@ public class PortfolioState {
     private double initialCapital;
     private double currentCapital;
     private double realizedPnl;
+    private double accumulatedIncurredFriction;
     private int dailyTradeCount;
 
     private final Map<String, PositionSnapshot> openPositions = new ConcurrentHashMap<>();
@@ -30,6 +31,7 @@ public class PortfolioState {
         this.currentCapital = initialCapital;
         this.tradingDate = tradingDate;
         this.realizedPnl = 0.0;
+        this.accumulatedIncurredFriction = 0.0;
         this.dailyTradeCount = 0;
     }
 
@@ -80,16 +82,41 @@ public class PortfolioState {
     }
 
     /**
+     * Calculates total estimated exit friction (brokerage + statutory taxes)
+     * reserved across all currently open positions.
+     */
+    public double calculateTotalReservedExitFriction() {
+        return openPositions.values().stream()
+                .mapToDouble(pos -> {
+                    if (pos == null || pos.currentQuantity() == null || pos.entryPrice() == null) {
+                        return 0.0;
+                    }
+                    return com.trading.scanner.risk.BrokerChargesCalculator.estimateExitCharges(
+                            pos.currentQuantity(), pos.entryPrice());
+                })
+                .sum();
+    }
+
+    /**
      * Calculates remaining available margin for new positions.
-     * Formula: max(0.0, CurrentCapital - CommittedMargin)
+     * Formula: max(0.0, CurrentCapital - CommittedMargin - ReservedExitFriction)
      */
     public double calculateAvailableMargin(double leverageFactor) {
-        return Math.max(0.0, this.currentCapital - calculateTotalCommittedMargin(leverageFactor));
+        double committed = calculateTotalCommittedMargin(leverageFactor);
+        double reservedExit = calculateTotalReservedExitFriction();
+        return Math.max(0.0, this.currentCapital - committed - reservedExit);
     }
 
     public synchronized void recordPartialExit(double pnl) {
         this.realizedPnl += pnl;
-        this.currentCapital = this.initialCapital + this.realizedPnl;
+        this.currentCapital = this.initialCapital + this.realizedPnl - this.accumulatedIncurredFriction;
+    }
+
+    public synchronized void recordFrictionIncurred(double friction) {
+        if (friction > 0.0) {
+            this.accumulatedIncurredFriction += friction;
+            this.currentCapital = this.initialCapital + this.realizedPnl - this.accumulatedIncurredFriction;
+        }
     }
 
     public synchronized void recordTradeExecuted(String symbol, PositionSnapshot position) {
@@ -119,7 +146,7 @@ public class PortfolioState {
     public synchronized void recordPositionClosed(String symbol, double pnl) {
         openPositions.remove(symbol);
         this.realizedPnl += pnl;
-        this.currentCapital = this.initialCapital + this.realizedPnl;
+        this.currentCapital = this.initialCapital + this.realizedPnl - this.accumulatedIncurredFriction;
     }
 
     public boolean hasTradedSymbolToday(String symbol) {
@@ -169,6 +196,7 @@ public class PortfolioState {
         this.initialCapital = startingCapital;
         this.currentCapital = startingCapital;
         this.realizedPnl = 0.0;
+        this.accumulatedIncurredFriction = 0.0;
         this.dailyTradeCount = 0;
         this.openPositions.clear();
         this.tradedSymbolsToday.clear();
@@ -194,6 +222,14 @@ public class PortfolioState {
         return realizedPnl;
     }
 
+    public double getAccumulatedIncurredFriction() {
+        return accumulatedIncurredFriction;
+    }
+
+    public double getNetRealizedPnl() {
+        return realizedPnl - accumulatedIncurredFriction;
+    }
+
     public int getDailyTradeCount() {
         return dailyTradeCount;
     }
@@ -204,5 +240,28 @@ public class PortfolioState {
 
     public Set<String> getTradedSymbolsToday() {
         return Collections.unmodifiableSet(tradedSymbolsToday);
+    }
+
+    public synchronized PortfolioSnapshot getSnapshot(double leverageFactor) {
+        double committed = calculateTotalCommittedMargin(leverageFactor);
+        double openRisk = calculateTotalOpenDownsideRisk();
+        double reservedExit = calculateTotalReservedExitFriction();
+        double available = calculateAvailableMargin(leverageFactor);
+        return new PortfolioSnapshot(
+                this.mode,
+                this.tradingDate,
+                this.initialCapital,
+                this.currentCapital,
+                this.realizedPnl,
+                this.accumulatedIncurredFriction,
+                getNetRealizedPnl(),
+                committed,
+                openRisk,
+                reservedExit,
+                available,
+                this.dailyTradeCount,
+                Map.copyOf(this.openPositions),
+                Set.copyOf(this.tradedSymbolsToday)
+        );
     }
 }

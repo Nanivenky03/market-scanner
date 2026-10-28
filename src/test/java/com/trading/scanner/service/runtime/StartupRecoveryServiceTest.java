@@ -103,4 +103,48 @@ class StartupRecoveryServiceTest {
 
                 verify(timeProvider).today();
         }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        void recoverNow_shouldRehydrateOpenPositionsFromRepositories() {
+                LocalDate today = LocalDate.of(2026, 8, 24);
+                when(timeProvider.today()).thenReturn(today);
+                when(timeProvider.nowDateTime()).thenReturn(today.atTime(10, 0));
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+
+                com.trading.scanner.position.PositionManagerService pms = mock(com.trading.scanner.position.PositionManagerService.class);
+                com.trading.scanner.repository.PositionRepository posRepo = mock(com.trading.scanner.repository.PositionRepository.class);
+                com.trading.scanner.repository.SimulatedPositionRepository simPosRepo = mock(com.trading.scanner.repository.SimulatedPositionRepository.class);
+
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> pmsProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.PositionRepository> posRepoProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simPosRepoProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+
+                when(pmsProvider.getIfAvailable()).thenReturn(pms);
+                when(posRepoProvider.getIfAvailable()).thenReturn(posRepo);
+                when(simPosRepoProvider.getIfAvailable()).thenReturn(simPosRepo);
+
+                com.trading.scanner.model.Position livePos = com.trading.scanner.model.Position.builder()
+                                .id(101).strategyId(2).symbol("SBIN").exchange("NSE").positionSide("LONG")
+                                .initialQuantity(50).currentQuantity(50).entryPrice(800.0).initialStopLoss(790.0)
+                                .initialTarget(810.0).entryTime("2026-08-24T09:35:00").positionStatus("OPEN").build();
+
+                com.trading.scanner.model.SimulatedPosition paperPos = com.trading.scanner.model.SimulatedPosition.builder()
+                                .id(201).strategyId(2).symbol("RELIANCE").exchange("NSE").positionSide("LONG")
+                                .initialQuantity(20).currentQuantity(20).entryPrice(2500.0).initialStopLoss(2480.0)
+                                .initialTarget(2520.0).entryTime("2026-08-24T09:35:00").positionStatus("OPEN").build();
+
+                when(posRepo.findByPositionStatus("OPEN")).thenReturn(java.util.List.of(livePos));
+                when(simPosRepo.findByPositionStatus("OPEN")).thenReturn(java.util.List.of(paperPos));
+
+                StartupRecoveryService recoveryServiceWithPms = new StartupRecoveryService(
+                                timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
+                                preMarketWorkflowService, eodReconciliationService, workflowStatusService,
+                                pmsProvider, posRepoProvider, simPosRepoProvider);
+
+                recoveryServiceWithPms.recoverNow();
+
+                verify(pms).rehydrateActiveState(eq(com.trading.scanner.risk.model.PortfolioMode.LIVE), anyList());
+                verify(pms).rehydrateActiveState(eq(com.trading.scanner.risk.model.PortfolioMode.PAPER), anyList());
+        }
 }

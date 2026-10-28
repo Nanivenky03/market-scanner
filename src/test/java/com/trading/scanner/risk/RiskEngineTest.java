@@ -277,13 +277,13 @@ class RiskEngineTest {
         // Position 2 proposal: entry = 500.0, stop = 490.0 (risk per share = 10.0)
         // By pure 1R risk: 450 / 10 = 45 shares. Required margin = (45 * 500) / 5 = 4,500.
         // But remaining margin is only 4,000!
-        // Max qty by margin = (4,000 * 5) / 500 = 40 shares.
-        // Engine should smart downsize from 45 to 40 shares!
+        // Max qty by margin = ((4,000 - reservedExitFriction) * 5) / 500 = 39 shares.
+        // Engine should smart downsize from 45 to 39 shares!
         StrategyProposal pos2Proposal = createProposal("POS2", 500.0, 490.0, 0);
         RiskEvaluationResult result = riskEngine.evaluateProposal(pos2Proposal, PortfolioMode.PAPER);
 
         assertThat(result.approved()).isTrue();
-        assertThat(result.allocatedQuantity()).isEqualTo(40);
+        assertThat(result.allocatedQuantity()).isEqualTo(39);
         assertThat(result.requiredMargin()).isLessThanOrEqualTo(4000.0);
     }
 

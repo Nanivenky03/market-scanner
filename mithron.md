@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-10-13  
-Status: **Version 2.3 Complete** (Strategy Intelligence, Institutional Risk Engine, Dual-Directional Position Management & Order Gateway — 394 unit tests passing).
+Last audited: 2026-10-28  
+Status: **Version 2.3 Complete** (Strategy Intelligence, Institutional Hardening across 7 Audit Issues, Dual-Directional Risk Engine, Monotonic Stop Loss & Order Gateway — 401 unit tests passing).
 
 ---
 
@@ -141,18 +141,18 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
     • V2.1-FIX Production Reliability Fixes: COMPLETED ✅ (WebSocket timestamp reset on connect/disconnect & premarket-live-start transition order; 327 unit tests passing).
     • V2.2 FCHB Strategy Module & Position Handler: COMPLETED ✅
       - Pure Strategy Evaluator (`FchbStrategy`): 5M breakout trigger, Candle 1 reference (turnover >= Rs. 1 Cr, range 0.15%-3.0%), 7-factor Red/Yellow/Green Traffic-Light Quality Gate, Two-Factor Volume model (VOL_X >= 1.8 hard gate + time-weighted Candle 1 ratio).
-      - Decoupled Position Handler (`FchbPositionHandler`): 7-step priority exits (15:00 hard close, 14:45/14:15 wind-down, tick stop breach, 1M structural invalidation fast cut, Target 1 +1R 50% partial exit with immediate breakeven stop lock, +0.8R breakeven ratchet, and 1M ATR trailing ratchet for the remaining 50% runner).
-      - Unit Test Coverage: 32 dedicated unit test cases (21 strategy tests, 11 position handler tests), 359/359 test suite passing.
-    • V2.3 Portfolio Risk Engine, Institutional Position Manager & Dual-Directional Hardening: COMPLETED ✅
-      - Universal Dual-Directional Geometry: Side-aware sizing, downside risk, P&L, monotonic ratchets (UP for LONG, DOWN for SHORT), and exit rules for both LONG and SHORT strategies.
-      - Dynamic Buying Power & Smart Downsizing: Evaluates live available margin against committed margin; downsizes sizing to buying power with strict 3x Friction filter (rejecting high-friction churn traps with `EXCESSIVE_FRICTION_DRAG`).
-      - Gate 2 Total Worst-Case Loss Gate: Evaluates `realizedPnl - openDownsideRisk <= -4%` across all open positions and candidate risk, preventing multi-position stop gap drawdowns.
-      - Single-Writer Serialized Execution Gateway (`OrderExecutionGateway`): Serializes candidate proposal evaluation, symbol lock acquisition, order placement, and margin commits via mutex while preserving per-symbol concurrency for tick monitoring.
-      - Authoritative Angel One Sync: Live RMS margin sync (`getRMS`) and Trade Book fill reconciliation (`getTradeBook`); fixed structural stops with fill-anchored targets.
-      - Active 14:55:00 Scheduled EOD Hard Close Sweep: Sweeps every 30s in `MarketScheduler` to exit illiquid positions before broker auto-square-off penalties.
-      - Startup Active Position Rehydration: Automatically restores active positions, ratcheted stops, and daily trade quotas from PostgreSQL into RAM and RiskEngine on boot.
-      - 4 Real-Data Replay Integration Scenarios verified using captured database candles.
-      - 394/395 test suite passing (100% pass rate).
+      - Decoupled Position Handler (`FchbPositionHandler`): Pure monotonic stop loss architecture (holding normal retests above stop loss without false shakeouts). Exits strictly on stop loss hit, Target 1 +1R 50% partial exit with immediate breakeven stop lock, +0.8R breakeven ratchet, 1M ATR trailing ratchet for the remaining 50% runner, 14:45/14:15 wind-down, and 15:00 hard close.
+      - Unit Test Coverage: Dedicated unit test suite with 100% test pass rate.
+    • V2.3 Portfolio Risk Engine, Institutional Position Manager & 7-Issue Hardening: COMPLETED ✅
+      - Institutional Statutory Accounting (`BrokerChargesCalculator`): Dedicated Angel One fee schedule (min ₹5, max ₹20 per executed leg) + statutory turnover taxes (STT 0.025% sell, Stamp Duty 0.003% buy, NSE 0.00307%, SEBI ₹10/Cr, 18% GST). Accurate 3-leg conservative trade friction calculation.
+      - 5-Phase Risk Engine Pipeline (`RiskEngine`): Strict sequence of Phase 1 (Zero-cost fast rejections: Symbol Lock, Trade Cap & All-Green, Max 3 Positions, Existing Account Breaker) → Phase 2 (Signal Validity) → Phase 3 (1R Sizing & Margin minus reserved exit friction) → Phase 4 (3x Friction Viability Filter) → Phase 5 (Master Open Risk Cap < 3.2% & Forward-Looking Daily Loss Kill Switch accounting for candidate risk & friction).
+      - Precision Dual-Anchor Accounting (`PortfolioState`): Tracks gross PnL, incurred friction, net realized PnL, committed margin, and dynamically reserved exit friction across open positions. Provides thread-safe atomic `PortfolioSnapshot`.
+      - Single-Writer Serialized Execution Gateway (`OrderExecutionGateway`): 5-second debounced live RMS limits query to protect broker rate limits and avoid mutex stalling.
+      - Zombie Position Prevention & Safe Trailing (`PositionManagerService`): Auto-converts partial exit to full exit when qty <= 1 or remaining <= 0; safely clamps partial quantities (`Math.round`); enforces universal monotonic stop movement.
+      - Macro Staleness Circuit Breaker (`MasterMarketFilterService`): 10-minute maximum staleness guard sets `regime = UNKNOWN` and `dataValid = false` if Nifty 5M candles lag during market hours.
+      - Fail-Safe Thread Isolation: Null candle guards in `StockContextCache` and safe stream copies during timer sweeps.
+      - V2 Persistence & Startup Crash Recovery: Flyway `V034` (legacy drops) & `V035` (V2 strategy schema); populated 16 JPA entities & Spring Data repositories; wired real database rehydration in `StartupRecoveryService`.
+      - 401/401 unit & integration tests passing (100% pass rate).
     • V2.4 Master Workflow Orchestrator & Execution Adapters: NEXT STAGE (Conductor, simulation database adapter, and REST simulation replay).
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]

@@ -144,19 +144,56 @@ public class PositionManagerService {
         switch (action.type()) {
             case FULL_EXIT -> {
                 double pnl = calculatePnl(position, currentPrice, position.currentQuantity());
+                double exitTurnover = position.currentQuantity() * currentPrice;
+                double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
                 activePositions.get(mode).remove(symbol);
                 riskEngine.recordPositionClosed(mode, symbol, pnl);
-                log.info("[{}] FULL EXIT executed for symbol={} at price={} P&L={} reason={}",
-                        mode, symbol, currentPrice, pnl, action.reason());
+                riskEngine.recordFrictionIncurred(mode, exitFriction);
+                log.info("[{}] FULL EXIT executed for symbol={} at price={} P&L={} friction={} reason={}",
+                        mode, symbol, currentPrice, pnl, exitFriction, action.reason());
             }
             case PARTIAL_EXIT -> {
+                if (position.currentQuantity() <= 1) {
+                    double pnl = calculatePnl(position, currentPrice, position.currentQuantity());
+                    double exitTurnover = position.currentQuantity() * currentPrice;
+                    double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
+                    activePositions.get(mode).remove(symbol);
+                    riskEngine.recordPositionClosed(mode, symbol, pnl);
+                    riskEngine.recordFrictionIncurred(mode, exitFriction);
+                    log.info("[{}] PARTIAL EXIT auto-converted to FULL EXIT (qty <= 1) for symbol={} at price={} P&L={}",
+                            mode, symbol, currentPrice, pnl);
+                    return;
+                }
+
                 double fraction = action.exitQuantityFraction() != null ? action.exitQuantityFraction() : 0.5;
                 int exitQty = (int) Math.round(position.currentQuantity() * fraction);
+                exitQty = Math.max(1, Math.min(position.currentQuantity() - 1, exitQty));
                 int remainingQty = position.currentQuantity() - exitQty;
-                double newSl = action.newStopLoss() != null ? action.newStopLoss() : position.entryPrice();
+
+                if (remainingQty <= 0) {
+                    double pnl = calculatePnl(position, currentPrice, position.currentQuantity());
+                    double exitTurnover = position.currentQuantity() * currentPrice;
+                    double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
+                    activePositions.get(mode).remove(symbol);
+                    riskEngine.recordPositionClosed(mode, symbol, pnl);
+                    riskEngine.recordFrictionIncurred(mode, exitFriction);
+                    log.info("[{}] PARTIAL EXIT auto-converted to FULL EXIT (remainingQty <= 0) for symbol={} at price={} P&L={}",
+                            mode, symbol, currentPrice, pnl);
+                    return;
+                }
+
+                boolean isShort = isShortSide(position.positionSide());
+                double candidateSl = action.newStopLoss() != null ? action.newStopLoss() : position.entryPrice();
+                double newSl = isShort
+                        ? Math.min(position.currentStopLoss(), candidateSl)
+                        : Math.max(position.currentStopLoss(), candidateSl);
 
                 double partialPnl = calculatePnl(position, currentPrice, exitQty);
+                double partialTurnover = exitQty * currentPrice;
+                double partialFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(partialTurnover);
+
                 riskEngine.recordPartialExit(mode, partialPnl);
+                riskEngine.recordFrictionIncurred(mode, partialFriction);
 
                 PositionSnapshot updated = new PositionSnapshot(
                         position.positionId(),
@@ -174,8 +211,8 @@ public class PositionManagerService {
                         position.entryTime());
                 activePositions.get(mode).put(symbol, updated);
                 riskEngine.updatePosition(mode, updated);
-                log.info("[{}] PARTIAL EXIT booked for symbol={} exitQty={} remainingQty={} newStop={} partialPnl={} reason={}",
-                        mode, symbol, exitQty, remainingQty, newSl, partialPnl, action.reason());
+                log.info("[{}] PARTIAL EXIT booked for symbol={} exitQty={} remainingQty={} newStop={} partialPnl={} friction={} reason={}",
+                        mode, symbol, exitQty, remainingQty, newSl, partialPnl, partialFriction, action.reason());
             }
             case UPDATE_STOP -> {
                 if (action.newStopLoss() != null && position.currentStopLoss() != null) {
@@ -267,6 +304,9 @@ public class PositionManagerService {
             );
             activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(symbol, reAnchored);
             riskEngine.updatePosition(mode, reAnchored);
+            if (actualCharges > 0.0) {
+                riskEngine.recordFrictionIncurred(mode, actualCharges);
+            }
             log.info("[{}] Broker fill recorded for symbol={} fillPrice={} actualRisk={} target1={} charges={}",
                     mode, symbol, executedPrice, actualRiskPerShare, reAnchoredTarget1, actualCharges);
         }
@@ -282,7 +322,11 @@ public class PositionManagerService {
             return;
         }
 
-        for (PositionSnapshot pos : List.copyOf(positions.values())) {
+        List<PositionSnapshot> snapshotList = positions.values().stream()
+                .filter(pos -> pos != null && pos.symbol() != null)
+                .toList();
+
+        for (PositionSnapshot pos : snapshotList) {
             synchronized (getSymbolLock(pos.symbol())) {
                 if (activePositions.get(mode).containsKey(pos.symbol())) {
                     double exitPrice = (lastKnownPrices != null && lastKnownPrices.containsKey(pos.symbol()))

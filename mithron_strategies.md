@@ -18,6 +18,11 @@ Nifty LTP > Nifty VWAP → Long rules active → all three strategies may run
 Nifty LTP < Nifty VWAP → Long rules suspended → no signals from any strategy
 
 This is checked on every 5M candle close (tick-level or 1M crosses are noise).
+Data Freshness Circuit Breaker:
+  If the latest finalized NIFTY 5M candle is older than 10 minutes during market hours (> 09:25 AM):
+    → Market regime is set to UNKNOWN and dataValid is set to FALSE.
+    → Fail-closed rule: All new strategy entries are blocked automatically until fresh Nifty data resumes.
+
 State machine:
   If Nifty 5M candle closes BELOW Nifty VWAP:
     → Suspend new entries from that candle close onwards
@@ -144,17 +149,19 @@ Why the original R:R Formula (netRewardAt1R / netRiskAt1R >= 1.5) was retired:
 The Definitive 3x Friction Viability Filter:
   Expected 1R Gross Profit >= 3 × Estimated Round-Trip Friction
 
-Pre-Trade Conservative Friction Estimation (3-Leg Conservative Formula):
-  Estimated Charges = Rs. 60 (Brokerage) + (Round-Trip Turnover × 0.00035) + GST
-  Where:
-    - Brokerage = Rs. 60 flat (assumes conservative 3-leg execution: 1 entry + 2 partial exits)
-    - Statutory Rates (~0.00035) = STT (0.025% on sell), NSE Exchange Fees (0.00297% both ways), Stamp Duty (0.003%), SEBI fees
-    - Round-Trip Turnover = 2 × (Quantity × EntryPrice)
+Pre-Trade Conservative Friction Estimation (BrokerChargesCalculator):
+  Implemented in `BrokerChargesCalculator.calculate3LegEstimatedFriction(tradeValue)`:
+  - Brokerage: ₹60.0 flat (assumes conservative 3-leg execution: 1 entry + 2 partial exits at max ₹20/leg)
+  - STT: 0.025% on sell turnover (₹0 on buy)
+  - Stamp Duty: 0.003% on buy turnover (₹0 on sell)
+  - NSE Exchange Txn Fee: 0.00307% on both legs
+  - SEBI Turnover Fee: ₹10 / Crore (0.0001%) on both legs
+  - GST: 18% on (Brokerage + Exchange Fees + SEBI Fees)
+  - Round-Trip Turnover = 2 × (Quantity × EntryPrice)
 
 Post-Trade Official Reconciliation:
-  SmartAPI estimateCharges API has known broker-side discrepancies and is NOT used for pre-trade gating.
-  Pre-trade gating strictly uses the conservative 3-leg formula above.
-  Post-trade P&L accounting reconciles exact actual charges deducted from the broker order execution feed.
+  Pre-trade gating strictly uses the dedicated `BrokerChargesCalculator` above.
+  Post-trade P&L accounting records exact actual charges deducted from broker order fills via `PositionManagerService.recordBrokerFill()`, updating `PortfolioState.accumulatedIncurredFriction` and `netRealizedPnl`.
 
 Why this calculation protects small accounts (e.g., Rs. 30,000 capital):
   - On a normal Rs. 500 stock with Rs. 4 stop: Qty = 112, Turnover = Rs. 1.12L, Charges = ~Rs. 99.
@@ -240,55 +247,66 @@ Why Portfolios Must Be Decoupled:
   Both portfolios execute the exact same risk rules, but against their own isolated state machines.
 ```
 
-### Eight Pre-Trade Risk Gates (Evaluated per Portfolio):
+### Strict 5-Phase Pre-Trade Risk Pipeline (Evaluated per Portfolio):
 
-All eight gates must pass. A single failure immediately rejects the proposal:
+All gates are evaluated in a strict, predictable sequential pipeline. Fast, zero-cost checks reject invalid proposals before expensive calculations:
 
 ```
-Gate 1: Open positions < 3
-  Maximum 3 concurrent open positions at any given moment.
+=============================================================================
+PHASE 1: ZERO-COST FAST DISQUALIFICATIONS (Pre-Sizing)
+=============================================================================
+Gate 1: Symbol Lock (One Entry Per Stock Per Day)
+  Strictly 1 entry per stock per day across all strategies combined in that portfolio.
+  Rejected if portfolio.hasTradedSymbolToday(proposal.symbol()).
+  Phantom Signal Protection: If an entry order cancels without executing, the symbol is unlocked.
 
-Gate 2: Worst-Case Daily Loss Gate (Realized P&L - Open Downside Risk)
-  Calculated using CURRENT live trailing stop levels relative to entry across all open positions:
-    For LONG:  OpenRisk = Quantity × max(0.0, Entry Price - Current Trailing Stop)
-    For SHORT: OpenRisk = Quantity × max(0.0, Current Trailing Stop - Entry Price)
-    Total Open Risk = Sum(OpenRisk)
-  Worst-Case Loss Check:
-    If (realizedPnl - Total Open Risk - candidateProposalRisk) <= -4.0% × StartingCapital:
-      Proposal rejected ("MAX_DAILY_LOSS_BREACHED").
-  Protects the account from simultaneous stop breaches across multiple open positions wiping out daily capital.
+Gate 2: Daily Trade Cap (Max 5) & Quality Gate for Trades 4-5
+  Trade count >= 5 rejected ("MAX_DAILY_TRADES_REACHED").
+  For Trades 4 and 5 (tradeCount >= 3): Must be strictly ALL GREEN (yellowCount == 0).
+  If yellowCount > 0 rejected ("LATE_TRADE_ALL_GREEN_VIOLATION").
 
-Gate 3: Open Downside Risk Exposure < 3.2% of capital
-  Ensures that active unratcheted stop exposure across all open positions does not exceed 3.2% of capital, leaving a 0.8% protective buffer before the 4% hard kill-switch.
+Gate 3: Concurrent Open Positions Cap (Max 3)
+  Open positions >= 3 rejected ("MAX_CONCURRENT_POSITIONS_REACHED").
 
-Gate 4: Total executed trades today < 5 (Trade Quota & YELLOW Handoff)
-  Maximum 5 executed trades per day.
-  Trades 1–3: Admission rule allows up to 2 YELLOW conditions (0 RED).
-  Trades 4–5: Admission rule requires ALL GREEN conditions (0 RED, 0 YELLOW).
-  Architecture Handoff Rule:
-    - The Strategy layer evaluates purely against a 2-YELLOW budget and emits proposal metadata (yellowCount).
-    - The Risk Engine receives current daily trade count (1-5).
-    - If trade count >= 3 (evaluating for trade 4 or 5) AND yellowCount > 0: Risk Engine REJECTS the trade.
+Gate 4: Existing Account Circuit Breaker
+  netRealizedPnl - currentOpenRisk <= -4.0% rejected ("DAILY_LOSS_KILL_SWITCH_TRIGGERED").
 
-Gate 5: Directional Structure & Target Validity
-  For LONG:  Entry > InitialStopLoss AND Target1 > Entry (strictly positive risk and reward).
-  For SHORT: Entry < InitialStopLoss AND Target1 < Entry (strictly positive risk and reward).
-  If invalid: Proposal rejected ("INVALID_PRICE_LEVELS").
+=============================================================================
+PHASE 2: SIGNAL VALIDITY & SANITY
+=============================================================================
+Gate 5: Directional Structure & Stop Bounds
+  For LONG:  Entry > InitialStopLoss AND Target1 > Entry.
+  For SHORT: Entry < InitialStopLoss AND Target1 < Entry.
+  Stop Distance: Must satisfy 0.2% <= StopDistance <= 5.0% of Entry Price.
 
+=============================================================================
+PHASE 3: SIZING, MARGIN & CHARGES ENGINE
+=============================================================================
 Gate 6: Dynamic Available Margin Check & Smart Downsizing
-  AvailableMargin = min(LiveBrokerCash, RAM_Cash - TotalCommittedMargin)
+  Target risk = 1.0% of current capital (1R).
+  AvailableMargin = StartingCapital - CommittedMargin - ReservedExitFriction.
   If RequiredMargin > AvailableMargin:
-    Downsize to available buying power (min 2 shares).
-    If buying power cannot fund at least 2 shares: Proposal rejected ("INSUFFICIENT_MARGIN_CAPITAL").
+    Downsize to available buying power (min 2 shares for 50% partial exit).
+    If quantity < 2 rejected ("INSUFFICIENT_MARGIN_CAPITAL" or "QUANTITY_LESS_THAN_MINIMUM_2").
 
+=============================================================================
+PHASE 4: FRICTION VIABILITY FILTER
+=============================================================================
 Gate 7: 3x Friction Viability Filter
-  Expected 1R Gross Profit >= 3 × Estimated Round-Trip Friction (using conservative 3-leg formula).
-  If 1R < 3 × Friction: Proposal rejected ("EXCESSIVE_FRICTION_DRAG").
-  Guarantees edge is not eroded by turnover-based statutory taxes and brokerage on downsized trades.
+  Expected 1R Gross Profit >= 3 × Estimated Round-Trip Friction (BrokerChargesCalculator 3-leg formula).
+  If actualRiskRupees < 3 * estimatedFriction rejected ("EXCESSIVE_FRICTION_DRAG").
 
-Gate 8: Symbol Lock (One Entry Per Stock Per Day)
-  Strictly one entry per stock per day across all strategies combined in that portfolio.
-  Phantom Signal Protection: If a limit or proposed entry was cancelled without executing, the symbol is NOT locked. Only a FILLED execution locks the symbol for the remainder of the day.
+=============================================================================
+PHASE 5: MASTER PORTFOLIO RISK & LOSS PROTECTION
+=============================================================================
+Gate 8: Portfolio Open Downside Risk Cap (< 3.2% of Starting Capital)
+  currentOpenRisk + actualRiskRupees > 3.2% rejected ("PORTFOLIO_OPEN_RISK_CAP_EXCEEDED").
+  Leaves a 0.8% buffer before the hard 4% daily kill switch.
+
+Gate 9: Master Forward-Looking Daily Loss Kill Switch
+  Projected worst-case loss including candidate trade risk AND candidate trade friction:
+    projectedWorstCaseLoss = netRealizedPnl - currentOpenRisk - openExitFriction - candidateRisk - candidateFriction
+  If projectedWorstCaseLoss <= -4.0% rejected ("DAILY_LOSS_KILL_SWITCH_TRIGGERED").
 ```
 
 ### Serialized Single-Writer Execution Gateway (`OrderExecutionGateway`):
@@ -354,10 +372,11 @@ Mithron's Architectural Solution: The Single-Order State Machine
    - The resting order is modified IN-PLACE on the exchange order book.
    - Zero new orders created. Zero race condition possible.
 
-4. Emergency Exit / Early Structural Invalidation:
-   - If an early structural invalidation fires (e.g., 1M candle closes back inside first candle range):
-   - Mithron does NOT cancel the order and send a new order.
-   - Mithron modifies the EXISTING resting stop-loss order directly to MARKET:
+4. Pure Monotonic Stop Loss & Emergency Exits:
+   - Institutional Invariant: Stops move monotonically forward only (tightening risk, never widening).
+   - Retest Holding: Normal breakout retests above the stop loss do NOT trigger premature exits. The trade is given breathing room to develop.
+   - Stop Loss Hit: If price touches or crosses the stop level, the resting STOPLOSS_MARKET order triggers an immediate exchange execution.
+   - Emergency or EOD Sweep Exits: Mithron modifies the EXISTING resting stop-loss order directly to MARKET:
        modifyOrder(orderId, orderType="MARKET")
    - The broker exchange instantly converts the resting order into an immediate market execution.
    - If the resting order already filled just before the modification reached the broker, the modify call returns "Order already executed" (AB1004/AB1008). Mithron catches this response and cleanly marks position status as CLOSED without sending any redundant sell orders.
@@ -901,12 +920,9 @@ Initial Stop Loss Price:
   stopLossPrice = firstCandleLow × 0.995
   (Placed immediately as resting STOPLOSS_MARKET order on broker exchange upon entry fill)
 
-Early Structural Invalidation (Immediate Exit):
-  If any subsequent 1M candle CLOSES back inside the first candle range:
-    close < firstCandleHigh
-  → Triggers IMMEDIATE MARKET EXIT via single-order state machine:
-    modifyOrder(orderId, orderType="MARKET")
-  Rationale: The premise of FCHB is that buyers hold the opening high as support. A 1M candle close back inside the first candle range confirms failure. Exiting immediately preserves capital rather than absorbing a full -1R loss at firstCandleLow.
+Pure Monotonic Stop Loss Rule:
+  Normal breakout retests that dip below firstCandleHigh but remain strictly above stopLossPrice HOLD the position.
+  Rationale: 1-minute candle retests are standard breakout microstructure. Cutting trades on minor 1M retests causes false shakeouts before the actual trend unfolds. The position exits if and only if the structural stop loss is hit, profit targets are achieved, or session cutoff occurs.
 
 Breakeven Ratchet (+0.8R):
   When price touches +0.8R (0.8 × (entryPrice - initialStopLoss)):

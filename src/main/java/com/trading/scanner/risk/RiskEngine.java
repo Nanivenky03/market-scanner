@@ -52,7 +52,13 @@ public class RiskEngine {
     }
 
     /**
-     * Evaluates a candidate StrategyProposal against the 7 Pre-Trade Risk Gates.
+     * Evaluates a candidate StrategyProposal against the Pre-Trade Risk Gates
+     * in a strict pipeline sequence:
+     * Phase 1: Fast zero-cost disqualifications (Symbol lock, trade count, positions cap, existing drawdown)
+     * Phase 2: Price and direction sanity
+     * Phase 3: Exact sizing, margin availability, and candidate friction calculation
+     * Phase 4: Friction drag viability filter
+     * Phase 5: Master portfolio open risk cap and total projected worst-case loss protection
      */
     public synchronized RiskEvaluationResult evaluateProposal(StrategyProposal proposal, PortfolioMode mode) {
         if (proposal == null) {
@@ -64,28 +70,20 @@ public class RiskEngine {
             return RiskEvaluationResult.rejected("PORTFOLIO_NOT_INITIALIZED", proposal);
         }
 
-        // Gate 1: Concurrent Open Positions Cap (Max 3)
-        if (portfolio.getOpenPositions().size() >= MAX_CONCURRENT_POSITIONS) {
-            return RiskEvaluationResult.rejected("MAX_CONCURRENT_POSITIONS_REACHED", proposal);
+        // ==========================================
+        // PHASE 1: FAST ZERO-COST DISQUALIFICATIONS
+        // ==========================================
+
+        // Gate 1: Symbol Lock (Strictly 1 entry per symbol per day)
+        if (portfolio.hasTradedSymbolToday(proposal.symbol())) {
+            return RiskEvaluationResult.rejected("SYMBOL_ALREADY_TRADED_TODAY", proposal);
         }
 
-        // Gate 2: Daily Loss Kill Switch (4.0% of Initial Capital)
-        // Evaluates realized loss + current open downside risk evaluated from trailing stops
-        double maxLossLimitRupees = portfolio.getInitialCapital() * (DAILY_LOSS_LIMIT_PCT / 100.0);
-        double currentOpenRisk = portfolio.calculateTotalOpenDownsideRisk();
-        double worstCaseLoss = portfolio.getRealizedPnl() - currentOpenRisk;
-        if (worstCaseLoss <= -maxLossLimitRupees) {
-            return RiskEvaluationResult.rejected("DAILY_LOSS_KILL_SWITCH_TRIGGERED", proposal);
-        }
-
-        // Gate 3: Daily Trade Count (Max 5) & Trades 4-5 ALL GREEN Rule
+        // Gate 2: Daily Trade Cap (Max 5) & Quality Gate for Trades 4-5
         int tradeCount = portfolio.getDailyTradeCount();
         if (tradeCount >= MAX_DAILY_TRADES) {
             return RiskEvaluationResult.rejected("MAX_DAILY_TRADES_REACHED", proposal);
         }
-
-        // For Trades 4 and 5 (when dailyTradeCount >= 3): Must be strictly ALL GREEN
-        // (yellowCount == 0)
         if (tradeCount >= 3) {
             Object yellowCountObj = proposal.ruleContext() != null ? proposal.ruleContext().get("yellowCount") : null;
             long yellowCount = 0;
@@ -97,12 +95,23 @@ public class RiskEngine {
             }
         }
 
-        // Gate 4: Symbol Lock (Strictly 1 entry per symbol per day)
-        if (portfolio.hasTradedSymbolToday(proposal.symbol())) {
-            return RiskEvaluationResult.rejected("SYMBOL_ALREADY_TRADED_TODAY", proposal);
+        // Gate 3: Concurrent Open Positions Cap (Max 3)
+        if (portfolio.getOpenPositions().size() >= MAX_CONCURRENT_POSITIONS) {
+            return RiskEvaluationResult.rejected("MAX_CONCURRENT_POSITIONS_REACHED", proposal);
         }
 
-        // Gate 5: Price Validity & Sizing Calculation (Dual-Directional: LONG vs SHORT)
+        // Gate 4: Existing Account Circuit Breaker
+        double maxLossLimitRupees = portfolio.getInitialCapital() * (DAILY_LOSS_LIMIT_PCT / 100.0);
+        double currentOpenRisk = portfolio.calculateTotalOpenDownsideRisk();
+        double netRealizedPnl = portfolio.getNetRealizedPnl();
+        if (netRealizedPnl - currentOpenRisk <= -maxLossLimitRupees) {
+            return RiskEvaluationResult.rejected("DAILY_LOSS_KILL_SWITCH_TRIGGERED", proposal);
+        }
+
+        // ==========================================
+        // PHASE 2: SIGNAL VALIDITY & SANITY
+        // ==========================================
+
         Double entryPrice = proposal.entryPrice();
         Double stopLoss = proposal.initialStopLoss();
         if (entryPrice == null || stopLoss == null || entryPrice <= 0.0 || stopLoss <= 0.0) {
@@ -131,48 +140,60 @@ public class RiskEngine {
             riskPerShare = entryPrice - stopLoss;
         }
 
-        double capital = portfolio.getCurrentCapital();
-        double targetRiskRupees = capital * RISK_PER_TRADE_FRACTION; // 1R (e.g. Rs. 450 on Rs. 30k)
+        // ==========================================
+        // PHASE 3: SIZING, MARGIN & CHARGES ENGINE
+        // ==========================================
 
-        // Sizing quantity based on 1R risk target
+        double capital = portfolio.getCurrentCapital();
+        double targetRiskRupees = capital * RISK_PER_TRADE_FRACTION; // 1R risk target
+
         int qtyByRisk = (int) Math.floor(targetRiskRupees / riskPerShare);
 
-        // Check remaining available margin (accounting for active positions)
         double availableMargin = portfolio.calculateAvailableMargin(INTRADAY_LEVERAGE_FACTOR);
         if (availableMargin <= 0.0) {
             return RiskEvaluationResult.rejected("INSUFFICIENT_MARGIN_CAPITAL", proposal);
         }
         int maxQtyByMargin = (int) Math.floor((availableMargin * INTRADAY_LEVERAGE_FACTOR) / entryPrice);
 
-        // Smart downsizing: constrained by available margin
         int quantity = Math.min(qtyByRisk, maxQtyByMargin);
         if (quantity < 2) {
-            // Need at least 2 shares to perform 50% partial exit at Target 1
             return RiskEvaluationResult.rejected("QUANTITY_LESS_THAN_MINIMUM_2", proposal);
         }
 
         double actualRiskRupees = quantity * riskPerShare;
+        double tradeValue = quantity * entryPrice;
+        double requiredMargin = tradeValue / INTRADAY_LEVERAGE_FACTOR;
 
-        // Gate 6: Total Current Portfolio Open Downside Risk (< 3.2% of Initial Capital)
+        // Calculate candidate friction using dedicated statutory calculator (3 legs: Entry, Target 1, Runner)
+        double estimatedFriction = BrokerChargesCalculator.calculate3LegEstimatedFriction(tradeValue);
+        double roundTripTurnover = 2.0 * tradeValue;
+
+        // ==========================================
+        // PHASE 4: FRICTION VIABILITY FILTER
+        // ==========================================
+
+        // Viability Rule: Expected 1R Gross Profit >= 3 * Estimated Friction
+        if (actualRiskRupees < (3.0 * estimatedFriction)) {
+            return RiskEvaluationResult.rejected("EXCESSIVE_FRICTION_DRAG", proposal);
+        }
+
+        // ==========================================
+        // PHASE 5: MASTER PORTFOLIO RISK & LOSS PROTECTION
+        // ==========================================
+
+        // Gate 8: Total Current Portfolio Open Downside Risk (< 3.2% of Initial Capital)
         double potentialTotalRisk = currentOpenRisk + actualRiskRupees;
         double maxAllowedOpenRiskRupees = portfolio.getInitialCapital() * (MAX_PORTFOLIO_OPEN_RISK_PCT / 100.0);
         if (potentialTotalRisk > maxAllowedOpenRiskRupees) {
             return RiskEvaluationResult.rejected("PORTFOLIO_OPEN_RISK_CAP_EXCEEDED", proposal);
         }
 
-        double tradeValue = quantity * entryPrice;
-        double requiredMargin = tradeValue / INTRADAY_LEVERAGE_FACTOR;
-
-        // Gate 7: 3x Friction Viability Filter
-        // Estimated round-trip turnover = 2 * (Quantity * EntryPrice)
-        double roundTripTurnover = 2.0 * tradeValue;
-        double statutoryTaxes = roundTripTurnover * STATUTORY_TAX_RATE;
-        double gstOnBrokerage = (FLAT_BROKERAGE_3_LEG + (roundTripTurnover * 0.0000594)) * GST_RATE;
-        double estimatedFriction = FLAT_BROKERAGE_3_LEG + statutoryTaxes + gstOnBrokerage;
-
-        // Viability Rule: Expected 1R Gross Profit >= 3 * Estimated Friction
-        if (actualRiskRupees < (3.0 * estimatedFriction)) {
-            return RiskEvaluationResult.rejected("EXCESSIVE_FRICTION_DRAG", proposal);
+        // Gate 9: The Ultimate Forward-Looking Daily Loss Kill Switch
+        // Net Realized PnL - Open Downside Risk - Open Exit Friction - Candidate Trade Risk - Candidate Friction
+        double openExitFriction = portfolio.calculateTotalReservedExitFriction();
+        double projectedWorstCaseLoss = netRealizedPnl - currentOpenRisk - openExitFriction - actualRiskRupees - estimatedFriction;
+        if (projectedWorstCaseLoss <= -maxLossLimitRupees) {
+            return RiskEvaluationResult.rejected("DAILY_LOSS_KILL_SWITCH_TRIGGERED", proposal);
         }
 
         return RiskEvaluationResult.approved(
@@ -262,6 +283,16 @@ public class RiskEngine {
         PortfolioState portfolio = portfolios.get(mode);
         if (portfolio != null) {
             portfolio.recordPositionClosed(symbol, pnl);
+        }
+    }
+
+    /**
+     * Records statutory friction and brokerage incurred.
+     */
+    public synchronized void recordFrictionIncurred(PortfolioMode mode, double friction) {
+        PortfolioState portfolio = portfolios.get(mode);
+        if (portfolio != null) {
+            portfolio.recordFrictionIncurred(friction);
         }
     }
 

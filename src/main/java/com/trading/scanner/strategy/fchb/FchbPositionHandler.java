@@ -72,17 +72,7 @@ public class FchbPositionHandler implements StrategyPositionHandler {
             return PositionAction.fullExit("STOP_LOSS_HIT");
         }
 
-        // Priority 4: Early Structural Invalidation (1M candle close beyond reference level)
-        if (last1mCandle != null && position.firstCandleHigh() != null && last1mCandle.getClosePrice() != null) {
-            boolean invalid = isShort
-                    ? (last1mCandle.getClosePrice() > position.firstCandleHigh())
-                    : (last1mCandle.getClosePrice() < position.firstCandleHigh());
-            if (invalid) {
-                return PositionAction.fullExit("STRUCTURAL_INVALIDATION");
-            }
-        }
-
-        // Priority 5: Target 1 Partial Exit (50% exit at +1R) + Immediate Breakeven Stop Lock
+        // Priority 4: Target 1 Partial Exit (50% exit at +1R) + Immediate Breakeven Stop Lock
         if (!position.target1Booked() && position.target1Price() != null) {
             boolean target1Hit = isShort
                     ? (currentLtp <= position.target1Price())

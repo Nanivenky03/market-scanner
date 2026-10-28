@@ -78,22 +78,21 @@ class PositionManagerServiceTest {
     }
 
     @Test
-    @DisplayName("1M close below FCH triggers immediate structural invalidation fast cut")
-    void testProcessMinuteCandleClose_StructuralInvalidation() {
+    @DisplayName("Breakout retest holding: 1M close below FCH but above stop loss HOLDS position (monotonic SL rule)")
+    void testProcessMinuteCandleClose_BreakoutRetestHolding() {
         PositionSnapshot position = new PositionSnapshot(
                 1, 2, "SBIN", "NSE", "LONG", 50, 50,
                 805.0, 795.0, 815.0, 802.0, false, LocalDateTime.now());
         positionManager.registerPosition(PortfolioMode.PAPER, position);
 
-        // 1M candle closes at 801.0 (< FCH 802.0) while LTP is above stop (801.0 >
-        // 795.0)
+        // 1M candle closes at 801.0 (< FCH 802.0) while LTP is above stop (801.0 > 795.0)
         MarketCandle candle1m = create1mCandle(LocalDateTime.of(2026, 10, 11, 9, 36), 805.0, 806.0, 800.5, 801.0);
         PositionAction action = positionManager.processMinuteCandleClose(
                 PortfolioMode.PAPER, "SBIN", candle1m, 3.5, LocalTime.of(9, 36));
 
-        assertThat(action.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
-        assertThat(action.reason()).isEqualTo("STRUCTURAL_INVALIDATION");
-        assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).isEmpty();
+        assertThat(action.type()).isEqualTo(PositionAction.ActionType.HOLD);
+        assertThat(action.reason()).isEqualTo("HOLD");
+        assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).hasSize(1);
     }
 
     @Test

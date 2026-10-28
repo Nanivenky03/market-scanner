@@ -693,11 +693,19 @@ Before advancing to full orchestration, V2.3 validated the Risk Engine and Posit
 
 ---
 
-#### 7. V2.5 — Hardening, Test Suite & Multi-Strategy Readiness
+#### 7. V2.5 — Institutional Hardening, Persistence & Test Suite `[COMPLETED ✅]`
 
-- Register a secondary dummy/mock strategy alongside FCHB to verify deterministic arbitration and zero-coupling.
-- Comprehensive unit and integration test coverage for FCHB calculations, boundary cases, and fail-closed gates.
-- Verify 100% pass rate across all existing 318+ tests.
+- Implemented 7-issue institutional hardening:
+  - `BrokerChargesCalculator` for statutory Angel One / NSE fees & 3-leg friction modeling.
+  - 5-second RMS query debounce in `OrderExecutionGateway` inside serialized mutex.
+  - Pure monotonic stop loss architecture in `FchbPositionHandler` & `PositionManagerService` (retests above stop loss are held; zombie position prevention).
+  - Strict 5-phase `RiskEngine` pipeline with Gate 9 forward-looking daily loss kill switch including candidate trade risk and friction.
+  - 10-minute macro staleness circuit breaker in `MasterMarketFilterService`.
+  - Fail-safe thread isolation (null candle guards and safe stream copies).
+  - Flyway migrations `V034` (legacy drops) and `V035` (V2 schema).
+  - Populated all 16 JPA entities (`Order`, `Position`, `Signal`, `StrategyConfig`, `StrategyRuleValue`, etc.) and Spring Data repositories.
+  - Real database crash rehydration of active positions in `StartupRecoveryService`.
+- Test suite: **401 unit & integration tests passing (100% pass rate, 0 failures, 0 errors)**.
 
 ---
 
