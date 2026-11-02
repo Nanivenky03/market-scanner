@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
 Last audited: 2026-10-28  
-Status: **Version 2.3 Complete** (Strategy Intelligence, Institutional Hardening across 7 Audit Issues, Dual-Directional Risk Engine, Monotonic Stop Loss & Order Gateway — 401 unit tests passing).
+Status: **Version 2.3 Complete** (Strategy Intelligence, Institutional Hardening across 7 Audit Issues + Track C Tick/Circuit/OMS Hardening, Dual-Directional Risk Engine, Monotonic Stop Loss & Order Gateway — 407 unit & integration tests passing).
 
 ---
 
@@ -152,7 +152,14 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
       - Macro Staleness Circuit Breaker (`MasterMarketFilterService`): 10-minute maximum staleness guard sets `regime = UNKNOWN` and `dataValid = false` if Nifty 5M candles lag during market hours.
       - Fail-Safe Thread Isolation: Null candle guards in `StockContextCache` and safe stream copies during timer sweeps.
       - V2 Persistence & Startup Crash Recovery: Flyway `V034` (legacy drops) & `V035` (V2 strategy schema); populated 16 JPA entities & Spring Data repositories; wired real database rehydration in `StartupRecoveryService`.
-      - 401/401 unit & integration tests passing (100% pass rate).
+      - Track C Institutional Order, Tick & Circuit Hardening:
+        * Dynamic Exchange Tick-Size Rounding (`PriceTickUtil`): Directional tick rounding (₹0.05 default; ₹0.01 sub-₹250); stop loss floored for LONG / ceiled for SHORT; targets ceiled for LONG / floored for SHORT.
+        * 2-Tick Corrupt Spike Defense & Ingestion Sanity Filtering: Binary tick ceiling (₹5,00,000) blocks corrupted broker feed spikes in `scaledPrice()` and `ingestTick()`; `PositionManagerService` enforces 2-tick confirmation debounce on jumps > 2.5% before triggering stop/target exits.
+        * Upper Circuit Headroom Gate (Gate 8): Evaluates headroom to upper circuit limit; disqualifies candidates with < 2.0% headroom (`CIRCUIT_ROOM_LESS_THAN_2_PCT`) to protect liquidity and prevent freeze lockup.
+        * Decoupled Asynchronous RMS Sync: Unblocks `synchronized (executionGatewayMutex)` by moving live RMS margin network queries outside the execution mutex, debounced by 5s.
+        * Formal Order State Machine (OMS) Lifecycle: Explicit states (`PENDING_SUBMIT` $\to$ `SUBMITTED` $\to$ `FILLED` / `PARTIALLY_FILLED` $\to$ `CANCELLED` / `REJECTED`) and in-place resting order modification (`modifyOrder`) to eliminate reverse-position race conditions.
+        * Exclusion of Irregular Exchange Sessions: Skips non-standard trading windows (Diwali Muhurat, Saturday mock drills) to preserve baseline indicators and calendar integrity.
+      - 407/407 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
     • V2.4 Master Workflow Orchestrator & Execution Adapters: NEXT STAGE (Conductor, simulation database adapter, and REST simulation replay).
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]

@@ -232,7 +232,7 @@ class FchbRealDataScenarioIntegrationTest {
         }
 
         @Test
-        @DisplayName("SCENARIO 4: Stock-Level Trap on Bullish Day -> 1M close below FCH triggers immediate structural invalidation fast cut")
+        @DisplayName("SCENARIO 4: Stock-Level Trap on Bullish Day -> Retests above stop loss hold without false shakeout; stop breach triggers full exit")
         void testScenario4_StockTrapStructuralInvalidation() {
                 // Nifty is strongly bullish
                 MarketState bullishMarket = new MarketState(

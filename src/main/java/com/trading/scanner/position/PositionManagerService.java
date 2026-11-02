@@ -6,6 +6,7 @@ import com.trading.scanner.risk.model.PortfolioMode;
 import com.trading.scanner.strategy.StrategyPositionHandler;
 import com.trading.scanner.strategy.model.PositionAction;
 import com.trading.scanner.strategy.model.PositionSnapshot;
+import com.trading.scanner.util.PriceTickUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -19,10 +20,13 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Layer 4/5: In-Memory Position Manager Service.
  * Coordinates active positions across PAPER and LIVE portfolios, evaluates
- * incoming
- * price ticks and 1-minute candle closes against strategy position handlers,
- * maintains in-memory trailing stop state machines, and dispatches exits to
- * Risk Engine.
+ * incoming price ticks and 1-minute candle closes against strategy position handlers,
+ * maintains in-memory trailing stop state machines, and dispatches exits to Risk Engine.
+ *
+ * Hardened with:
+ * - Corrupt tick sanity filter (rejecting impossible / outlier prices)
+ * - Multi-Tick Confirmation Filter (requiring 2 consecutive ticks on sudden > 1.5% exit spikes)
+ * - Directional exchange tick-size rounding via PriceTickUtil
  */
 @Service
 public class PositionManagerService {
@@ -32,6 +36,9 @@ public class PositionManagerService {
     private final RiskEngine riskEngine;
     private final Map<Integer, StrategyPositionHandler> handlersByStrategyId = new ConcurrentHashMap<>();
     private final Map<PortfolioMode, Map<String, PositionSnapshot>> activePositions = new ConcurrentHashMap<>();
+
+    private final Map<String, Double> lastConfirmedLtp = new ConcurrentHashMap<>();
+    private final Map<String, Double> pendingExitCandidatePrice = new ConcurrentHashMap<>();
 
     public PositionManagerService(RiskEngine riskEngine, List<StrategyPositionHandler> handlers) {
         this.riskEngine = riskEngine;
@@ -59,6 +66,8 @@ public class PositionManagerService {
         }
         synchronized (getSymbolLock(position.symbol())) {
             activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(position.symbol(), position);
+            lastConfirmedLtp.put(position.symbol(), position.entryPrice());
+            pendingExitCandidatePrice.remove(position.symbol());
             riskEngine.recordTradeExecuted(mode, position.symbol(), position);
             log.info("[{}] Registered open position for symbol={} side={} qty={} entry={} SL={}",
                     mode, position.symbol(), position.positionSide(), position.currentQuantity(),
@@ -77,13 +86,24 @@ public class PositionManagerService {
     }
 
     /**
-     * Evaluates a real-time price tick for an open position.
+     * Evaluates a real-time price tick for an open position with corrupt tick defense
+     * and 2-tick confirmation filter on sudden trigger breaches.
      */
     public PositionAction processTick(PortfolioMode mode, String symbol, double ltp,
             LocalTime currentTime) {
         synchronized (getSymbolLock(symbol)) {
             PositionSnapshot position = getPosition(mode, symbol);
             if (position == null) {
+                return PositionAction.hold();
+            }
+
+            // 1. Hard Sanity Check: Reject absurd, negative, or extreme outlier prices
+            if (ltp <= 0.0 || ltp > 500_000.0 || Double.isNaN(ltp) || Double.isInfinite(ltp)) {
+                log.warn("[{}] Discarded corrupt/outlier tick for symbol={}: ltp={}", mode, symbol, ltp);
+                return PositionAction.hold();
+            }
+            if (position.entryPrice() != null && (ltp > position.entryPrice() * 2.5 || ltp < position.entryPrice() * 0.2)) {
+                log.warn("[{}] Discarded extreme outlier tick for symbol={}: ltp={} vs entry={}", mode, symbol, ltp, position.entryPrice());
                 return PositionAction.hold();
             }
 
@@ -95,6 +115,36 @@ public class PositionManagerService {
 
             PositionAction action = handler.evaluatePosition(position, ltp, null, null, currentTime,
                     Collections.emptyMap());
+
+            // 2. Multi-Tick Confirmation Filter for Exit Spikes (> 1.5% sudden jump across trigger level)
+            if (action != null && (action.type() == PositionAction.ActionType.FULL_EXIT || action.type() == PositionAction.ActionType.PARTIAL_EXIT)) {
+                boolean isTimeCutoff = action.reason() != null && (action.reason().contains("CUTOFF") || action.reason().contains("WIND_DOWN") || action.reason().contains("HARD_CLOSE"));
+                if (!isTimeCutoff) {
+                    Double prevLtp = lastConfirmedLtp.get(symbol);
+                    if (prevLtp != null && (Math.abs(ltp - prevLtp) / prevLtp) > 0.025) {
+                        Double pendingCandidate = pendingExitCandidatePrice.get(symbol);
+                        if (pendingCandidate == null) {
+                            pendingExitCandidatePrice.put(symbol, ltp);
+                            log.info("[{}] Price spike detected for symbol={} (jump from {} to {}). Awaiting 2nd confirming tick before exit.", mode, symbol, prevLtp, ltp);
+                            return PositionAction.hold();
+                        } else {
+                            if (Math.abs(ltp - pendingCandidate) / pendingCandidate <= 0.01) {
+                                // Confirmed across 2 continuous ticks in the new price neighborhood
+                                pendingExitCandidatePrice.remove(symbol);
+                            } else {
+                                pendingExitCandidatePrice.put(symbol, ltp);
+                                return PositionAction.hold();
+                            }
+                        }
+                    } else {
+                        pendingExitCandidatePrice.remove(symbol);
+                    }
+                }
+            } else {
+                pendingExitCandidatePrice.remove(symbol);
+            }
+
+            lastConfirmedLtp.put(symbol, ltp);
             applyPositionAction(mode, position, action, ltp);
             return action;
         }
@@ -123,16 +173,21 @@ public class PositionManagerService {
             }
 
             double closePrice = candle1m.getClosePrice() != null ? candle1m.getClosePrice() : 0.0;
+            if (closePrice <= 0.0 || closePrice > 500_000.0) {
+                return PositionAction.hold();
+            }
+
             PositionAction action = handler.evaluatePosition(position, closePrice, candle1m, atr5m, currentTime,
                     Collections.emptyMap());
+            lastConfirmedLtp.put(symbol, closePrice);
+            pendingExitCandidatePrice.remove(symbol);
             applyPositionAction(mode, position, action, closePrice);
             return action;
         }
     }
 
     /**
-     * Applies the proposed position action to in-memory state and updates the Risk
-     * Engine.
+     * Applies the proposed position action to in-memory state and updates the Risk Engine.
      */
     private void applyPositionAction(PortfolioMode mode, PositionSnapshot position, PositionAction action,
             double currentPrice) {
@@ -147,6 +202,8 @@ public class PositionManagerService {
                 double exitTurnover = position.currentQuantity() * currentPrice;
                 double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
                 activePositions.get(mode).remove(symbol);
+                lastConfirmedLtp.remove(symbol);
+                pendingExitCandidatePrice.remove(symbol);
                 riskEngine.recordPositionClosed(mode, symbol, pnl);
                 riskEngine.recordFrictionIncurred(mode, exitFriction);
                 log.info("[{}] FULL EXIT executed for symbol={} at price={} P&L={} friction={} reason={}",
@@ -158,6 +215,8 @@ public class PositionManagerService {
                     double exitTurnover = position.currentQuantity() * currentPrice;
                     double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
                     activePositions.get(mode).remove(symbol);
+                    lastConfirmedLtp.remove(symbol);
+                    pendingExitCandidatePrice.remove(symbol);
                     riskEngine.recordPositionClosed(mode, symbol, pnl);
                     riskEngine.recordFrictionIncurred(mode, exitFriction);
                     log.info("[{}] PARTIAL EXIT auto-converted to FULL EXIT (qty <= 1) for symbol={} at price={} P&L={}",
@@ -175,6 +234,8 @@ public class PositionManagerService {
                     double exitTurnover = position.currentQuantity() * currentPrice;
                     double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
                     activePositions.get(mode).remove(symbol);
+                    lastConfirmedLtp.remove(symbol);
+                    pendingExitCandidatePrice.remove(symbol);
                     riskEngine.recordPositionClosed(mode, symbol, pnl);
                     riskEngine.recordFrictionIncurred(mode, exitFriction);
                     log.info("[{}] PARTIAL EXIT auto-converted to FULL EXIT (remainingQty <= 0) for symbol={} at price={} P&L={}",
@@ -184,9 +245,10 @@ public class PositionManagerService {
 
                 boolean isShort = isShortSide(position.positionSide());
                 double candidateSl = action.newStopLoss() != null ? action.newStopLoss() : position.entryPrice();
+                double candidateSlRounded = PriceTickUtil.roundStopLoss(candidateSl, isShort, 0.05);
                 double newSl = isShort
-                        ? Math.min(position.currentStopLoss(), candidateSl)
-                        : Math.max(position.currentStopLoss(), candidateSl);
+                        ? Math.min(position.currentStopLoss(), candidateSlRounded)
+                        : Math.max(position.currentStopLoss(), candidateSlRounded);
 
                 double partialPnl = calculatePnl(position, currentPrice, exitQty);
                 double partialTurnover = exitQty * currentPrice;
@@ -217,9 +279,10 @@ public class PositionManagerService {
             case UPDATE_STOP -> {
                 if (action.newStopLoss() != null && position.currentStopLoss() != null) {
                     boolean isShort = isShortSide(position.positionSide());
+                    double roundedSl = PriceTickUtil.roundStopLoss(action.newStopLoss(), isShort, 0.05);
                     boolean isMonotonicMove = isShort
-                            ? action.newStopLoss() < position.currentStopLoss()
-                            : action.newStopLoss() > position.currentStopLoss();
+                            ? roundedSl < position.currentStopLoss()
+                            : roundedSl > position.currentStopLoss();
                     if (isMonotonicMove) {
                         PositionSnapshot updated = new PositionSnapshot(
                                 position.positionId(),
@@ -230,7 +293,7 @@ public class PositionManagerService {
                                 position.initialQuantity(),
                                 position.currentQuantity(),
                                 position.entryPrice(),
-                                action.newStopLoss(),
+                                roundedSl,
                                 position.target1Price(),
                                 position.firstCandleHigh(),
                                 position.target1Booked(),
@@ -238,7 +301,7 @@ public class PositionManagerService {
                         activePositions.get(mode).put(symbol, updated);
                         riskEngine.updatePosition(mode, updated);
                         log.info("[{}] Ratcheted Stop Loss for symbol={} from {} to {} reason={}",
-                                mode, symbol, position.currentStopLoss(), action.newStopLoss(), action.reason());
+                                mode, symbol, position.currentStopLoss(), roundedSl, action.reason());
                     }
                 }
             }
@@ -249,9 +312,10 @@ public class PositionManagerService {
 
     private double calculatePnl(PositionSnapshot position, double exitPrice, int quantity) {
         boolean isShort = isShortSide(position.positionSide());
-        return isShort
+        double rawPnl = isShort
                 ? (position.entryPrice() - exitPrice) * quantity
                 : (exitPrice - position.entryPrice()) * quantity;
+        return PriceTickUtil.roundTo2Decimals(rawPnl);
     }
 
     private static boolean isShortSide(String side) {
@@ -283,9 +347,10 @@ public class PositionManagerService {
                     ? Math.max(0.01, structuralStop - executedPrice)
                     : Math.max(0.01, executedPrice - structuralStop);
 
-            double reAnchoredTarget1 = isShort
+            double rawTarget1 = isShort
                     ? executedPrice - actualRiskPerShare
                     : executedPrice + actualRiskPerShare;
+            double reAnchoredTarget1 = PriceTickUtil.roundTarget(rawTarget1, isShort, 0.05);
 
             PositionSnapshot reAnchored = new PositionSnapshot(
                     position.positionId(),
@@ -303,6 +368,8 @@ public class PositionManagerService {
                     position.entryTime()
             );
             activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(symbol, reAnchored);
+            lastConfirmedLtp.put(symbol, executedPrice);
+            pendingExitCandidatePrice.remove(symbol);
             riskEngine.updatePosition(mode, reAnchored);
             if (actualCharges > 0.0) {
                 riskEngine.recordFrictionIncurred(mode, actualCharges);
@@ -352,6 +419,8 @@ public class PositionManagerService {
                 }
             }
             symbolLocks.clear();
+            lastConfirmedLtp.clear();
+            pendingExitCandidatePrice.clear();
             currentTradingDate = newDate;
             log.info("PositionManagerService reset for new trading day {}", newDate);
         } else {
@@ -374,6 +443,8 @@ public class PositionManagerService {
             if (pos != null && pos.symbol() != null) {
                 synchronized (getSymbolLock(pos.symbol())) {
                     activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(pos.symbol(), pos);
+                    lastConfirmedLtp.put(pos.symbol(), pos.entryPrice());
+                    pendingExitCandidatePrice.remove(pos.symbol());
                 }
             }
         }
@@ -382,8 +453,7 @@ public class PositionManagerService {
     }
 
     /**
-     * Immediately closes an open position (e.g. manual intervention or emergency
-     * risk cutoff).
+     * Immediately closes an open position (e.g. manual intervention or emergency risk cutoff).
      */
     public void forceClosePosition(PortfolioMode mode, String symbol, double exitPrice, String reason) {
         synchronized (getSymbolLock(symbol)) {
@@ -391,6 +461,8 @@ public class PositionManagerService {
             if (position != null) {
                 double pnl = calculatePnl(position, exitPrice, position.currentQuantity());
                 activePositions.get(mode).remove(symbol);
+                lastConfirmedLtp.remove(symbol);
+                pendingExitCandidatePrice.remove(symbol);
                 riskEngine.recordPositionClosed(mode, symbol, pnl);
                 log.warn("[{}] FORCE CLOSE symbol={} at price={} P&L={} reason={}",
                         mode, symbol, exitPrice, pnl, reason);

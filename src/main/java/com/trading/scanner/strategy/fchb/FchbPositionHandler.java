@@ -4,6 +4,7 @@ import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.strategy.StrategyPositionHandler;
 import com.trading.scanner.strategy.model.PositionAction;
 import com.trading.scanner.strategy.model.PositionSnapshot;
+import com.trading.scanner.util.PriceTickUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -14,6 +15,7 @@ import java.util.Map;
 /**
  * Position lifecycle handler for FCHB (Strategy ID 2).
  * Implements priority-ordered exit, invalidation, ratchet, and trailing stop logic.
+ * Stop loss and target updates are strictly rounded to exchange tick sizes via PriceTickUtil.
  */
 @Component
 public class FchbPositionHandler implements StrategyPositionHandler {
@@ -88,7 +90,8 @@ public class FchbPositionHandler implements StrategyPositionHandler {
                             ? Math.max(position.currentStopLoss(), position.entryPrice())
                             : position.entryPrice();
                 }
-                return PositionAction.partialExit(0.5, target1Stop, "TARGET_1_HIT");
+                double roundedTarget1Stop = PriceTickUtil.roundStopLoss(target1Stop, isShort, 0.05);
+                return PositionAction.partialExit(0.5, roundedTarget1Stop, "TARGET_1_HIT");
             }
         }
 
@@ -99,14 +102,16 @@ public class FchbPositionHandler implements StrategyPositionHandler {
                 double breakevenTriggerPrice = position.entryPrice() - (0.8 * initialRisk);
                 if (currentLtp <= breakevenTriggerPrice) {
                     if (position.currentStopLoss() == null || position.currentStopLoss() > position.entryPrice()) {
-                        return PositionAction.updateStop(position.entryPrice(), "BREAKEVEN_0_8R_TRIGGERED");
+                        double roundedStop = PriceTickUtil.roundStopLoss(position.entryPrice(), isShort, 0.05);
+                        return PositionAction.updateStop(roundedStop, "BREAKEVEN_0_8R_TRIGGERED");
                     }
                 }
             } else {
                 double breakevenTriggerPrice = position.entryPrice() + (0.8 * initialRisk);
                 if (currentLtp >= breakevenTriggerPrice) {
                     if (position.currentStopLoss() == null || position.currentStopLoss() < position.entryPrice()) {
-                        return PositionAction.updateStop(position.entryPrice(), "BREAKEVEN_0_8R_TRIGGERED");
+                        double roundedStop = PriceTickUtil.roundStopLoss(position.entryPrice(), isShort, 0.05);
+                        return PositionAction.updateStop(roundedStop, "BREAKEVEN_0_8R_TRIGGERED");
                     }
                 }
             }
@@ -129,6 +134,8 @@ public class FchbPositionHandler implements StrategyPositionHandler {
                     candidateStop = Math.min(milestoneCeiling, atrTrail);
                 }
 
+                candidateStop = PriceTickUtil.roundStopLoss(candidateStop, isShort, 0.05);
+
                 if (position.currentStopLoss() == null || candidateStop < position.currentStopLoss()) {
                     String reason = candidateStop < milestoneCeiling ? "ATR_TRAILING_STOP_RATCHET" : "MILESTONE_RATCHET";
                     return PositionAction.updateStop(candidateStop, reason);
@@ -146,6 +153,8 @@ public class FchbPositionHandler implements StrategyPositionHandler {
                     double atrTrail = last1mCandle.getLowPrice() - (0.5 * latest5mAtr);
                     candidateStop = Math.max(milestoneFloor, atrTrail);
                 }
+
+                candidateStop = PriceTickUtil.roundStopLoss(candidateStop, isShort, 0.05);
 
                 if (position.currentStopLoss() == null || candidateStop > position.currentStopLoss()) {
                     String reason = candidateStop > milestoneFloor ? "ATR_TRAILING_STOP_RATCHET" : "MILESTONE_RATCHET";

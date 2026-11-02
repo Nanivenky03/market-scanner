@@ -341,7 +341,7 @@ public class AngelOneTickParserService {
     }
 
     private Double scaledPrice(Long rawValue) {
-        if (rawValue == null || rawValue <= 0L) {
+        if (rawValue == null || rawValue <= 0L || rawValue > 50_000_000_00L) {
             return null;
         }
         return rawValue / 100.0;

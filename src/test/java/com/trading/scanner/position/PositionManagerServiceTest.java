@@ -185,4 +185,30 @@ class PositionManagerServiceTest {
         // Target 1 re-anchored to fill price + actual risk = 100.50 + 5.50 = 106.00!
         assertThat(reconciled.target1Price()).isEqualTo(106.00);
     }
+
+    @Test
+    @DisplayName("Corrupt Tick Defense: Discards absurd ticks (9.15E16) and enforces 2-tick confirmation on sudden > 2.5% jump")
+    void testCorruptTickDefense_And_TwoTickConfirmation() {
+        PositionSnapshot position = new PositionSnapshot(
+                1, 2, "SPIKE_STOCK", "NSE", "LONG", 10, 10,
+                1000.0, 980.0, 1020.0, 990.0, false, LocalDateTime.now());
+        positionManager.registerPosition(PortfolioMode.PAPER, position);
+
+        // 1. Absurd corrupt tick (e.g. 9.15E16 or negative) is discarded immediately
+        PositionAction corruptAction = positionManager.processTick(PortfolioMode.PAPER, "SPIKE_STOCK", 9.15E16, LocalTime.of(10, 10));
+        assertThat(corruptAction.type()).isEqualTo(PositionAction.ActionType.HOLD);
+        assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).hasSize(1);
+
+        // 2. Sudden single-tick spike jump across stop loss (e.g. jumping from 1000 to 950, a 5% drop)
+        // First tick: held for confirmation
+        PositionAction tick1 = positionManager.processTick(PortfolioMode.PAPER, "SPIKE_STOCK", 950.0, LocalTime.of(10, 11));
+        assertThat(tick1.type()).isEqualTo(PositionAction.ActionType.HOLD);
+        assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).hasSize(1);
+
+        // Second tick: confirmed in same price neighborhood (950.50) -> FULL EXIT executes!
+        PositionAction tick2 = positionManager.processTick(PortfolioMode.PAPER, "SPIKE_STOCK", 950.50, LocalTime.of(10, 11));
+        assertThat(tick2.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
+        assertThat(tick2.reason()).isEqualTo("STOP_LOSS_HIT");
+        assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).isEmpty();
+    }
 }

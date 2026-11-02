@@ -339,7 +339,7 @@ The Institutional Gateway Solution:
 The Fatal Scenario in Algorithmic Intraday Execution:
   1. Position is LONG 100 shares.
   2. A protective Stop-Loss Market order (SL-M) for 100 shares rests on the broker's exchange book.
-  3. Price experiences sudden volatility. An in-memory trigger fires (e.g., early structural candle invalidation or tighter trailing stop).
+  3. Price experiences sudden volatility. An in-memory trigger fires (e.g., tighter trailing stop or time cutoff).
   4. If the application cancels the resting SL-M order and immediately sends a new MARKET SELL order:
      - Due to exchange network latency, the resting SL-M order triggers and fills on the exchange.
      - A few milliseconds later, the application's cancellation is rejected ("Order already filled"), BUT the new MARKET SELL order is ALSO placed and fills!
@@ -399,8 +399,8 @@ Decoupling of Entry Signals vs Exit Monitoring:
    - Why: A sudden 30-second spike or flash crash can pierce a target or stop loss and retrace before a 1M candle finishes. Waiting for a 1M candle close to detect a stop or target hit introduces catastrophic slippage.
    - Tick breaches trigger immediate order execution or broker order modification.
 
-3. Trailing Stop Ratchet & Structural Invalidation:
-   - Ratchet adjustments and candle-close structural invalidations evaluate at 1M candle close boundaries.
+3. Trailing Stop Ratchet:
+   - Ratchet adjustments evaluate at 1M candle close boundaries (and on milestone target hits).
 ```
 
 ---

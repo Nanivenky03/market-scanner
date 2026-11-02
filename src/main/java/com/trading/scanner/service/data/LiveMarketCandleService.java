@@ -124,7 +124,7 @@ public class LiveMarketCandleService {
                 if (input == null
                                 || input.symbol() == null
                                 || input.exchange() == null
-                                || input.tickTime() == null) {
+                                || input.tickTime() == null || input.lastPrice() == null || input.lastPrice() <= 0.0 || input.lastPrice() > 500000.0) {
 
                         return new IngestResult(
                                         null,

@@ -8,6 +8,7 @@ import com.trading.scanner.service.provider.angelone.AngelOneMarketDataProvider;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneMarketDtos;
 import com.trading.scanner.strategy.model.PositionSnapshot;
 import com.trading.scanner.strategy.model.StrategyProposal;
+import com.trading.scanner.util.PriceTickUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -18,10 +19,10 @@ import java.time.LocalDateTime;
 /**
  * Single-Writer Order Execution Gateway.
  * Serializes the "Signal -> Risk Gate -> Broker RMS Check -> Order Placement -> Trade Fill -> Position Registration"
- * chain into a single-threaded atomic pipeline.
+ * chain into an atomic, sub-microsecond in-memory pipeline.
  *
- * Guarantees that concurrent signals from parallel strategy threads evaluate against
- * live, accurately decremented available margin and do not cause race conditions or broker rejections.
+ * Network RMS queries are decoupled outside the execution mutex so that temporary broker API latency
+ * never stalls concurrent strategy intake or order routing threads.
  */
 @Service
 @Slf4j
@@ -70,34 +71,35 @@ public class OrderExecutionGateway {
             return ExecutionOutcome.rejected(null, "NULL_PROPOSAL", null);
         }
 
-        // Strictly serialize the signal-to-fill pipeline across all concurrent worker threads
+        // 1. In LIVE mode, fetch live RMS free margin from Angel One outside the execution mutex
+        // to prevent blocking network I/O from stalling the entire execution pipeline.
+        if (mode == PortfolioMode.LIVE) {
+            long nowMs = System.currentTimeMillis();
+            if (nowMs - lastRmsSyncMs >= RMS_DEBOUNCE_INTERVAL_MS) {
+                lastRmsSyncMs = nowMs;
+                try {
+                    AngelOneMarketDataProvider provider = angelOneMarketDataProvider.getIfAvailable();
+                    if (provider != null && provider.isAvailable()) {
+                        AngelOneMarketDtos.AngelOneRmsResponse rms = provider.fetchLiveRmsLimits();
+                        if (rms != null && rms.data() != null) {
+                            Double liveCash = rms.data().getAvailableCashAsDouble();
+                            if (liveCash != null && liveCash > 0.0) {
+                                riskEngine.syncBrokerCapital(mode, liveCash);
+                                log.debug("[LIVE] Synced free margin from Angel One RMS: Rs. {}", liveCash);
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    log.warn("Failed to sync Angel One RMS limits: {}", ex.getMessage());
+                }
+            }
+        }
+
+        // 2. Strictly serialize the in-memory signal-to-fill pipeline across all concurrent worker threads
         synchronized (riskEngine.getExecutionGatewayMutex()) {
             String symbol = proposal.symbol();
 
-            // 1. In LIVE mode, fetch live RMS free margin from Angel One with 5-second debounce
-            if (mode == PortfolioMode.LIVE) {
-                long nowMs = System.currentTimeMillis();
-                if (nowMs - lastRmsSyncMs >= RMS_DEBOUNCE_INTERVAL_MS) {
-                    try {
-                        AngelOneMarketDataProvider provider = angelOneMarketDataProvider.getIfAvailable();
-                        if (provider != null && provider.isAvailable()) {
-                            AngelOneMarketDtos.AngelOneRmsResponse rms = provider.fetchLiveRmsLimits();
-                            if (rms != null && rms.data() != null) {
-                                Double liveCash = rms.data().getAvailableCashAsDouble();
-                                if (liveCash != null && liveCash > 0.0) {
-                                    riskEngine.syncBrokerCapital(mode, liveCash);
-                                    lastRmsSyncMs = nowMs;
-                                    log.debug("[LIVE] Synced free margin from Angel One RMS: Rs. {}", liveCash);
-                                }
-                            }
-                        }
-                    } catch (Exception ex) {
-                        log.warn("Failed to sync Angel One RMS limits before evaluating {}: {}", symbol, ex.getMessage());
-                    }
-                }
-            }
-
-            // 2. Evaluate candidate proposal against the 7 Pre-Trade Risk Gates
+            // Evaluate candidate proposal against the Pre-Trade Risk Gates
             RiskEvaluationResult evaluation = riskEngine.evaluateProposal(proposal, mode);
             if (!evaluation.approved()) {
                 log.info("[{}] Proposal for symbol={} rejected by RiskEngine: {}",
@@ -117,14 +119,15 @@ public class OrderExecutionGateway {
             double fillPrice = entryPrice;
             int filledQty = approvedQty;
 
-            // 4. Fixed Structural Stop & Fill-Anchored Target
+            // 4. Fixed Structural Stop & Fill-Anchored Target (rounded to exchange tick size)
             double actualRiskPerShare = isShort
                     ? Math.max(0.01, stopLoss - fillPrice)
                     : Math.max(0.01, fillPrice - stopLoss);
 
-            double reAnchoredTarget1 = isShort
+            double rawTarget1 = isShort
                     ? fillPrice - actualRiskPerShare
                     : fillPrice + actualRiskPerShare;
+            double reAnchoredTarget1 = PriceTickUtil.roundTarget(rawTarget1, isShort, 0.05);
 
             // 5. Register position into RAM and RiskEngine
             PositionSnapshot snapshot = new PositionSnapshot(

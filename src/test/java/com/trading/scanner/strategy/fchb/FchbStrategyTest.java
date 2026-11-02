@@ -6,6 +6,7 @@ import com.trading.scanner.strategy.model.MarketState;
 import com.trading.scanner.strategy.model.StockContext;
 import com.trading.scanner.strategy.model.StrategyEvaluation;
 import com.trading.scanner.strategy.model.StrategyProposal;
+import com.trading.scanner.util.PriceTickUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,14 +30,43 @@ class FchbStrategyTest {
         defaultMarketState = new MarketState(
                 LocalDate.of(2026, 10, 9),
                 LocalDateTime.of(2026, 10, 9, 9, 35),
-                25000.0,
-                24900.0,
-                0.5,
+                25050.0,
+                24950.0,
+                0.40, // 0.40% > 0.30% -> GREEN
                 true,
                 MarketState.MarketRegime.BULLISH,
                 true,
-                "OK"
+                "Valid NIFTY above VWAP"
         );
+    }
+
+    private DailyStockContext createDefaultDailyContext() {
+        return DailyStockContext.builder()
+                .symbol("RELIANCE")
+                .exchange("NSE")
+                .tradingDate(LocalDate.of(2026, 10, 9))
+                .firstCandleOpen(100.0)
+                .firstCandleHigh(101.0)
+                .firstCandleLow(99.5)
+                .firstCandleClose(100.8)
+                .firstCandleVolume(50000L)
+                .firstCandleRange(1.5)
+                .firstCandleRangePct(1.5)
+                .firstCandleBullish(true)
+                .firstCandleValid(true)
+                .firstCandleReady(true)
+                .prevDayHigh(102.0)
+                .prevDayLow(99.0)
+                .prevDayClose(100.5)
+                .prevDayRangePct(3.0)
+                .highestClose15d(105.0)
+                .distFromResistancePct(4.0)
+                .gapPct(0.5)
+                .skipToday(false)
+                .corporateActionFlag(false)
+                .foBanFlag(false)
+                .resultsLast3dFlag(false)
+                .build();
     }
 
     private MarketCandle createCandle(LocalDateTime time, double o, double h, double l, double c, double vwap, double rsi) {
@@ -47,23 +78,6 @@ class FchbStrategyTest {
                 .closePrice(c)
                 .vwap(vwap)
                 .rsi14(rsi)
-                .volume(50000L)
-                .build();
-    }
-
-    private DailyStockContext createDefaultDailyContext() {
-        return DailyStockContext.builder()
-                .symbol("RELIANCE")
-                .exchange("NSE")
-                .tradingDate(LocalDate.of(2026, 10, 9))
-                .skipToday(false)
-                .gapPct(0.5)
-                .prevDayRangePct(2.0)
-                .distFromResistancePct(2.5)
-                .firstCandleOpen(100.0)
-                .firstCandleHigh(101.0)
-                .firstCandleLow(99.5)
-                .firstCandleClose(100.8)
                 .build();
     }
 
@@ -82,9 +96,11 @@ class FchbStrategyTest {
     }
 
     @Test
-    @DisplayName("GIVEN all green conditions WHEN evaluate THEN returns QUALIFIED evaluation with score 100")
+    @DisplayName("GIVEN textbook green conditions WHEN evaluate THEN returns QUALIFIED evaluation with score 100")
     void testAllGreenConditions() {
         DailyStockContext daily = createDefaultDailyContext();
+        // 5M candle: extension = (101.3 - 101.0)/101.0 = 0.297% (<= 0.4% -> GREEN)
+        // Body = 0.3, Range = 0.45 -> BodyRatio = 0.667 (>= 0.65 -> GREEN), UpperWick = 0.05 -> UpperWickRatio = 0.11 (<= 0.15 -> GREEN)
         MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
         MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
         StockContext context = createValidContext(daily, current5m, current15m, 2.8);
@@ -97,8 +113,9 @@ class FchbStrategyTest {
         assertThat(proposal).isNotNull();
         assertThat(proposal.direction()).isEqualTo("BUY");
         assertThat(proposal.entryPrice()).isEqualTo(101.3);
-        assertThat(proposal.initialStopLoss()).isEqualTo(99.5 * 0.995);
-        assertThat(proposal.initialTarget()).isEqualTo(101.3 + (101.3 - (99.5 * 0.995)));
+        double expectedSl = PriceTickUtil.roundStopLoss(99.5 * 0.995, false, 0.05);
+        assertThat(proposal.initialStopLoss()).isEqualTo(expectedSl);
+        assertThat(proposal.initialTarget()).isEqualTo(PriceTickUtil.roundTarget(101.3 + (101.3 - expectedSl), false, 0.05));
         assertThat(proposal.ruleContext().get("yellowCount")).isEqualTo(0L);
     }
 
@@ -118,12 +135,13 @@ class FchbStrategyTest {
     }
 
     @Test
-    @DisplayName("GIVEN 2 yellow conditions (VOL_X 2.0 and RSI 56) WHEN evaluate THEN returns QUALIFIED evaluation with score 70")
-    void testTwoYellowsVolXAndRsi() {
+    @DisplayName("GIVEN 2 yellow conditions (VOL_X 2.0 and Extension 0.6%) WHEN evaluate THEN returns QUALIFIED with score 70")
+    void testTwoYellowConditions() {
         DailyStockContext daily = createDefaultDailyContext();
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 56.0); // RSI 56 -> YELLOW
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
-        StockContext context = createValidContext(daily, current5m, current15m, 2.0); // VOL_X 2.0 -> YELLOW
+        // extension = (101.6 - 101.0)/101.0 = 0.594% (0.4% < ext <= 0.8% -> YELLOW)
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.1, 101.65, 101.0, 101.6, 101.0, 62.0);
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.7, 100.4, 101.5, 100.8, 60.0);
+        StockContext context = createValidContext(daily, current5m, current15m, 2.0); // YELLOW
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
 
@@ -133,13 +151,15 @@ class FchbStrategyTest {
     }
 
     @Test
-    @DisplayName("GIVEN 3 yellow conditions WHEN evaluate THEN returns NOT_QUALIFIED (disqualified by yellow count)")
-    void testThreeYellowsDisqualified() {
+    @DisplayName("GIVEN 3 yellow conditions WHEN evaluate THEN returns NOT_QUALIFIED (Quality Gate max 2 yellows)")
+    void testThreeYellowConditionsDisqualified() {
         DailyStockContext daily = createDefaultDailyContext();
-        // extension (101.6-101.0)/101.0 = 0.59% -> YELLOW, RSI 56 -> YELLOW
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.7, 100.9, 101.6, 100.9, 56.0);
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
-        StockContext context = createValidContext(daily, current5m, current15m, 2.0); // VOL_X 2.0 -> YELLOW (3 yellows total)
+        // Yellow 1: Extension 0.6%
+        // Yellow 2: RSI 56.0
+        // Yellow 3: VOL_X 2.0
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.1, 101.65, 101.0, 101.6, 101.0, 56.0);
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.7, 100.4, 101.5, 100.8, 60.0);
+        StockContext context = createValidContext(daily, current5m, current15m, 2.0);
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
 
@@ -148,22 +168,23 @@ class FchbStrategyTest {
     }
 
     @Test
-    @DisplayName("GIVEN extension > 0.8% WHEN evaluate THEN returns NOT_QUALIFIED (RED)")
+    @DisplayName("GIVEN red condition (Extension > 0.8%) WHEN evaluate THEN returns NOT_QUALIFIED")
     void testRedExtensionDisqualified() {
         DailyStockContext daily = createDefaultDailyContext();
-        // extension (102.0-101.0)/101 = 0.99% -> RED
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 102.2, 100.9, 102.0, 100.9, 62.0);
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
+        // extension = (102.0 - 101.0)/101.0 = 0.99% (> 0.8% -> RED)
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.2, 102.1, 101.1, 102.0, 101.0, 62.0);
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 102.1, 100.4, 101.8, 100.8, 60.0);
         StockContext context = createValidContext(daily, current5m, current15m, 2.8);
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
 
         assertThat(evaluation.isQualified()).isFalse();
         assertThat(evaluation.failureReason()).contains("QUALITY_GATE_RED_COUNT");
+        assertThat(evaluation.failedConditions()).contains("EXTENSION_RED");
     }
 
     @Test
-    @DisplayName("GIVEN VOL_X < 1.8 WHEN evaluate THEN returns NOT_QUALIFIED (RED)")
+    @DisplayName("GIVEN red condition (VOL_X < 1.8) WHEN evaluate THEN returns NOT_QUALIFIED")
     void testRedVolXDisqualified() {
         DailyStockContext daily = createDefaultDailyContext();
         MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
@@ -174,11 +195,12 @@ class FchbStrategyTest {
 
         assertThat(evaluation.isQualified()).isFalse();
         assertThat(evaluation.failureReason()).contains("QUALITY_GATE_RED_COUNT");
+        assertThat(evaluation.failedConditions()).contains("VOL_X_RED");
     }
 
     @Test
-    @DisplayName("GIVEN RSI < 55 WHEN evaluate THEN returns NOT_QUALIFIED (RED)")
-    void testRedRsiTooLowDisqualified() {
+    @DisplayName("GIVEN red condition (RSI < 55) WHEN evaluate THEN returns NOT_QUALIFIED")
+    void testRedRsiDisqualified() {
         DailyStockContext daily = createDefaultDailyContext();
         MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 52.0); // < 55 -> RED
         MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
@@ -188,31 +210,45 @@ class FchbStrategyTest {
 
         assertThat(evaluation.isQualified()).isFalse();
         assertThat(evaluation.failureReason()).contains("QUALITY_GATE_RED_COUNT");
+        assertThat(evaluation.failedConditions()).contains("RSI_RED");
     }
 
     @Test
-    @DisplayName("GIVEN RSI > 72 WHEN evaluate THEN returns NOT_QUALIFIED (RED)")
-    void testRedRsiOverboughtDisqualified() {
-        DailyStockContext daily = createDefaultDailyContext();
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 75.0); // > 72 -> RED
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
-        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
-
-        StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
-
-        assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).contains("QUALITY_GATE_RED_COUNT");
-    }
-
-    @Test
-    @DisplayName("GIVEN backfill in progress WHEN evaluate THEN returns NOT_EVALUABLE")
-    void testGuardBackfillInProgress() {
+    @DisplayName("GIVEN NIFTY below VWAP WHEN evaluate THEN returns NOT_QUALIFIED by master filter")
+    void testNiftyBelowVwapDisqualified() {
         DailyStockContext daily = createDefaultDailyContext();
         MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
         MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
+        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
+
+        MarketState bearishMarket = new MarketState(
+                LocalDate.of(2026, 10, 9),
+                LocalDateTime.of(2026, 10, 9, 9, 35),
+                24900.0,
+                24950.0,
+                -0.20,
+                false, // NIFTY below VWAP
+                MarketState.MarketRegime.BEARISH,
+                true,
+                "NIFTY below VWAP"
+        );
+
+        StrategyEvaluation evaluation = strategy.evaluate(context, bearishMarket, Collections.emptyMap());
+
+        assertThat(evaluation.isQualified()).isFalse();
+        assertThat(evaluation.failureReason()).isEqualTo("NIFTY_BELOW_VWAP");
+    }
+
+    @Test
+    @DisplayName("GIVEN active backfill WHEN evaluate THEN returns NOT_EVALUABLE (fail-closed)")
+    void testBackfillActiveFailClosed() {
+        DailyStockContext daily = createDefaultDailyContext();
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
+
         StockContext context = new StockContext(
                 "RELIANCE", "NSE", LocalDate.of(2026, 10, 9), daily,
-                Collections.emptyList(), List.of(current5m), List.of(current15m), true, 2.8
+                Collections.emptyList(), List.of(current5m), List.of(current15m), true, 2.8 // backfill active!
         );
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
@@ -222,90 +258,59 @@ class FchbStrategyTest {
     }
 
     @Test
-    @DisplayName("GIVEN NIFTY below VWAP WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testGuardNiftyBelowVwap() {
+    @DisplayName("GIVEN invalid market state data WHEN evaluate THEN returns NOT_EVALUABLE")
+    void testInvalidMarketStateData() {
         DailyStockContext daily = createDefaultDailyContext();
         MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
         MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
         StockContext context = createValidContext(daily, current5m, current15m, 2.8);
 
-        MarketState bearishMarketState = new MarketState(
+        MarketState invalidMarket = new MarketState(
                 LocalDate.of(2026, 10, 9), LocalDateTime.of(2026, 10, 9, 9, 35),
-                24800.0, 24900.0, -0.4, false, MarketState.MarketRegime.BEARISH, true, "OK"
+                null, null, null, false, MarketState.MarketRegime.UNKNOWN, false, "Stale Nifty"
         );
 
-        StrategyEvaluation evaluation = strategy.evaluate(context, bearishMarketState, Collections.emptyMap());
+        StrategyEvaluation evaluation = strategy.evaluate(context, invalidMarket, Collections.emptyMap());
 
-        assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).isEqualTo("NIFTY_BELOW_VWAP");
+        assertThat(evaluation.isNotEvaluable()).isTrue();
+        assertThat(evaluation.failureReason()).isEqualTo("INVALID_MARKET_STATE");
     }
 
     @Test
-    @DisplayName("GIVEN skipToday flagged WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testGuardSkipToday() {
-        DailyStockContext daily = createDefaultDailyContext();
-        daily.setSkipToday(true);
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
+    @DisplayName("GIVEN candle close <= firstCandleHigh WHEN evaluate THEN returns NOT_QUALIFIED")
+    void testNoBreakoutAboveFch() {
+        DailyStockContext daily = createDefaultDailyContext(); // FCH = 101.0
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 100.5, 100.9, 100.2, 100.8, 100.5, 62.0); // close 100.8 <= FCH 101.0
         MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
         StockContext context = createValidContext(daily, current5m, current15m, 2.8);
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
 
         assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).isEqualTo("SKIP_TODAY_FLAGGED");
+        assertThat(evaluation.failureReason()).isEqualTo("CLOSE_NOT_ABOVE_FCH");
     }
 
     @Test
-    @DisplayName("GIVEN opening gap > 1.5% WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testGuardOpeningGapTooLarge() {
+    @DisplayName("GIVEN evaluation time outside 09:30-13:00 window WHEN evaluate THEN returns NOT_QUALIFIED")
+    void testOutsideEntryWindow() {
         DailyStockContext daily = createDefaultDailyContext();
-        daily.setGapPct(1.8);
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 13, 5), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0); // 13:05 > 13:00
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 13, 0), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
         StockContext context = createValidContext(daily, current5m, current15m, 2.8);
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
 
         assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).isEqualTo("OPENING_GAP_EXCEEDS_1_5_PCT");
+        assertThat(evaluation.failureReason()).isEqualTo("OUTSIDE_ENTRY_WINDOW");
     }
 
     @Test
-    @DisplayName("GIVEN prev day range > 4% WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testGuardPrevDayRangeTooLarge() {
-        DailyStockContext daily = createDefaultDailyContext();
-        daily.setPrevDayRangePct(4.5);
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
-        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
-
-        StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
-
-        assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).isEqualTo("PREV_DAY_RANGE_EXCEEDS_4_PCT");
-    }
-
-    @Test
-    @DisplayName("GIVEN resistance < 1.0% WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testGuardResistanceTooClose() {
-        DailyStockContext daily = createDefaultDailyContext();
-        daily.setDistFromResistancePct(0.8);
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
-        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
-
-        StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
-
-        assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).isEqualTo("RESISTANCE_CLOSER_THAN_1_PCT");
-    }
-
-    @Test
-    @DisplayName("GIVEN first candle not bullish WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testFirstCandleNotBullish() {
+    @DisplayName("GIVEN first candle bearish WHEN evaluate THEN returns NOT_QUALIFIED")
+    void testFirstCandleBearish() {
         DailyStockContext daily = createDefaultDailyContext();
         daily.setFirstCandleOpen(101.0);
-        daily.setFirstCandleClose(100.0); // Bearish
+        daily.setFirstCandleClose(100.5); // close <= open -> Bearish!
+
         MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
         MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
         StockContext context = createValidContext(daily, current5m, current15m, 2.8);
@@ -320,12 +325,11 @@ class FchbStrategyTest {
     @DisplayName("GIVEN first candle range < 0.15% WHEN evaluate THEN returns NOT_QUALIFIED")
     void testFirstCandleRangeTooNarrow() {
         DailyStockContext daily = createDefaultDailyContext();
-        daily.setFirstCandleOpen(100.0);
-        daily.setFirstCandleHigh(100.08);
-        daily.setFirstCandleLow(99.98);
-        daily.setFirstCandleClose(100.05);
-        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
+        daily.setFirstCandleHigh(100.10);
+        daily.setFirstCandleLow(100.00); // range = 0.10 / 100 = 0.10% < 0.15%
+
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 100.0, 100.2, 99.9, 100.15, 100.0, 62.0);
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.0, 100.2, 99.9, 100.15, 100.0, 60.0);
         StockContext context = createValidContext(daily, current5m, current15m, 2.8);
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
@@ -335,45 +339,68 @@ class FchbStrategyTest {
     }
 
     @Test
-    @DisplayName("GIVEN time before 09:30 WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testOutsideEntryWindowBefore() {
+    @DisplayName("GIVEN first candle range > 3.0% WHEN evaluate THEN returns NOT_QUALIFIED")
+    void testFirstCandleRangeTooWide() {
         DailyStockContext daily = createDefaultDailyContext();
-        MarketCandle early5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 25), 101.0, 101.5, 100.5, 101.2, 100.9, 62.0);
-        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
-        StockContext context = createValidContext(daily, early5m, current15m, 2.8);
+        daily.setFirstCandleHigh(104.0);
+        daily.setFirstCandleLow(100.0); // range = 4.0% > 3.0%
+
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 103.0, 104.5, 102.5, 104.2, 103.0, 62.0);
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 102.0, 104.5, 101.5, 104.0, 102.5, 60.0);
+        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
 
         assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).isEqualTo("OUTSIDE_ENTRY_WINDOW");
+        assertThat(evaluation.failureReason()).isEqualTo("FIRST_CANDLE_RANGE_INVALID");
     }
 
     @Test
-    @DisplayName("GIVEN time after 13:00 WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testOutsideEntryWindowAfter() {
+    @DisplayName("GIVEN gap > 1.5% WHEN evaluate THEN returns NOT_QUALIFIED")
+    void testOpeningGapTooLarge() {
         DailyStockContext daily = createDefaultDailyContext();
-        MarketCandle late5m = createCandle(LocalDateTime.of(2026, 10, 9, 13, 5), 101.0, 101.5, 100.5, 101.2, 100.9, 62.0);
+        daily.setGapPct(1.8); // > 1.5%
+
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
         MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
-        StockContext context = createValidContext(daily, late5m, current15m, 2.8);
+        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
 
         assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).isEqualTo("OUTSIDE_ENTRY_WINDOW");
+        assertThat(evaluation.failureReason()).isEqualTo("OPENING_GAP_EXCEEDS_1_5_PCT");
     }
 
     @Test
-    @DisplayName("GIVEN close <= FCH WHEN evaluate THEN returns NOT_QUALIFIED")
-    void testCloseNotAboveFch() {
+    @DisplayName("GIVEN prevDayRange > 4.0% WHEN evaluate THEN returns NOT_QUALIFIED")
+    void testPrevDayRangeTooLarge() {
         DailyStockContext daily = createDefaultDailyContext();
-        MarketCandle subFch5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 100.0, 100.9, 99.8, 100.8, 100.2, 62.0);
+        daily.setPrevDayRangePct(4.5); // > 4.0%
+
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
         MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
-        StockContext context = createValidContext(daily, subFch5m, current15m, 2.8);
+        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
 
         StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
 
         assertThat(evaluation.isQualified()).isFalse();
-        assertThat(evaluation.failureReason()).isEqualTo("CLOSE_NOT_ABOVE_FCH");
+        assertThat(evaluation.failureReason()).isEqualTo("PREV_DAY_RANGE_EXCEEDS_4_PCT");
+    }
+
+    @Test
+    @DisplayName("GIVEN distance to resistance < 1.0% WHEN evaluate THEN returns NOT_QUALIFIED")
+    void testResistanceTooClose() {
+        DailyStockContext daily = createDefaultDailyContext();
+        daily.setDistFromResistancePct(0.5); // < 1.0%
+
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
+        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
+
+        StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Collections.emptyMap());
+
+        assertThat(evaluation.isQualified()).isFalse();
+        assertThat(evaluation.failureReason()).isEqualTo("RESISTANCE_CLOSER_THAN_1_PCT");
     }
 
     @Test
@@ -402,5 +429,20 @@ class FchbStrategyTest {
 
         assertThat(evaluation.isQualified()).isFalse();
         assertThat(evaluation.failureReason()).contains("QUALITY_GATE_RED_COUNT");
+    }
+
+    @Test
+    @DisplayName("GIVEN upperCircuit provides < 2.0% headroom WHEN evaluate THEN returns RED disqualified")
+    void testUpperCircuitRoomUnder2Pct() {
+        DailyStockContext daily = createDefaultDailyContext();
+        MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 35), 101.0, 101.35, 100.9, 101.3, 100.9, 62.0);
+        MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 9, 9, 30), 100.5, 101.4, 100.4, 101.2, 100.8, 60.0);
+        StockContext context = createValidContext(daily, current5m, current15m, 2.8);
+
+        // Upper circuit at 102.0 (only 0.69% above close 101.3) -> < 2% room -> RED!
+        StrategyEvaluation evaluation = strategy.evaluate(context, defaultMarketState, Map.of("upperCircuit", "102.0"));
+
+        assertThat(evaluation.isQualified()).isFalse();
+        assertThat(evaluation.failedConditions()).contains("CIRCUIT_ROOM_LESS_THAN_2_PCT");
     }
 }

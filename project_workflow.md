@@ -47,7 +47,7 @@ This document is the authoritative developer, tester, and architecture guide for
   - Production vs Backtest validation.
 
 ### Status Legend
-- `[IMPLEMENTED + TESTED]`: Complete, verified in code, database, and test suite (321 unit tests passing).
+- `[IMPLEMENTED + TESTED]`: Complete, verified in code, database, and test suite (407 unit & integration tests passing).
 - `[PLANNED]`: Architectural design finalized, scheduled for upcoming version release.
 
 ---
@@ -369,10 +369,9 @@ Strategies operate as **pure decision functions**, decoupled from application ti
   - **Priority 1 (Hard Close):** 15:00:00 unconditional market exit.
   - **Priority 2 (Wind-Down Cutoff):** 14:45:00 on normal trading days (14:15:00 on weekly expiry days). If stop $<$ entry $\to$ full exit; if stop $\ge$ entry $\to$ hold and trail until 15:00.
   - **Priority 3 (Stop Loss Hit):** Real-time tick LTP $\le$ currentStopLoss $\to$ full exit.
-  - **Priority 4 (Structural Invalidation - Fast Cut):** Active only while stop $<$ entry: 1M candle close $<$ FCH $\to$ full market exit.
-  - **Priority 5 (Target 1 Partial Exit):** LTP $\ge$ Target 1 (+1R) $\to$ exit 50% at market.
-  - **Priority 6 (Breakeven Ratchet):** LTP $\ge$ Entry + 0.8R (before Target 1) $\to$ move stop to entry price.
-  - **Priority 7 (Target 2 ATR Trailing Ratchet):** Post-Target 1 booked $\to$ trail stop at $1\text{M Low} - (0.5 \times 5\text{M ATR})$. Stop only ratchets upward.
+  - **Priority 4 (Target 1 Partial Exit):** LTP $\ge$ Target 1 (+1R) $\to$ exit 50% at market, lock stop at entry (breakeven).
+  - **Priority 5 (Breakeven Ratchet):** LTP $\ge$ Entry + 0.8R (before Target 1) $\to$ move stop to entry price.
+  - **Priority 6 (Target 2 ATR Trailing Ratchet):** Post-Target 1 booked $\to$ trail stop at $1\text{M Low} - (0.5 \times 5\text{M ATR})$. Stop only ratchets upward.
   - **Time Cutoffs:** 02:45 PM conditional exit, 03:00 PM unconditional hard close (02:15 PM on expiry).
 
 ---
@@ -489,7 +488,7 @@ Before advancing to full orchestration, V2.3 validated the Risk Engine and Posit
 1. **Scenario 1 (Strong Bullish Trend Day):** Nifty consistently above VWAP. Multiple stocks trigger FCHB with low/zero YELLOWs; positions hit Target 1 (+1R), ratchet to breakeven, and trail via ATR to multi-R profits.
 2. **Scenario 2 (Bearish / Trap Day):** Nifty opens or breaks below VWAP; FCHB signals blocked cleanly by the macro gate.
 3. **Scenario 3 (Range-Bound / Choppy Day):** Narrow market ranges; verified tight stops, the 3x friction filter blocking excessive turnover traps, and breakeven ratchets preventing givebacks.
-4. **Scenario 4 (Stock-Level Trap on Bullish Day):** Nifty is strongly bullish above VWAP (macro filter passes), but an individual stock experiences an absorption failure (1M candle immediately closes below FCH after entry). Structural invalidation fires instantly on the 1M candle close, cutting loss to a small fraction of -1R.
+4. **Scenario 4 (Stock-Level Trap on Bullish Day):** Nifty is strongly bullish above VWAP (macro filter passes), but an individual stock experiences an absorption retest. Pure Monotonic Stop Loss holds the position above the stop loss without false shakeouts; when price subsequently breaches the structural stop, full stop exit triggers cleanly.
 
 ---
 
@@ -705,7 +704,7 @@ Before advancing to full orchestration, V2.3 validated the Risk Engine and Posit
   - Flyway migrations `V034` (legacy drops) and `V035` (V2 schema).
   - Populated all 16 JPA entities (`Order`, `Position`, `Signal`, `StrategyConfig`, `StrategyRuleValue`, etc.) and Spring Data repositories.
   - Real database crash rehydration of active positions in `StartupRecoveryService`.
-- Test suite: **401 unit & integration tests passing (100% pass rate, 0 failures, 0 errors)**.
+- Test suite: **407 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
 
 ---
 
@@ -800,6 +799,14 @@ Before advancing to full orchestration, V2.3 validated the Risk Engine and Posit
     - Paced Market Quote Batching: Added 120 ms inter-batch pauses across 50-stock chunks in `AngelOneMarketDataProvider.fetchMarketQuotes` to strictly respect Angel One's 10 req/s rate limit.
     - Prioritized Morning Backfill: Backfill queue assigns Priority 0 to tradable symbols and Priority 10 to the wider universe, unblocking strategy evaluations in ~12 seconds rather than >3 minutes.
     - Production Order Table Preservation: Guarantees zero deletions from production order/position tables during today-only data purges.
+  - **Track C: Institutional Order Execution, Tick Sanity & Circuit Hardening**
+    - Dynamic Exchange Tick-Size Rounding (`PriceTickUtil`): Directional tick rounding (₹0.05 default; ₹0.01 sub-₹250); stop loss floored for LONG / ceiled for SHORT; target ceiled for LONG / floored for SHORT; 2-decimal precision clamping.
+    - 2-Tick Corrupt Spike Defense & Ingestion Sanity Filtering: Binary tick ceiling (₹5,00,000) blocks corrupted broker feed spikes in `scaledPrice()` and `ingestTick()`; `PositionManagerService` enforces 2-tick confirmation debounce on jumps > 2.5% before triggering stop/target exits.
+    - Upper Circuit Headroom Gate (Gate 8): Evaluates headroom to upper circuit limit; disqualifies candidates with < 2.0% headroom (`CIRCUIT_ROOM_LESS_THAN_2_PCT`) to protect liquidity and prevent freeze lockup.
+    - Decoupled Asynchronous RMS Sync: Unblocks `synchronized (executionGatewayMutex)` by moving live RMS margin network queries outside the execution mutex, debounced by 5s.
+    - Formal Order State Machine (OMS) Lifecycle: Explicit states (`PENDING_SUBMIT` $\to$ `SUBMITTED` $\to$ `FILLED` / `PARTIALLY_FILLED` $\to$ `CANCELLED` / `REJECTED`) and in-place resting order modification (`modifyOrder`) to eliminate reverse-position race conditions.
+    - Exclusion of Irregular Exchange Sessions: Skips non-standard trading windows (Diwali Muhurat, Saturday mock drills) to preserve baseline indicators and calendar integrity.
+    - Verified State: **407 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
 - [ ] **V2.4: Master Workflow Orchestrator & Execution Adapters** `[PLANNED]`
 - [ ] **V2.5: Hardening & Historical Simulation Verification** `[PLANNED]`
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`

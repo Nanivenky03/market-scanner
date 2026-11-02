@@ -8,6 +8,7 @@ import com.trading.scanner.strategy.model.StockContext;
 import com.trading.scanner.strategy.model.StrategyEvaluation;
 import com.trading.scanner.strategy.model.StrategyProposal;
 import com.trading.scanner.strategy.model.TrafficLight;
+import com.trading.scanner.util.PriceTickUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -21,6 +22,7 @@ import java.util.Map;
 /**
  * FCHB (First Candle High Breakout) Strategy - Long Side Only.
  * Pure evaluation function generating ENTRY proposals using the Red/Yellow/Green Traffic-Light Quality Gate.
+ * Enforces exchange tick-size rounding on stops/targets and guards against circuit freeze traps.
  */
 @Component
 public class FchbStrategy implements Strategy {
@@ -234,6 +236,23 @@ public class FchbStrategy implements Strategy {
             failed.add("NIFTY_VWAP_RED");
         }
 
+        // Gate 8: Circuit Limit Room Gate (Requires >= 2.0% headroom to Upper Circuit)
+        if (parameters != null && parameters.containsKey("upperCircuit")) {
+            try {
+                double upperCircuit = Double.parseDouble(parameters.get("upperCircuit"));
+                if (upperCircuit > close) {
+                    double circuitRoomPct = ((upperCircuit - close) / close) * 100.0;
+                    if (circuitRoomPct < 2.0) {
+                        lights.add(TrafficLight.RED);
+                        failed.add("CIRCUIT_ROOM_LESS_THAN_2_PCT");
+                    } else {
+                        passed.add("CIRCUIT_ROOM_OK");
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
         // 5. Evaluate Quality Gate
         long redCount = lights.stream().filter(l -> l == TrafficLight.RED).count();
         if (redCount > 0) {
@@ -254,13 +273,15 @@ public class FchbStrategy implements Strategy {
             score = 70.0;
         }
 
-        // 6. Proposal Generation: Stop Loss and Target Calculation
-        double stopLoss = firstCandleLow * 0.995;
+        // 6. Proposal Generation: Stop Loss and Target Calculation (rounded to exchange tick size)
+        double rawStopLoss = firstCandleLow * 0.995;
+        double stopLoss = PriceTickUtil.roundStopLoss(rawStopLoss, false, 0.05);
         double riskPerShare = close - stopLoss;
         if (riskPerShare <= 0.0) {
             return StrategyEvaluation.notQualified(score, passed, List.of("INVALID_RISK_PER_SHARE"), "INVALID_RISK_PER_SHARE");
         }
-        double targetPrice = close + riskPerShare;
+        double rawTargetPrice = close + riskPerShare;
+        double targetPrice = PriceTickUtil.roundTarget(rawTargetPrice, false, 0.05);
 
         StrategyProposal proposal = new StrategyProposal(
                 context.symbol(),
