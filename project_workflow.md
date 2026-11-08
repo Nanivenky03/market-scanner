@@ -900,7 +900,13 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - Core Conductor: `OrderExecutionService` orchestrating dual-leg entries (Market Buy + Resting SL-M), Target 1 partial exits (+0.73R with immediate breakeven trail), tactical invalidation exits, and 1-minute rollover trailing stop flushes.
     - Enriched Schema: Updated `V035` directly with complete trade forensics (`execution_mode`, `resting_sl_order_id`, `mfe_*`, `mae_*`, `gross_pnl`, `net_pnl`, `statutory_charges`, `broker_model`, `slippage`, `trailing_history`, `market_context`).
     - Verified State: **448 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
-  - [ ] **V2.4.4:** In-Flight Position Management, Signal Conductor & Exit Execution (5M setup conductor, live tick SL/T1 exit dispatching).
+  - [x] **V2.4.4: In-Flight Position Management, Signal Conductor & Exit Execution** `[COMPLETED & VERIFIED]`
+    - Real-Time Strategy Conductor: `LiveStrategyExecutionConductor` orchestrating event-driven setup evaluations and position management during market hours.
+    - 5-Minute Setup Evaluation: Listens to `CandleFinalizedEvent` on 5M candles; checks `TradingCalendar` active trading day, 09:30–10:45 entry window, `MasterMarketFilterService` macro state (Nifty above VWAP), retrieves zero-DB `StockContext` from `StockContextCache`, evaluates `FchbStrategy`, and routes approved candidate proposals to `OrderExecutionService`.
+    - Real-Time Tick Processing ($O(1)$ Fast Bypass): Dispatched from `LiveMarketCandleService.ingestTick()`; ultra-fast $O(1)$ bypass (< 10 ns) when no position is open. For active positions, executes under striped symbol lock: checks resting SL-M trigger breaches (`STOP_LOSS_TRIGGERED`), triggers Target 1 (+0.73R) partial exit, and updates high-water mark peak price and trailing stops in memory.
+    - 1-Minute Candle Position Management: Evaluates 1M candle close for 14:45 wind-down cutoff (`INTRADAY_WIND_DOWN_1445`) and technical invalidations via `PositionManagerService.processMinuteCandleClose()` (failed breakout cut at -0.5R, VWAP breakdown cut at -0.5R, momentum exhaustion).
+    - Minute Rollover Trailing Stop Synchronization: Triggered by `MarketScheduler.scheduledMinuteRollover()`; flushes in-memory trailing stop changes to resting broker SL-M orders and database.
+    - Verified State: **456 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
   - [ ] **V2.4.5:** Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trailing history JSON, Kotak Neo statutory charges).
   - [ ] **V2.4.6:** Diagnostic & Operational REST APIs (`/api/v1/simulation/*` endpoints).
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`

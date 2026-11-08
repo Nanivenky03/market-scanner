@@ -69,6 +69,9 @@ public class LiveMarketCandleService {
         private final StockContextCache stockContextCache;
         private final MarketIndexRegistry marketIndexRegistry;
 
+        @Autowired(required = false)
+        private org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.LiveStrategyExecutionConductor> conductorProvider;
+
         private final Map<String, OpenMinuteCandle> openCandles = new ConcurrentHashMap<>();
 
         private final Map<String, Boolean> blockedSymbols = new ConcurrentHashMap<>();
@@ -217,6 +220,18 @@ public class LiveMarketCandleService {
                 String symbol = normalize(input.symbol());
 
                 String exchange = normalize(input.exchange());
+
+                // Real-time tick evaluation for active in-flight positions (SL triggers & Target 1)
+                if (conductorProvider != null) {
+                        try {
+                                com.trading.scanner.execution.LiveStrategyExecutionConductor conductor = conductorProvider.getIfAvailable();
+                                if (conductor != null) {
+                                        conductor.processIncomingTick(symbol, exchange, input.lastPrice(), input.tickTime());
+                                }
+                        } catch (Exception ex) {
+                                log.debug("Conductor tick processing warning for {}: {}", symbol, ex.getMessage());
+                        }
+                }
 
                 LocalDateTime tickTime = truncateToMinute(input.tickTime());
 

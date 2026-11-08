@@ -51,6 +51,9 @@ public class MarketScheduler implements SchedulingConfigurer {
     private final com.trading.scanner.service.data.LiveMarketCandleService liveMarketCandleService;
     private final com.trading.scanner.position.PositionManagerService positionManagerService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.LiveStrategyExecutionConductor> conductorProvider;
+
     @Override
     public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
         // 1. Dynamic Database-Driven Trigger for Morning Maintenance (Default: 07:00
@@ -247,6 +250,18 @@ public class MarketScheduler implements SchedulingConfigurer {
     @Scheduled(cron = "${runtime.schedule.minute-rollover-cron:10 * 9-15 * * MON-FRI}", zone = "${runtime.schedule.zone}")
     public void scheduledMinuteRollover() {
         liveMarketCandleService.rolloverCompletedMinutes();
+        if (conductorProvider != null) {
+            try {
+                com.trading.scanner.execution.LiveStrategyExecutionConductor conductor = conductorProvider.getIfAvailable();
+                if (conductor != null) {
+                    java.time.LocalDate today = timeProvider.today();
+                    java.time.LocalTime now = timeProvider.nowDateTime().toLocalTime();
+                    conductor.onMinuteRollover(today, now);
+                }
+            } catch (Exception ex) {
+                log.debug("Conductor minute rollover warning: {}", ex.getMessage());
+            }
+        }
     }
 
     @Scheduled(fixedDelayString = "${runtime.feed-health.check-interval-ms:15000}", initialDelayString = "${runtime.feed-health.check-interval-ms:15000}")
