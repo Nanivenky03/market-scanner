@@ -116,6 +116,19 @@ class BrokerChargesCalculatorTest {
             // Total = 0.666 + 5.55 + 1.36308 + 0.0444 + 0.2533464 = 7.8768264 (vs Rs. 78.68 on Angel One!)
             double friction = BrokerChargesCalculator.calculate3LegEstimatedFriction(22200.0);
             assertThat(friction).isCloseTo(7.8768, within(0.01));
+
+            // V2.4.5 Itemized charges check
+            BrokerChargesCalculator.ItemizedCharges itemizedBuy = BrokerChargesCalculator.calculateItemizedCharges(turnover, true, BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
+            assertThat(itemizedBuy.brokerage()).isEqualTo(0.0);
+            assertThat(itemizedBuy.stt()).isEqualTo(0.0);
+            assertThat(itemizedBuy.stampDuty()).isCloseTo(0.60, within(0.001));
+            assertThat(itemizedBuy.totalCharges()).isCloseTo(buyCharges, within(0.001));
+
+            BrokerChargesCalculator.ItemizedCharges itemizedSell = BrokerChargesCalculator.calculateItemizedCharges(turnover, false, BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
+            assertThat(itemizedSell.brokerage()).isEqualTo(0.0);
+            assertThat(itemizedSell.stt()).isCloseTo(5.0, within(0.001));
+            assertThat(itemizedSell.stampDuty()).isEqualTo(0.0);
+            assertThat(itemizedSell.totalCharges()).isCloseTo(sellCharges, within(0.001));
         } finally {
             BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.ANGEL_ONE);
         }

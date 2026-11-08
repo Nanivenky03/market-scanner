@@ -179,8 +179,11 @@ class OrderExecutionServiceTest {
                 .symbol("RELIANCE")
                 .positionStatus("OPEN")
                 .entryPrice(2500.05)
+                .initialStopLoss(2480.0)
+                .entryTime("2026-10-11T09:35:00")
                 .currentQuantity(20)
                 .initialQuantity(20)
+                .trailingHistory("[]")
                 .build();
         when(simulatedPositionRepository.findBySymbolAndPositionStatus("RELIANCE", "OPEN")).thenReturn(Optional.of(mockOpenDbPos));
 
@@ -199,11 +202,18 @@ class OrderExecutionServiceTest {
         assertFalse(simulatedOrderAdapter.getActiveRestingOrders().containsKey(restingSlId));
         // Closed in memory
         assertNull(positionManagerService.getPosition(PortfolioMode.PAPER, "RELIANCE"));
-        // DB position marked CLOSED
+        // DB position marked CLOSED with complete forensics
         assertEquals("CLOSED", mockOpenDbPos.getPositionStatus());
         assertEquals("WIND_DOWN_1445", mockOpenDbPos.getExitReason());
         assertNotNull(mockOpenDbPos.getGrossPnl());
         assertNotNull(mockOpenDbPos.getNetPnl());
+        assertNotNull(mockOpenDbPos.getMfePrice());
+        assertNotNull(mockOpenDbPos.getMfeR());
+        assertNotNull(mockOpenDbPos.getMaePrice());
+        assertNotNull(mockOpenDbPos.getMaeR());
+        assertNotNull(mockOpenDbPos.getHoldingDurationSeconds());
+        assertNotNull(mockOpenDbPos.getTrailingHistory());
+        assertTrue(mockOpenDbPos.getTrailingHistory().contains("WIND_DOWN_1445"));
     }
 
     @Test
@@ -244,5 +254,38 @@ class OrderExecutionServiceTest {
         // Resting order in adapter must now have trigger price = 1590.0
         SimulatedOrderAdapter.RestingOrderState resting = simulatedOrderAdapter.getActiveRestingOrders().get(pos.restingSlOrderId());
         assertEquals(1590.0, resting.triggerPrice());
+    }
+
+    @Test
+    @DisplayName("V2.4.5: Verifies complete context-rich DB persistence of MFE, MAE, Market Context, and Order Forensics")
+    void v245_shouldPersistCompleteForensicsAndContext() {
+        StrategyConfig config = StrategyConfig.builder().id(2).executionMode("PAPER").isActive(true).build();
+        when(strategyConfigRepository.findById(2)).thenReturn(Optional.of(config));
+
+        SimulatedPosition[] savedPos = new SimulatedPosition[1];
+        when(simulatedPositionRepository.save(any(SimulatedPosition.class))).thenAnswer(inv -> {
+            savedPos[0] = inv.getArgument(0);
+            return savedPos[0];
+        });
+
+        StrategyProposal proposal = new StrategyProposal(
+                "SBIN", "NSE", 2, "FCHB", "LONG", 800.0, 792.0, 805.84, 798.0, 100.0,
+                Map.of("volX", 2.2, "extensionPct", 0.45)
+        );
+
+        OrderExecutionService.ExecutionResult result = executionService.processCandidateProposal(proposal);
+        assertTrue(result.accepted());
+
+        assertNotNull(savedPos[0]);
+        assertEquals(800.05, savedPos[0].getEntryPrice());
+        assertEquals(800.05, savedPos[0].getPeakPrice());
+        assertEquals(800.05, savedPos[0].getTroughPrice());
+        assertEquals(0.0, savedPos[0].getMfeR());
+        assertEquals(0.0, savedPos[0].getMaeR());
+        assertNotNull(savedPos[0].getMarketContext());
+        assertTrue(savedPos[0].getMarketContext().contains("FCHB"));
+        assertTrue(savedPos[0].getMarketContext().contains("volX"));
+        assertNotNull(savedPos[0].getTrailingHistory());
+        assertTrue(savedPos[0].getTrailingHistory().contains("ENTRY"));
     }
 }

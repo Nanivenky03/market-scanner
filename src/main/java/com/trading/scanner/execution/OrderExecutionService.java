@@ -16,6 +16,8 @@ import com.trading.scanner.strategy.fchb.FchbStrategy;
 import com.trading.scanner.strategy.model.PositionSnapshot;
 import com.trading.scanner.strategy.model.StrategyProposal;
 import com.trading.scanner.util.PriceTickUtil;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -44,6 +46,7 @@ public class OrderExecutionService {
     private final PositionRepository positionRepository;
     private final SimulatedOrderRepository simulatedOrderRepository;
     private final OrderRepository orderRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final Map<PortfolioMode, BrokerOrderAdapter> adaptersByMode = new ConcurrentHashMap<>();
 
@@ -230,11 +233,15 @@ public class OrderExecutionService {
                     proposal.structuralInvalidationLevel(),
                     false,
                     fillPrice,
+                    fillPrice, // troughPrice initialized to fillPrice
                     LocalDateTime.now(),
                     restingSlOrderId
             );
 
             positionManagerService.registerPosition(mode, snapshot);
+
+            String initialHistory = createInitialTrailingHistory(fillPrice, stopLoss);
+            String marketCtx = serializeMarketContext(proposal);
 
             // 6. Persist initial position record to DB
             if (mode == PortfolioMode.PAPER) {
@@ -253,6 +260,7 @@ public class OrderExecutionService {
                         .initialTarget(reAnchoredTarget1)
                         .updatedTarget(reAnchoredTarget1)
                         .peakPrice(fillPrice)
+                        .troughPrice(fillPrice)
                         .mfePrice(fillPrice)
                         .mfeR(0.0)
                         .mfePercent(0.0)
@@ -266,7 +274,8 @@ public class OrderExecutionService {
                         .brokerModel("KOTAK_NEO")
                         .positionStatus("OPEN")
                         .entryTime(LocalDateTime.now().toString())
-                        .trailingHistory("[]")
+                        .trailingHistory(initialHistory)
+                        .marketContext(marketCtx)
                         .build();
 
                 simulatedPositionRepository.save(simPos);
@@ -286,10 +295,13 @@ public class OrderExecutionService {
                         .initialTarget(reAnchoredTarget1)
                         .updatedTarget(reAnchoredTarget1)
                         .peakPrice(fillPrice)
+                        .troughPrice(fillPrice)
                         .restingSlOrderId(restingSlOrderId)
                         .brokerModel("KOTAK_NEO")
                         .positionStatus("OPEN")
                         .entryTime(LocalDateTime.now().toString())
+                        .marketContext(marketCtx)
+                        .trailingHistory(initialHistory)
                         .build();
 
                 positionRepository.save(livePos);
@@ -366,6 +378,8 @@ public class OrderExecutionService {
             riskEngine.recordFrictionIncurred(mode, partialFriction);
 
             // Step 3: Update in-memory PositionSnapshot
+            double peak = Math.max(pos.peakPrice(), fillPrice);
+            double trough = Math.min(pos.troughPrice() != null ? pos.troughPrice() : pos.entryPrice(), fillPrice);
             PositionSnapshot updated = new PositionSnapshot(
                     pos.positionId(),
                     pos.strategyId(),
@@ -379,7 +393,8 @@ public class OrderExecutionService {
                     pos.target1Price(),
                     pos.firstCandleHigh(),
                     true, // target1Booked = true
-                    Math.max(pos.peakPrice(), fillPrice),
+                    peak,
+                    trough,
                     pos.entryTime(),
                     pos.restingSlOrderId()
             );
@@ -391,10 +406,21 @@ public class OrderExecutionService {
                 simulatedPositionRepository.findBySymbolAndPositionStatus(symbol, "OPEN").ifPresent(dbPos -> {
                     dbPos.setCurrentQuantity(remainingQty);
                     dbPos.setUpdatedStopLoss(breakevenSl);
+                    dbPos.setPeakPrice(peak);
+                    dbPos.setTroughPrice(trough);
                     dbPos.setGrossPnl((dbPos.getGrossPnl() != null ? dbPos.getGrossPnl() : 0.0) + partialPnl);
                     dbPos.setStatutoryCharges((dbPos.getStatutoryCharges() != null ? dbPos.getStatutoryCharges() : 0.0) + partialFriction);
                     dbPos.setNetPnl(dbPos.getGrossPnl() - dbPos.getStatutoryCharges());
                     dbPos.setUpdatedAt(LocalDateTime.now().toString());
+
+                    Map<String, Object> t1Event = new LinkedHashMap<>();
+                    t1Event.put("timestamp", LocalDateTime.now().toString());
+                    t1Event.put("event", "TARGET_1_BOOKED");
+                    t1Event.put("fillPrice", fillPrice);
+                    t1Event.put("stopLoss", breakevenSl);
+                    t1Event.put("rMultiple", 0.73);
+                    dbPos.setTrailingHistory(appendTrailingHistory(dbPos.getTrailingHistory(), t1Event));
+
                     simulatedPositionRepository.save(dbPos);
                 });
             }
@@ -471,25 +497,45 @@ public class OrderExecutionService {
             // Update DB position to CLOSED with full forensics
             if (mode == PortfolioMode.PAPER) {
                 simulatedPositionRepository.findBySymbolAndPositionStatus(symbol, "OPEN").ifPresent(dbPos -> {
-                    double peak = Math.max(dbPos.getPeakPrice() != null ? dbPos.getPeakPrice() : pos.entryPrice(), fillPrice);
-                    double initialRisk = Math.max(0.01, pos.entryPrice() - pos.currentStopLoss());
+                    double peak = Math.max(pos.peakPrice() != null ? pos.peakPrice() : pos.entryPrice(), fillPrice);
+                    double trough = Math.min(pos.troughPrice() != null ? pos.troughPrice() : pos.entryPrice(), fillPrice);
+                    double initialRisk = Math.max(0.01, pos.entryPrice() - (dbPos.getInitialStopLoss() != null ? dbPos.getInitialStopLoss() : pos.currentStopLoss()));
                     double mfePrice = peak;
                     double mfeR = (mfePrice - pos.entryPrice()) / initialRisk;
                     double mfePct = ((mfePrice - pos.entryPrice()) / pos.entryPrice()) * 100.0;
+
+                    double maePrice = trough;
+                    double maeR = (trough - pos.entryPrice()) / initialRisk;
+                    double maePct = ((trough - pos.entryPrice()) / pos.entryPrice()) * 100.0;
 
                     double totalGross = (dbPos.getGrossPnl() != null ? dbPos.getGrossPnl() : 0.0) + pnl;
                     double totalCharges = (dbPos.getStatutoryCharges() != null ? dbPos.getStatutoryCharges() : 0.0) + friction;
                     double netPnl = totalGross - totalCharges;
 
+                    String exitTime = LocalDateTime.now().toString();
+                    Integer durationSeconds = null;
+                    if (dbPos.getEntryTime() != null) {
+                        try {
+                            LocalDateTime entryLdt = LocalDateTime.parse(dbPos.getEntryTime());
+                            LocalDateTime exitLdt = LocalDateTime.parse(exitTime);
+                            durationSeconds = (int) java.time.Duration.between(entryLdt, exitLdt).getSeconds();
+                        } catch (Exception ignored) {}
+                    }
+
                     dbPos.setCurrentQuantity(0);
                     dbPos.setExitPrice(fillPrice);
-                    dbPos.setExitTime(LocalDateTime.now().toString());
+                    dbPos.setExitTime(exitTime);
                     dbPos.setExitReason(exitReason);
                     dbPos.setPositionStatus("CLOSED");
                     dbPos.setPeakPrice(peak);
+                    dbPos.setTroughPrice(trough);
                     dbPos.setMfePrice(mfePrice);
                     dbPos.setMfeR(mfeR);
                     dbPos.setMfePercent(mfePct);
+                    dbPos.setMaePrice(maePrice);
+                    dbPos.setMaeR(maeR);
+                    dbPos.setMaePercent(maePct);
+                    dbPos.setHoldingDurationSeconds(durationSeconds);
                     dbPos.setGrossPnl(totalGross);
                     dbPos.setStatutoryCharges(totalCharges);
                     dbPos.setNetPnl(netPnl);
@@ -497,7 +543,17 @@ public class OrderExecutionService {
                     dbPos.setPnlPercent((netPnl / (pos.entryPrice() * pos.initialQuantity())) * 100.0);
                     dbPos.setExitTriggerPrice(currentTickPrice);
                     dbPos.setSlippage(Math.abs(currentTickPrice - fillPrice));
-                    dbPos.setUpdatedAt(LocalDateTime.now().toString());
+                    dbPos.setUpdatedAt(exitTime);
+
+                    Map<String, Object> exitEvent = new LinkedHashMap<>();
+                    exitEvent.put("timestamp", exitTime);
+                    exitEvent.put("event", exitReason);
+                    exitEvent.put("exitPrice", fillPrice);
+                    exitEvent.put("grossPnl", pnl);
+                    exitEvent.put("netPnl", pnl - friction);
+                    exitEvent.put("mfeR", mfeR);
+                    exitEvent.put("maeR", maeR);
+                    dbPos.setTrailingHistory(appendTrailingHistory(dbPos.getTrailingHistory(), exitEvent));
 
                     simulatedPositionRepository.save(dbPos);
                 });
@@ -535,13 +591,79 @@ public class OrderExecutionService {
 
                 if (mode == PortfolioMode.PAPER) {
                     simulatedPositionRepository.findBySymbolAndPositionStatus(symbol, "OPEN").ifPresent(dbPos -> {
+                        boolean stopChanged = dbPos.getUpdatedStopLoss() == null ||
+                                Double.compare(dbPos.getUpdatedStopLoss(), pos.currentStopLoss()) != 0;
                         dbPos.setUpdatedStopLoss(pos.currentStopLoss());
                         dbPos.setPeakPrice(pos.peakPrice());
+                        dbPos.setTroughPrice(pos.troughPrice());
                         dbPos.setUpdatedAt(LocalDateTime.now().toString());
+
+                        if (stopChanged) {
+                            Map<String, Object> trailEvent = new LinkedHashMap<>();
+                            trailEvent.put("timestamp", LocalDateTime.now().toString());
+                            trailEvent.put("event", "TRAILING_STOP_UPDATE");
+                            trailEvent.put("stopLoss", pos.currentStopLoss());
+                            trailEvent.put("peakPrice", pos.peakPrice());
+                            trailEvent.put("troughPrice", pos.troughPrice());
+                            dbPos.setTrailingHistory(appendTrailingHistory(dbPos.getTrailingHistory(), trailEvent));
+                        }
+
                         simulatedPositionRepository.save(dbPos);
                     });
                 }
             });
+        }
+    }
+
+    private String serializeMarketContext(StrategyProposal proposal) {
+        if (proposal == null) return "{}";
+        try {
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("strategyKey", proposal.strategyKey());
+            map.put("direction", proposal.direction());
+            map.put("confidenceScore", proposal.confidenceScore());
+            map.put("entryPrice", proposal.entryPrice());
+            map.put("initialStopLoss", proposal.initialStopLoss());
+            map.put("initialTarget", proposal.initialTarget());
+            map.put("structuralInvalidation", proposal.structuralInvalidationLevel());
+            if (proposal.ruleContext() != null) {
+                map.putAll(proposal.ruleContext());
+            }
+            return objectMapper.writeValueAsString(map);
+        } catch (Exception e) {
+            log.warn("Failed to serialize market context: {}", e.getMessage());
+            return "{}";
+        }
+    }
+
+    private String createInitialTrailingHistory(double fillPrice, double stopLoss) {
+        try {
+            List<Map<String, Object>> events = new ArrayList<>();
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("timestamp", LocalDateTime.now().toString());
+            entry.put("event", "ENTRY");
+            entry.put("price", fillPrice);
+            entry.put("stopLoss", stopLoss);
+            entry.put("rMultiple", -1.0);
+            events.add(entry);
+            return objectMapper.writeValueAsString(events);
+        } catch (Exception e) {
+            return "[]";
+        }
+    }
+
+    private String appendTrailingHistory(String existingJson, Map<String, Object> newEvent) {
+        try {
+            List<Map<String, Object>> list;
+            if (existingJson != null && !existingJson.isBlank() && !existingJson.equals("[]")) {
+                list = objectMapper.readValue(existingJson, new TypeReference<List<Map<String, Object>>>() {});
+            } else {
+                list = new ArrayList<>();
+            }
+            list.add(newEvent);
+            return objectMapper.writeValueAsString(list);
+        } catch (Exception e) {
+            return existingJson != null ? existingJson : "[]";
         }
     }
 }

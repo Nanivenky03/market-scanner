@@ -136,4 +136,33 @@ public final class BrokerChargesCalculator {
         double gst = (brokerage3Legs + exchangeFee + sebiFee) * GST_RATE;
         return brokerage3Legs + stampDuty + stt + exchangeFee + sebiFee + gst;
     }
+
+    public record ItemizedCharges(
+            double turnover,
+            double brokerage,
+            double stt,
+            double stampDuty,
+            double exchangeFee,
+            double sebiFee,
+            double gst,
+            double totalCharges
+    ) {}
+
+    public static ItemizedCharges calculateItemizedCharges(double turnover, boolean isBuy) {
+        return calculateItemizedCharges(turnover, isBuy, activeBroker);
+    }
+
+    public static ItemizedCharges calculateItemizedCharges(double turnover, boolean isBuy, BrokerModel broker) {
+        if (turnover <= 0.0) {
+            return new ItemizedCharges(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        }
+        double brokerage = calculateBrokerage(turnover, broker);
+        double stt = isBuy ? 0.0 : turnover * STT_SELL_RATE;
+        double stampDuty = isBuy ? turnover * STAMP_DUTY_BUY_RATE : 0.0;
+        double exchangeFee = turnover * EXCHANGE_TURNOVER_RATE;
+        double sebiFee = turnover * SEBI_TURNOVER_RATE;
+        double gst = (brokerage + exchangeFee + sebiFee) * GST_RATE;
+        double total = brokerage + stt + stampDuty + exchangeFee + sebiFee + gst;
+        return new ItemizedCharges(turnover, brokerage, stt, stampDuty, exchangeFee, sebiFee, gst, total);
+    }
 }

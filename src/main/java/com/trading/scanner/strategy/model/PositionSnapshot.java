@@ -20,9 +20,30 @@ public record PositionSnapshot(
         Double firstCandleHigh,
         boolean target1Booked,
         Double peakPrice,
+        Double troughPrice,
         LocalDateTime entryTime,
         String restingSlOrderId
 ) {
+    public PositionSnapshot(
+            Integer positionId,
+            Integer strategyId,
+            String symbol,
+            String exchange,
+            String positionSide,
+            Integer initialQuantity,
+            Integer currentQuantity,
+            Double entryPrice,
+            Double currentStopLoss,
+            Double target1Price,
+            Double firstCandleHigh,
+            boolean target1Booked,
+            Double peakPrice,
+            LocalDateTime entryTime,
+            String restingSlOrderId
+    ) {
+        this(positionId, strategyId, symbol, exchange, positionSide, initialQuantity, currentQuantity,
+                entryPrice, currentStopLoss, target1Price, firstCandleHigh, target1Booked, peakPrice, entryPrice, entryTime, restingSlOrderId);
+    }
     public PositionSnapshot(
             Integer positionId,
             Integer strategyId,

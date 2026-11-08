@@ -907,7 +907,14 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - 1-Minute Candle Position Management: Evaluates 1M candle close for 14:45 wind-down cutoff (`INTRADAY_WIND_DOWN_1445`) and technical invalidations via `PositionManagerService.processMinuteCandleClose()` (failed breakout cut at -0.5R, VWAP breakdown cut at -0.5R, momentum exhaustion).
     - Minute Rollover Trailing Stop Synchronization: Triggered by `MarketScheduler.scheduledMinuteRollover()`; flushes in-memory trailing stop changes to resting broker SL-M orders and database.
     - Verified State: **456 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
-  - [ ] **V2.4.5:** Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trailing history JSON, Kotak Neo statutory charges).
+  - [x] **V2.4.5: Context-Rich Database Persistence ("Data Gold Mine")** `[COMPLETED & VERIFIED]`
+    - Database Schema Hardening: Extended `V035` directly (zero migration proliferation) adding `slippage_per_share`, `total_slippage`, `risk_per_share`, `risk_budget_allocated`, and `order_tag` to `orders`/`simulated_orders`; and `trough_price` and `holding_duration_seconds` to `positions`/`simulated_positions`.
+    - Real-Time Dual Excursion Tracking (MFE & MAE): Continuous $O(1)$ tracking of both high-water mark (`peakPrice`) and adverse draw-down trough (`troughPrice`) across tick stream and 1M candle closes in `PositionSnapshot` and `PositionManagerService`.
+    - Detailed Excursion Metrics: Upon position closure, persists exact MFE (price, R-multiple, percentage) and MAE (price, R-multiple, percentage) and calculated trade holding duration in seconds.
+    - Timestamped Trailing History JSON: Persists full lifecycle audit trail in `trailing_history` JSON: initial entry, Target 1 breakeven ratchet, minute-rollover trailing updates, and tactical exit event with PnL.
+    - Setup & Market Context Serialization: Persists complete quantitative candidate snapshot in `market_context` JSON (`volX`, extension %, yellow count, FCH/FCL reference levels, strategy score, structural invalidation level).
+    - Itemized Statutory Friction Breakdown: Added `BrokerChargesCalculator.calculateItemizedCharges()` capturing exact itemized statutory friction (turnover, zero-brokerage Kotak Neo, STT, stamp duty, exchange turnover fee, SEBI fee, GST).
+    - Verified State: **457 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
   - [ ] **V2.4.6:** Diagnostic & Operational REST APIs (`/api/v1/simulation/*` endpoints).
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`
 - [ ] **V4.0: Professional Web UI & Trader Dashboard** `[PLANNED]`

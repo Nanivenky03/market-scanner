@@ -84,6 +84,21 @@ public class SimulatedOrder {
     @Column(name = "statutory_charges")
     private Double statutoryCharges;
 
+    @Column(name = "slippage_per_share")
+    private Double slippagePerShare;
+
+    @Column(name = "total_slippage")
+    private Double totalSlippage;
+
+    @Column(name = "risk_per_share")
+    private Double riskPerShare;
+
+    @Column(name = "risk_budget_allocated")
+    private Double riskBudgetAllocated;
+
+    @Column(name = "order_tag")
+    private String orderTag;
+
     @Column(name = "execution_latency_ms")
     private Integer executionLatencyMs;
 

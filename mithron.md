@@ -179,10 +179,12 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
         * 1M candle close evaluation for 14:45 intraday wind-down and technical invalidations via `FchbPositionHandler`.
         * Minute rollover synchronization of in-memory trailing stops with resting broker orders and DB.
         * Verified State: 456 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
-      - V2.4.5 Context-Rich Database Persistence ("Data Gold Mine"): NEXT STEP ⏳
-      - V2.4.5 Context-Rich Database Persistence ("Data Gold Mine"):
-        * Deep trade forensics in `simulated_orders` and `simulated_positions`: MFE (R and %), MAE (R and %), trailing ratchet history (JSON), entry setup indicators, and Kotak Neo fee breakdown.
-      - V2.4.6 Diagnostic & Operational REST APIs:
+      - V2.4.5 Context-Rich Database Persistence ("Data Gold Mine"): COMPLETED & VERIFIED ✅
+        * Deep trade forensics in `simulated_orders` and `simulated_positions`: MFE (price, R, %), MAE (trough price, R, %), holding duration in seconds, trailing ratchet history JSON, entry setup context JSON, and Kotak Neo fee breakdown.
+        * Extended `V035` Flyway schema directly with zero extra migration files.
+        * Added `calculateItemizedCharges()` to `BrokerChargesCalculator` for granular statutory reporting.
+        * Verified State: 457 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
+      - V2.4.6 Diagnostic & Operational REST APIs: NEXT STEP ⏳
         * `/api/v1/simulation/*` endpoints for real-time portfolio metrics, active positions, order ledger, and strategy execution toggles.
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]

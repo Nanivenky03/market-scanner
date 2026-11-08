@@ -130,8 +130,10 @@ public class PositionManagerService {
 
             boolean isShort = isShortSide(position.positionSide());
             double currentPeak = position.peakPrice() != null ? position.peakPrice() : position.entryPrice();
+            double currentTrough = position.troughPrice() != null ? position.troughPrice() : position.entryPrice();
             double newPeak = isShort ? Math.min(currentPeak, ltp) : Math.max(currentPeak, ltp);
-            if (Double.compare(newPeak, currentPeak) != 0) {
+            double newTrough = isShort ? Math.max(currentTrough, ltp) : Math.min(currentTrough, ltp);
+            if (Double.compare(newPeak, currentPeak) != 0 || Double.compare(newTrough, currentTrough) != 0) {
                 position = new PositionSnapshot(
                         position.positionId(),
                         position.strategyId(),
@@ -146,7 +148,9 @@ public class PositionManagerService {
                         position.firstCandleHigh(),
                         position.target1Booked(),
                         newPeak,
-                        position.entryTime()
+                        newTrough,
+                        position.entryTime(),
+                        position.restingSlOrderId()
                 );
                 activePositions.get(mode).put(symbol, position);
             }
@@ -216,12 +220,13 @@ public class PositionManagerService {
             }
 
             boolean isShort = isShortSide(position.positionSide());
-            double barExtreme = isShort
-                    ? (candle1m.getLowPrice() != null ? candle1m.getLowPrice() : closePrice)
-                    : (candle1m.getHighPrice() != null ? candle1m.getHighPrice() : closePrice);
+            double barHigh = candle1m.getHighPrice() != null ? candle1m.getHighPrice() : closePrice;
+            double barLow = candle1m.getLowPrice() != null ? candle1m.getLowPrice() : closePrice;
             double currentPeak = position.peakPrice() != null ? position.peakPrice() : position.entryPrice();
-            double newPeak = isShort ? Math.min(currentPeak, barExtreme) : Math.max(currentPeak, barExtreme);
-            if (Double.compare(newPeak, currentPeak) != 0) {
+            double currentTrough = position.troughPrice() != null ? position.troughPrice() : position.entryPrice();
+            double newPeak = isShort ? Math.min(currentPeak, barLow) : Math.max(currentPeak, barHigh);
+            double newTrough = isShort ? Math.max(currentTrough, barHigh) : Math.min(currentTrough, barLow);
+            if (Double.compare(newPeak, currentPeak) != 0 || Double.compare(newTrough, currentTrough) != 0) {
                 position = new PositionSnapshot(
                         position.positionId(),
                         position.strategyId(),
@@ -236,7 +241,9 @@ public class PositionManagerService {
                         position.firstCandleHigh(),
                         position.target1Booked(),
                         newPeak,
-                        position.entryTime()
+                        newTrough,
+                        position.entryTime(),
+                        position.restingSlOrderId()
                 );
                 activePositions.get(mode).put(symbol, position);
             }
@@ -335,7 +342,9 @@ public class PositionManagerService {
                         position.firstCandleHigh(),
                         true,
                         position.peakPrice(),
-                        position.entryTime());
+                        position.troughPrice(),
+                        position.entryTime(),
+                        position.restingSlOrderId());
                 activePositions.get(mode).put(symbol, updated);
                 riskEngine.updatePosition(mode, updated);
                 log.info("[{}] PARTIAL EXIT booked for symbol={} exitQty={} remainingQty={} newStop={} partialPnl={} friction={} reason={}",
@@ -363,7 +372,9 @@ public class PositionManagerService {
                                 position.firstCandleHigh(),
                                 position.target1Booked(),
                                 position.peakPrice(),
-                                position.entryTime());
+                                position.troughPrice(),
+                                position.entryTime(),
+                                position.restingSlOrderId());
                         activePositions.get(mode).put(symbol, updated);
                         riskEngine.updatePosition(mode, updated);
                         log.info("[{}] Ratcheted Stop Loss for symbol={} from {} to {} reason={}",

@@ -87,6 +87,14 @@ public class SimulatedOrderAdapter implements BrokerOrderAdapter {
                 ? BrokerChargesCalculator.calculateBuyLegCharges(turnover)
                 : BrokerChargesCalculator.calculateSellLegCharges(turnover);
 
+        double slippagePerShare = slippage;
+        double totalSlippage = slippagePerShare * request.quantity();
+        double riskPerShare = (request.price() != null && request.triggerPrice() != null)
+                ? Math.abs(request.price() - request.triggerPrice()) : 0.0;
+        double riskBudgetAllocated = riskPerShare * request.quantity();
+        String orderTag = request.clientTag() != null ? request.clientTag()
+                : (isBuy ? "ENTRY_MARKET_BUY" : "EXIT_MARKET_SELL");
+
         SimulatedOrder dbOrder = SimulatedOrder.builder()
                 .signalId(request.signalId())
                 .parentOrderId(request.parentOrderId())
@@ -102,6 +110,11 @@ public class SimulatedOrderAdapter implements BrokerOrderAdapter {
                 .filledQuantity(request.quantity())
                 .triggerTickPrice(tickPrice)
                 .statutoryCharges(charges)
+                .slippagePerShare(slippagePerShare)
+                .totalSlippage(totalSlippage)
+                .riskPerShare(riskPerShare)
+                .riskBudgetAllocated(riskBudgetAllocated)
+                .orderTag(orderTag)
                 .executionLatencyMs(15) // Simulated exchange turnaround
                 .orderStatus("FILLED")
                 .brokerOrderId(brokerOrderId)
@@ -126,6 +139,9 @@ public class SimulatedOrderAdapter implements BrokerOrderAdapter {
 
     private OrderResponse placeRestingStopLossOrder(OrderRequest request, String brokerOrderId) {
         double triggerPrice = request.triggerPrice() != null ? request.triggerPrice() : 0.0;
+        double riskPerShare = request.price() != null ? Math.abs(request.price() - triggerPrice) : 0.0;
+        double riskBudgetAllocated = riskPerShare * request.quantity();
+        String orderTag = request.clientTag() != null ? request.clientTag() : "RESTING_SL_M";
 
         SimulatedOrder dbOrder = SimulatedOrder.builder()
                 .signalId(request.signalId())
@@ -139,6 +155,9 @@ public class SimulatedOrderAdapter implements BrokerOrderAdapter {
                 .triggerPrice(triggerPrice)
                 .quantity(request.quantity())
                 .filledQuantity(0)
+                .riskPerShare(riskPerShare)
+                .riskBudgetAllocated(riskBudgetAllocated)
+                .orderTag(orderTag)
                 .orderStatus("PENDING_TRIGGER")
                 .brokerOrderId(brokerOrderId)
                 .uniqueOrderId(brokerOrderId)
@@ -234,12 +253,19 @@ public class SimulatedOrderAdapter implements BrokerOrderAdapter {
         double charges = BrokerChargesCalculator.calculateSellLegCharges(turnover);
 
         if (existing.dbOrderId() != null) {
+            double slippagePerShare = slippage;
+            double totalSlippage = slippagePerShare * existing.quantity();
+            String orderTag = request.clientTag() != null ? request.clientTag() : "MODIFY_TO_MARKET_FILL";
+
             simulatedOrderRepository.findById(existing.dbOrderId()).ifPresent(order -> {
                 order.setOrderType("MARKET");
                 order.setAverageFillPrice(fillPrice);
                 order.setFilledQuantity(existing.quantity());
                 order.setTriggerTickPrice(tickPrice);
                 order.setStatutoryCharges(charges);
+                order.setSlippagePerShare(slippagePerShare);
+                order.setTotalSlippage(totalSlippage);
+                order.setOrderTag(orderTag);
                 order.setOrderStatus("FILLED");
                 order.setFilledAt(LocalDateTime.now().toString());
                 order.setUpdatedAt(LocalDateTime.now().toString());

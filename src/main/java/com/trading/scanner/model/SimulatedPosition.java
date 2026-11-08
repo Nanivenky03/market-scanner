@@ -78,6 +78,9 @@ public class SimulatedPosition {
     @Column(name = "peak_price")
     private Double peakPrice;
 
+    @Column(name = "trough_price")
+    private Double troughPrice;
+
     @Column(name = "mfe_price")
     private Double mfePrice;
 
@@ -108,6 +111,9 @@ public class SimulatedPosition {
 
     @Column(name = "slippage")
     private Double slippage;
+
+    @Column(name = "holding_duration_seconds")
+    private Integer holdingDurationSeconds;
 
     @Column(name = "trailing_history", columnDefinition = "TEXT")
     private String trailingHistory;
