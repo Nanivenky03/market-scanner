@@ -891,7 +891,15 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - Midday Disconnect / Crash Recovery: `StartupRecoveryService` checks if today is an active trading day (`tradingCalendar.isTradingDay`) and market has opened ($\ge 09:15$), automatically warming up `StockContextCache` from DB historical candles and daily context.
     - Enriched `StockContext`: Zero-DB memory snapshot containing current LTP, VWAP, day high/low, sector index symbol, sector VWAP distance %, and Nifty benchmark VWAP distance %.
     - Verified State: **436 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
-  - [ ] **V2.4.3:** Decoupled Order Engine Core & Concurrency Safety (`OrderExecutionService`, `SimulatedOrderAdapter`, per-strategy mode, per-symbol locks).
+  - [x] **V2.4.3: Decoupled Order Engine Core & Concurrency Safety** `[COMPLETED & VERIFIED]`
+    - Decoupled `BrokerOrderAdapter` Interface: Standardized contract (`placeOrder`, `modifyOrder`, `cancelOrder`, `getOrderStatus`) abstracting simulation from live broker execution.
+    - `SimulatedOrderAdapter`: High-fidelity paper trading engine modeling 1-tick slippage, Kotak Neo statutory charges (`BrokerChargesCalculator`), resting `SL-M` queues, and automatic tick-trigger execution.
+    - `AngelOneBrokerOrderAdapter`: Disabled live placeholder with security assertion preventing accidental live order dispatch.
+    - Reverse Position Prevention: Implemented atomic **Modify-to-Market (Pattern A)** with **Cancel-Confirm-Market (Pattern B)** fallback, guaranteeing zero double-fills or accidental short positions when closing longs.
+    - Concurrency Safety: `StripedSymbolLockManager` providing striped per-symbol locks, eliminating cross-symbol blocking while guaranteeing strict per-stock serial execution.
+    - Core Conductor: `OrderExecutionService` orchestrating dual-leg entries (Market Buy + Resting SL-M), Target 1 partial exits (+0.73R with immediate breakeven trail), tactical invalidation exits, and 1-minute rollover trailing stop flushes.
+    - Enriched Schema: Updated `V035` directly with complete trade forensics (`execution_mode`, `resting_sl_order_id`, `mfe_*`, `mae_*`, `gross_pnl`, `net_pnl`, `statutory_charges`, `broker_model`, `slippage`, `trailing_history`, `market_context`).
+    - Verified State: **448 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
   - [ ] **V2.4.4:** In-Flight Position Management, Signal Conductor & Exit Execution (5M setup conductor, live tick SL/T1 exit dispatching).
   - [ ] **V2.4.5:** Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trailing history JSON, Kotak Neo statutory charges).
   - [ ] **V2.4.6:** Diagnostic & Operational REST APIs (`/api/v1/simulation/*` endpoints).

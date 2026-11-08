@@ -165,10 +165,14 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
         * Midday disconnect / crash recovery in `StartupRecoveryService` automatically warming up `StockContextCache` when restarting after market open (>= 09:15) on trading days, preventing state loss without cold DB lag.
         * Rich in-memory snapshot in `StockContext` providing instant access to sector benchmark, Nifty regime distance, current VWAP, and intraday extremes for any strategy.
         * Verified State: 436 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
-      - V2.4.3 Decoupled Order Engine Core & Concurrency Safety: NEXT STEP ⏳
-        * Unified `OrderExecutionService` decoupled from broker APIs via `BrokerOrderAdapter` (`SimulatedOrderAdapter` active for paper mode, live adapter placeholder).
+      - V2.4.3 Decoupled Order Engine Core & Concurrency Safety: COMPLETED & VERIFIED ✅
+        * Unified `OrderExecutionService` decoupled from broker APIs via `BrokerOrderAdapter` (`SimulatedOrderAdapter` active for paper mode, `AngelOneBrokerOrderAdapter` disabled placeholder).
         * Per-strategy decoupled execution mode (`PAPER`, `LIVE`, `DISABLED`) in `strategy_config`.
-        * Multi-strategy concurrency safety: Per-symbol locks, single-writer gateway mutex, and isolated `PortfolioState(PAPER)` vs `PortfolioState(LIVE)`.
+        * Multi-strategy concurrency safety: `StripedSymbolLockManager` providing striped per-symbol locks, eliminating cross-symbol blocking while guaranteeing strict per-stock serial execution.
+        * Reverse Position Elimination: Atomic Modify-to-Market (Pattern A) with Cancel-Confirm-Market (Pattern B) fallback preventing accidental short positions.
+        * Enriched `V035` schema directly with full forensics (`resting_sl_order_id`, `mfe_*`, `mae_*`, `gross_pnl`, `net_pnl`, `statutory_charges`, `broker_model`, `slippage`, `trailing_history`, `market_context`).
+        * Verified State: 448 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
+      - V2.4.4 In-Flight Position Management, Signal Conductor & Exit Execution: NEXT STEP ⏳
       - V2.4.4 In-Flight Position Management, Signal Conductor & Exit Execution:
         * 5M candle completion conductor evaluating active strategies (FCHB).
         * Live tick / 1M candle exit conductor dispatching to `PositionManagerService` and `StrategyPositionHandler`.

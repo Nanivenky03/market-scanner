@@ -75,6 +75,21 @@ public class PositionManagerService {
         }
     }
 
+    /**
+     * Deregisters and removes an open position from RAM once closed by OrderExecutionService.
+     */
+    public void deregisterPosition(PortfolioMode mode, String symbol) {
+        if (symbol == null) return;
+        synchronized (getSymbolLock(symbol)) {
+            Map<String, PositionSnapshot> map = activePositions.get(mode);
+            if (map != null) {
+                map.remove(symbol);
+            }
+            lastConfirmedLtp.remove(symbol);
+            pendingExitCandidatePrice.remove(symbol);
+        }
+    }
+
     public Map<String, PositionSnapshot> getActivePositions(PortfolioMode mode) {
         Map<String, PositionSnapshot> map = activePositions.get(mode);
         return map != null ? Collections.unmodifiableMap(map) : Collections.emptyMap();

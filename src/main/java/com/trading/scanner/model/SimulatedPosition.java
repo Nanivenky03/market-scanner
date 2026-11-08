@@ -66,6 +66,55 @@ public class SimulatedPosition {
     @Column(name = "pnl_percent")
     private Double pnlPercent;
 
+    @Column(name = "gross_pnl")
+    private Double grossPnl;
+
+    @Column(name = "statutory_charges")
+    private Double statutoryCharges;
+
+    @Column(name = "net_pnl")
+    private Double netPnl;
+
+    @Column(name = "peak_price")
+    private Double peakPrice;
+
+    @Column(name = "mfe_price")
+    private Double mfePrice;
+
+    @Column(name = "mfe_r")
+    private Double mfeR;
+
+    @Column(name = "mfe_percent")
+    private Double mfePercent;
+
+    @Column(name = "mae_price")
+    private Double maePrice;
+
+    @Column(name = "mae_r")
+    private Double maeR;
+
+    @Column(name = "mae_percent")
+    private Double maePercent;
+
+    @Column(name = "resting_sl_order_id")
+    private String restingSlOrderId;
+
+    @Column(name = "broker_model")
+    @Builder.Default
+    private String brokerModel = "KOTAK_NEO";
+
+    @Column(name = "exit_trigger_price")
+    private Double exitTriggerPrice;
+
+    @Column(name = "slippage")
+    private Double slippage;
+
+    @Column(name = "trailing_history", columnDefinition = "TEXT")
+    private String trailingHistory;
+
+    @Column(name = "market_context", columnDefinition = "TEXT")
+    private String marketContext;
+
     @Column(name = "position_status", nullable = false)
     private String positionStatus;
 

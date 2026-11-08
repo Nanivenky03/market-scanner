@@ -12,6 +12,8 @@ public interface SimulatedOrderRepository extends JpaRepository<SimulatedOrder, 
 
     Optional<SimulatedOrder> findByUniqueOrderId(String uniqueOrderId);
 
+    Optional<SimulatedOrder> findByBrokerOrderId(String brokerOrderId);
+
     List<SimulatedOrder> findByOrderStatus(String orderStatus);
 
     List<SimulatedOrder> findBySymbolAndPlacedAtStartingWith(String symbol, String datePrefix);

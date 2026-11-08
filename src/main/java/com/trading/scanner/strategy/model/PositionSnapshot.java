@@ -20,10 +20,31 @@ public record PositionSnapshot(
         Double firstCandleHigh,
         boolean target1Booked,
         Double peakPrice,
-        LocalDateTime entryTime
+        LocalDateTime entryTime,
+        String restingSlOrderId
 ) {
+    public PositionSnapshot(
+            Integer positionId,
+            Integer strategyId,
+            String symbol,
+            String exchange,
+            String positionSide,
+            Integer initialQuantity,
+            Integer currentQuantity,
+            Double entryPrice,
+            Double currentStopLoss,
+            Double target1Price,
+            Double firstCandleHigh,
+            boolean target1Booked,
+            Double peakPrice,
+            LocalDateTime entryTime
+    ) {
+        this(positionId, strategyId, symbol, exchange, positionSide, initialQuantity, currentQuantity,
+                entryPrice, currentStopLoss, target1Price, firstCandleHigh, target1Booked, peakPrice, entryTime, null);
+    }
+
     /**
-     * Backwards-compatible constructor defaulting peakPrice to entryPrice.
+     * Backwards-compatible constructor defaulting peakPrice to entryPrice and restingSlOrderId to null.
      */
     public PositionSnapshot(
             Integer positionId,
@@ -41,6 +62,6 @@ public record PositionSnapshot(
             LocalDateTime entryTime
     ) {
         this(positionId, strategyId, symbol, exchange, positionSide, initialQuantity, currentQuantity,
-                entryPrice, currentStopLoss, target1Price, firstCandleHigh, target1Booked, entryPrice, entryTime);
+                entryPrice, currentStopLoss, target1Price, firstCandleHigh, target1Booked, entryPrice, entryTime, null);
     }
 }

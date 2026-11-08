@@ -78,6 +78,15 @@ public class Order {
     @Column(name = "filled_quantity")
     private Integer filledQuantity;
 
+    @Column(name = "trigger_tick_price")
+    private Double triggerTickPrice;
+
+    @Column(name = "statutory_charges")
+    private Double statutoryCharges;
+
+    @Column(name = "execution_latency_ms")
+    private Integer executionLatencyMs;
+
     @Column(name = "order_status", nullable = false)
     private String orderStatus;
 

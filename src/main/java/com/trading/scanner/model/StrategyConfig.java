@@ -30,6 +30,26 @@ public class StrategyConfig {
     @Column(name = "priority", nullable = false)
     private Integer priority;
 
+    @Column(name = "execution_mode", nullable = false)
+    @Builder.Default
+    private String executionMode = "PAPER";
+
+    @Column(name = "allocated_capital", nullable = false)
+    @Builder.Default
+    private Double allocatedCapital = 50000.0;
+
+    @Column(name = "risk_per_trade_inr", nullable = false)
+    @Builder.Default
+    private Double riskPerTradeInr = 1000.0;
+
+    @Column(name = "max_daily_trades", nullable = false)
+    @Builder.Default
+    private Integer maxDailyTrades = 5;
+
+    @Column(name = "max_daily_losses", nullable = false)
+    @Builder.Default
+    private Integer maxDailyLosses = 3;
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
