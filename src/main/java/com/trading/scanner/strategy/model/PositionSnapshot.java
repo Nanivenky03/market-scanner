@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 
 /**
  * Immutable snapshot of an open trading position for evaluation by strategy position handlers.
+ * Includes peakPrice (high-water mark for LONG, trough for SHORT) for continuous dynamic trailing stops.
  */
 public record PositionSnapshot(
         Integer positionId,
@@ -18,5 +19,28 @@ public record PositionSnapshot(
         Double target1Price,
         Double firstCandleHigh,
         boolean target1Booked,
+        Double peakPrice,
         LocalDateTime entryTime
-) {}
+) {
+    /**
+     * Backwards-compatible constructor defaulting peakPrice to entryPrice.
+     */
+    public PositionSnapshot(
+            Integer positionId,
+            Integer strategyId,
+            String symbol,
+            String exchange,
+            String positionSide,
+            Integer initialQuantity,
+            Integer currentQuantity,
+            Double entryPrice,
+            Double currentStopLoss,
+            Double target1Price,
+            Double firstCandleHigh,
+            boolean target1Booked,
+            LocalDateTime entryTime
+    ) {
+        this(positionId, strategyId, symbol, exchange, positionSide, initialQuantity, currentQuantity,
+                entryPrice, currentStopLoss, target1Price, firstCandleHigh, target1Booked, entryPrice, entryTime);
+    }
+}

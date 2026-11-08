@@ -125,8 +125,8 @@ public class OrderExecutionGateway {
                     : Math.max(0.01, fillPrice - stopLoss);
 
             double rawTarget1 = isShort
-                    ? fillPrice - actualRiskPerShare
-                    : fillPrice + actualRiskPerShare;
+                    ? fillPrice - (com.trading.scanner.strategy.fchb.FchbStrategy.TARGET_1_R_MULTIPLE * actualRiskPerShare)
+                    : fillPrice + (com.trading.scanner.strategy.fchb.FchbStrategy.TARGET_1_R_MULTIPLE * actualRiskPerShare);
             double reAnchoredTarget1 = PriceTickUtil.roundTarget(rawTarget1, isShort, 0.05);
 
             // 5. Register position into RAM and RiskEngine
@@ -143,6 +143,7 @@ public class OrderExecutionGateway {
                     reAnchoredTarget1, // Fill-anchored target
                     proposal.structuralInvalidationLevel(),
                     false,
+                    fillPrice,
                     LocalDateTime.now()
             );
 

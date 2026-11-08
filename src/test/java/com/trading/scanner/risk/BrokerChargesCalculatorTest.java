@@ -84,4 +84,40 @@ class BrokerChargesCalculatorTest {
         assertThat(exitCharges).isGreaterThan(0.0);
         assertThat(exitCharges).isEqualTo(BrokerChargesCalculator.calculateSellLegCharges(10000.0));
     }
+
+    @Test
+    @DisplayName("Kotak Neo charges have Rs. 0 brokerage with only statutory turnover taxes")
+    void testKotakNeoChargesStructure() {
+        BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
+        try {
+            double turnover = 20000.0;
+            // Brokerage is 0.0
+            assertThat(BrokerChargesCalculator.calculateBrokerage(turnover)).isEqualTo(0.0);
+
+            // Buy leg: Stamp duty (0.60) + Exchange fee (0.614) + SEBI fee (0.02) + GST on fees (0.11412) = 1.34812
+            double buyCharges = BrokerChargesCalculator.calculateBuyLegCharges(turnover);
+            assertThat(buyCharges).isCloseTo(1.34812, within(0.001));
+
+            // Sell leg: STT (5.0) + Exchange fee (0.614) + SEBI fee (0.02) + GST on fees (0.11412) = 5.74812
+            double sellCharges = BrokerChargesCalculator.calculateSellLegCharges(turnover);
+            assertThat(sellCharges).isCloseTo(5.74812, within(0.001));
+
+            // Round trip charges: 1.34812 + 5.74812 = 7.09624 (vs ~Rs. 54.30 on Angel One!)
+            double roundTrip = BrokerChargesCalculator.calculateRoundTripCharges(turnover, turnover);
+            assertThat(roundTrip).isCloseTo(7.09624, within(0.001));
+
+            // 3-Leg estimated friction for tradeValue = 22200
+            // Brokerage = 0.0
+            // Stamp duty = 0.666
+            // STT = 5.55
+            // Exchange fee = 1.36308
+            // SEBI fee = 0.0444
+            // GST = (1.36308 + 0.0444) * 0.18 = 0.2533464
+            // Total = 0.666 + 5.55 + 1.36308 + 0.0444 + 0.2533464 = 7.8768264 (vs Rs. 78.68 on Angel One!)
+            double friction = BrokerChargesCalculator.calculate3LegEstimatedFriction(22200.0);
+            assertThat(friction).isCloseTo(7.8768, within(0.01));
+        } finally {
+            BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.ANGEL_ONE);
+        }
+    }
 }

@@ -24,8 +24,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 public class RiskEngine {
 
-    public static final int MAX_CONCURRENT_POSITIONS = 3;
-    public static final int MAX_DAILY_TRADES = 5;
+    public static final int MAX_DAILY_TRADES_PER_STRATEGY = 5;
+    public static final int MAX_DAILY_LOSSES_PER_STRATEGY = 3;
     public static final double DAILY_LOSS_LIMIT_PCT = 4.0;
     public static final double MAX_PORTFOLIO_OPEN_RISK_PCT = 3.2;
     public static final double RISK_PER_TRADE_FRACTION = 0.015; // 1.5% of capital (1R)
@@ -79,32 +79,25 @@ public class RiskEngine {
             return RiskEvaluationResult.rejected("SYMBOL_ALREADY_TRADED_TODAY", proposal);
         }
 
-        // Gate 2: Daily Trade Cap (Max 5) & Quality Gate for Trades 4-5
-        int tradeCount = portfolio.getDailyTradeCount();
-        if (tradeCount >= MAX_DAILY_TRADES) {
-            return RiskEvaluationResult.rejected("MAX_DAILY_TRADES_REACHED", proposal);
-        }
-        if (tradeCount >= 3) {
-            Object yellowCountObj = proposal.ruleContext() != null ? proposal.ruleContext().get("yellowCount") : null;
-            long yellowCount = 0;
-            if (yellowCountObj instanceof Number num) {
-                yellowCount = num.longValue();
+        // Gate 2: Strategy-Level Daily Limits (Max 5 trades, Max 3 losses cooling off)
+        Integer strategyId = proposal.strategyId();
+        if (strategyId != null) {
+            if (portfolio.getTradeCountForStrategy(strategyId) >= MAX_DAILY_TRADES_PER_STRATEGY) {
+                return RiskEvaluationResult.rejected("STRATEGY_MAX_DAILY_TRADES_EXCEEDED", proposal);
             }
-            if (yellowCount > 0) {
-                return RiskEvaluationResult.rejected("TRADE_4_OR_5_REQUIRES_ALL_GREEN", proposal);
+            if (portfolio.getLossCountForStrategy(strategyId) >= MAX_DAILY_LOSSES_PER_STRATEGY) {
+                return RiskEvaluationResult.rejected("STRATEGY_COOLING_OFF_MAX_LOSSES_REACHED", proposal);
             }
         }
 
-        // Gate 3: Concurrent Open Positions Cap (Max 3)
-        if (portfolio.getOpenPositions().size() >= MAX_CONCURRENT_POSITIONS) {
-            return RiskEvaluationResult.rejected("MAX_CONCURRENT_POSITIONS_REACHED", proposal);
-        }
-
-        // Gate 4: Existing Account Circuit Breaker
-        double maxLossLimitRupees = portfolio.getInitialCapital() * (DAILY_LOSS_LIMIT_PCT / 100.0);
+        // Gate 3: Existing Account Circuit Breaker
+        double currentCapital = portfolio.getCurrentCapital();
+        double maxLossLimitRupees = currentCapital * (DAILY_LOSS_LIMIT_PCT / 100.0);
         double currentOpenRisk = portfolio.calculateTotalOpenDownsideRisk();
+        double openExitFriction = portfolio.calculateTotalReservedExitFriction();
         double netRealizedPnl = portfolio.getNetRealizedPnl();
-        if (netRealizedPnl - currentOpenRisk <= -maxLossLimitRupees) {
+        double realizedLoss = netRealizedPnl < 0.0 ? Math.abs(netRealizedPnl) : 0.0;
+        if (realizedLoss + currentOpenRisk + openExitFriction >= maxLossLimitRupees) {
             return RiskEvaluationResult.rejected("DAILY_LOSS_KILL_SWITCH_TRIGGERED", proposal);
         }
 
@@ -172,27 +165,24 @@ public class RiskEngine {
         // PHASE 4: FRICTION VIABILITY FILTER
         // ==========================================
 
-        // Viability Rule: Expected 1R Gross Profit >= 3 * Estimated Friction
-        if (actualRiskRupees < (3.0 * estimatedFriction)) {
+        // Viability Rule: Setup viability against strategy's 1R target (not temporarily downsized rupee risk)
+        if (targetRiskRupees < (3.0 * estimatedFriction)) {
+            return RiskEvaluationResult.rejected("EXCESSIVE_FRICTION_DRAG", proposal);
+        }
+
+        // Downsized execution viability: actual gross risk/gain must exceed actual round-trip charges
+        if (actualRiskRupees <= estimatedFriction) {
             return RiskEvaluationResult.rejected("EXCESSIVE_FRICTION_DRAG", proposal);
         }
 
         // ==========================================
-        // PHASE 5: MASTER PORTFOLIO RISK & LOSS PROTECTION
+        // PHASE 5: DYNAMIC RUPEE RISK SHIELD
         // ==========================================
 
-        // Gate 8: Total Current Portfolio Open Downside Risk (< 3.2% of Initial Capital)
-        double potentialTotalRisk = currentOpenRisk + actualRiskRupees;
-        double maxAllowedOpenRiskRupees = portfolio.getInitialCapital() * (MAX_PORTFOLIO_OPEN_RISK_PCT / 100.0);
-        if (potentialTotalRisk > maxAllowedOpenRiskRupees) {
-            return RiskEvaluationResult.rejected("PORTFOLIO_OPEN_RISK_CAP_EXCEEDED", proposal);
-        }
-
-        // Gate 9: The Ultimate Forward-Looking Daily Loss Kill Switch
-        // Net Realized PnL - Open Downside Risk - Open Exit Friction - Candidate Trade Risk - Candidate Friction
-        double openExitFriction = portfolio.calculateTotalReservedExitFriction();
-        double projectedWorstCaseLoss = netRealizedPnl - currentOpenRisk - openExitFriction - actualRiskRupees - estimatedFriction;
-        if (projectedWorstCaseLoss <= -maxLossLimitRupees) {
+        // Total Downside Exposure: Negative Realized P&L + Open Positions Downside Risk (from active order SL)
+        // + Open Exit Friction + Candidate Trade Risk + Candidate Friction <= 4.0% of Current Capital
+        double totalDownsideExposure = realizedLoss + currentOpenRisk + openExitFriction + actualRiskRupees + estimatedFriction;
+        if (totalDownsideExposure > maxLossLimitRupees) {
             return RiskEvaluationResult.rejected("DAILY_LOSS_KILL_SWITCH_TRIGGERED", proposal);
         }
 

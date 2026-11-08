@@ -137,4 +137,39 @@ class AngelOneWebSocketServiceTest {
         org.junit.jupiter.api.Assertions.assertNull(status.lastMessageReceivedAt());
         org.junit.jupiter.api.Assertions.assertEquals(LocalDateTime.of(2026, 10, 8, 16, 0), status.lastDisconnectedAt());
     }
+    @Test
+    void onText_withPong_shouldNotCallTickParser_andUpdateRequest() {
+        java.net.http.WebSocket mockWs = mock(java.net.http.WebSocket.class);
+        when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 11, 2, 10, 0));
+
+        AngelOneWebSocketService.SocketListener listener = angelOneWebSocketService.createSocketListener();
+        listener.onText(mockWs, "pong", true);
+
+        verify(mockWs, times(1)).request(1);
+        verify(angelOneTickParserService, never()).tryParseText(any());
+        assertEquals(LocalDateTime.of(2026, 11, 2, 10, 0), angelOneWebSocketService.status().lastMessageReceivedAt());
+    }
+
+    @Test
+    void sendHeartbeatPing_whenConnected_shouldSendPingTextFrame() {
+        java.net.http.WebSocket mockWs = mock(java.net.http.WebSocket.class);
+        when(mockWs.sendText("ping", true)).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(mockWs));
+
+        angelOneWebSocketService.setWebSocketForTesting(mockWs, true);
+
+        angelOneWebSocketService.sendHeartbeatPing();
+
+        verify(mockWs, times(1)).sendText("ping", true);
+    }
+
+    @Test
+    void heartbeatLifecycle_startAndStop_shouldManageScheduler() {
+        org.junit.jupiter.api.Assertions.assertFalse(angelOneWebSocketService.isHeartbeatActive());
+
+        angelOneWebSocketService.startHeartbeat();
+        org.junit.jupiter.api.Assertions.assertTrue(angelOneWebSocketService.isHeartbeatActive());
+
+        angelOneWebSocketService.stopHeartbeat();
+        org.junit.jupiter.api.Assertions.assertFalse(angelOneWebSocketService.isHeartbeatActive());
+    }
 }

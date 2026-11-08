@@ -44,7 +44,7 @@ class FchbPositionHandlerTest {
                 100,
                 100.0, // entryPrice
                 98.0,  // currentStopLoss
-                102.0, // target1Price (+1R = 100 + (100 - 98) = 102)
+                com.trading.scanner.util.PriceTickUtil.roundTarget(100.0 + (FchbStrategy.TARGET_1_R_MULTIPLE * (100.0 - 98.0)), false, 0.05), // target1Price (+0.73R = 101.45)
                 99.5,  // firstCandleHigh
                 false, // target1Booked
                 LocalDateTime.of(2026, 10, 9, 9, 35)
@@ -107,12 +107,75 @@ class FchbPositionHandlerTest {
     @DisplayName("GIVEN 1M candle close < FCH AND LTP > stopLoss WHEN evaluate THEN holds position (retest allowed)")
     void testBreakoutRetestHoldingWhenAboveStopLoss() {
         PositionSnapshot position = createDefaultPosition(); // FCH = 99.5, stop = 98.0
-        LocalTime time = LocalTime.of(9, 45, 0);
+        LocalTime time = LocalTime.of(9, 44, 0); // 1M intermediate candle (not 5M close boundary)
         MarketCandle broken1m = createCandle(99.6, 99.8, 99.1, 99.2); // close 99.2 < FCH 99.5, LTP 99.2 > SL 98.0
 
         PositionAction action = handler.evaluatePosition(position, 99.2, broken1m, 1.0, time, Collections.emptyMap());
 
         assertThat(action.type()).isEqualTo(PositionAction.ActionType.HOLD);
+    }
+
+    @Test
+    @DisplayName("GIVEN 5M candle close < FCH AND drawdown >= 0.50R WHEN evaluate THEN returns FULL_EXIT FAILED_BREAKOUT_EXIT")
+    void testFailedBreakout5mCloseExit() {
+        PositionSnapshot position = createDefaultPosition(); // FCH = 99.5, entry = 100.0, target1 = 101.45
+        LocalTime time = LocalTime.of(9, 45, 0); // 5M close boundary
+        MarketCandle broken5m = createCandle(99.6, 99.8, 98.7, 98.8); // close 98.8 < FCH 99.5 AND <= entry - 0.50R (99.0)
+
+        PositionAction action = handler.evaluatePosition(position, 98.8, broken5m, 1.0, time, Collections.emptyMap());
+
+        assertThat(action.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
+        assertThat(action.reason()).isEqualTo("FAILED_BREAKOUT_EXIT");
+    }
+
+    @Test
+    @DisplayName("GIVEN 5M candle close < stock VWAP AND drawdown >= 0.50R WHEN evaluate THEN returns FULL_EXIT VWAP_BREAKDOWN_EXIT")
+    void testVwapBreakdown5mCloseExit() {
+        // FCH = 98.0 (price is still above FCH, so failed breakout does not trigger), entry = 100.0, SL = 98.0
+        PositionSnapshot position = new PositionSnapshot(
+                1, 2, "RELIANCE", "NSE", "LONG", 100, 100,
+                100.0, 98.0, 101.45, 98.0, false, LocalDateTime.of(2026, 10, 9, 9, 35)
+        );
+        LocalTime time = LocalTime.of(9, 50, 0); // 5M close boundary
+        MarketCandle vwapBroken5m = MarketCandle.builder()
+                .candleTime(LocalDateTime.of(2026, 10, 28, 9, 50, 0))
+                .openPrice(100.2).highPrice(100.5).lowPrice(98.8).closePrice(98.9) // close 98.9 <= entry - 0.50R (99.0) and > FCH 98.0
+                .vwap(100.1) // close 98.9 < vwap 100.1
+                .build();
+
+        PositionAction action = handler.evaluatePosition(position, 98.9, vwapBroken5m, 1.0, time, Collections.emptyMap());
+
+        assertThat(action.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
+        assertThat(action.reason()).isEqualTo("VWAP_BREAKDOWN_EXIT");
+    }
+
+    @Test
+    @DisplayName("GIVEN trade duration >= 45 minutes AND underwater WHEN evaluate THEN holds position (no elapsed minute dump)")
+    void testNoElapsedMinuteStagnationUnderwaterDump() {
+        // Entered at 09:35, evaluating at 10:20 (45 min duration), price is 99.4 > SL 98.0
+        PositionSnapshot position = createDefaultPosition(); // entry = 100.0, stop = 98.0
+        LocalTime time = LocalTime.of(10, 20, 0);
+        MarketCandle candle = createCandle(99.8, 100.0, 99.3, 99.4);
+
+        PositionAction action = handler.evaluatePosition(position, 99.4, candle, 1.0, time, Collections.emptyMap());
+
+        assertThat(action.type()).isEqualTo(PositionAction.ActionType.HOLD);
+    }
+
+    @Test
+    @DisplayName("GIVEN time == 11:30 AM AND in profit WHEN evaluate THEN does not force breakeven stop ratchet")
+    void testNoElapsedMinuteBreakevenRatchet() {
+        PositionSnapshot position = createDefaultPosition(); // entry = 100.0, stop = 98.0
+        LocalTime time = LocalTime.of(11, 30, 0);
+        MarketCandle candle = createCandle(100.1, 100.6, 100.1, 100.4);
+
+        PositionAction action = handler.evaluatePosition(position, 100.4, candle, 1.0, time, Collections.emptyMap());
+
+        // Should NOT force stop to breakeven (100.0) with STAGNATION_BREAKEVEN_LOCK
+        assertThat(action.reason()).isNotEqualTo("STAGNATION_BREAKEVEN_LOCK");
+        if (action.type() == PositionAction.ActionType.UPDATE_STOP) {
+            assertThat(action.newStopLoss()).isLessThan(position.entryPrice());
+        }
     }
 
     @Test
@@ -131,62 +194,47 @@ class FchbPositionHandlerTest {
     }
 
     @Test
-    @DisplayName("GIVEN LTP >= entry + 0.8R AND stop < entry WHEN evaluate THEN returns UPDATE_STOP to entryPrice")
-    void testBreakevenRatchetTriggered() {
-        PositionSnapshot position = createDefaultPosition(); // entry 100, target 102 -> 1R = 2.0 -> 0.8R = 1.6 -> trigger = 101.6
-        LocalTime time = LocalTime.of(10, 0, 0);
-        MarketCandle candle1m = createCandle(101.2, 101.8, 101.1, 101.7); // close > FCH
+    @DisplayName("GIVEN target 1 not booked AND peak advances WHEN evaluate THEN pre-T1 dynamic trail ratchets stop reducing risk")
+    void testPreTarget1DynamicTrailReducesRisk() {
+        PositionSnapshot position = createDefaultPosition(); // entry = 100.0, stop = 98.0, 1R = 2.0
+        LocalTime time = LocalTime.of(9, 45, 0);
+        MarketCandle candle1m = createCandle(100.5, 101.0, 100.4, 100.9); // peak = 101.0 (+0.50R)
 
-        PositionAction action = handler.evaluatePosition(position, 101.65, candle1m, 1.0, time, Collections.emptyMap());
-
-        assertThat(action.type()).isEqualTo(PositionAction.ActionType.UPDATE_STOP);
-        assertThat(action.newStopLoss()).isEqualTo(100.0);
-        assertThat(action.reason()).isEqualTo("BREAKEVEN_0_8R_TRIGGERED");
-    }
-
-    @Test
-    @DisplayName("GIVEN stop already >= entry WHEN evaluate breakeven condition THEN holds")
-    void testBreakevenNotTriggeredIfStopAlreadyAtOrAboveEntry() {
-        PositionSnapshot position = new PositionSnapshot(
-                1, 2, "RELIANCE", "NSE", "LONG", 100, 100,
-                100.0, 100.0, 102.0, 99.5, false, LocalDateTime.of(2026, 10, 9, 9, 35)
-        );
-        LocalTime time = LocalTime.of(10, 0, 0);
-        MarketCandle candle1m = createCandle(101.2, 101.8, 101.1, 101.7);
-
-        PositionAction action = handler.evaluatePosition(position, 101.65, candle1m, 1.0, time, Collections.emptyMap());
-
-        assertThat(action.type()).isEqualTo(PositionAction.ActionType.HOLD);
-    }
-
-    @Test
-    @DisplayName("GIVEN target 1 booked AND candidate ATR stop > currentStopLoss WHEN evaluate THEN ratchets stop")
-    void testAtrTrailingStopRatchetUp() {
-        PositionSnapshot position = new PositionSnapshot(
-                1, 2, "RELIANCE", "NSE", "LONG", 100, 50,
-                100.0, 100.0, 102.0, 99.5, true, LocalDateTime.of(2026, 10, 9, 9, 35)
-        );
-        LocalTime time = LocalTime.of(10, 30, 0);
-        // candle low = 102.5, 5m ATR = 1.0 -> candidate stop = 102.5 - (0.5 * 1.0) = 102.0 > current SL 100.0
-        MarketCandle candle1m = createCandle(102.6, 103.0, 102.5, 102.8);
-
-        PositionAction action = handler.evaluatePosition(position, 102.8, candle1m, 1.0, time, Collections.emptyMap());
+        PositionAction action = handler.evaluatePosition(position, 100.9, candle1m, 1.0, time, Collections.emptyMap());
 
         assertThat(action.type()).isEqualTo(PositionAction.ActionType.UPDATE_STOP);
-        assertThat(action.newStopLoss()).isEqualTo(102.0);
-        assertThat(action.reason()).isEqualTo("ATR_TRAILING_STOP_RATCHET");
+        // peak 101.0 - 1.0R (with ceiled T1 risk ~2.05) -> floored stop = 98.90
+        assertThat(action.newStopLoss()).isEqualTo(98.90);
+        assertThat(action.reason()).isEqualTo("DYNAMIC_TRAILING_STOP_RATCHET");
     }
 
     @Test
-    @DisplayName("GIVEN target 1 booked AND candidate ATR stop <= currentStopLoss WHEN evaluate THEN holds (never lowers stop)")
-    void testAtrTrailingStopNeverLowersStop() {
+    @DisplayName("GIVEN target 1 booked AND peak advances WHEN evaluate THEN runner dynamic trail ratchets stop")
+    void testRunnerDynamicTrailRatchet() {
         PositionSnapshot position = new PositionSnapshot(
                 1, 2, "RELIANCE", "NSE", "LONG", 100, 50,
-                100.0, 102.2, 102.0, 99.5, true, LocalDateTime.of(2026, 10, 9, 9, 35)
+                100.0, 100.0, 101.46, 99.5, true, LocalDateTime.of(2026, 10, 9, 9, 35)
+        );
+        LocalTime time = LocalTime.of(10, 0, 0);
+        MarketCandle candle1m = createCandle(102.5, 103.0, 102.4, 102.8); // peak = 103.0
+
+        PositionAction action = handler.evaluatePosition(position, 102.8, candle1m, 2.0, time, Collections.emptyMap());
+
+        assertThat(action.type()).isEqualTo(PositionAction.ActionType.UPDATE_STOP);
+        // peak 103.0 - (0.73 * 2.0) = 101.54 -> rounded stop = 101.50
+        assertThat(action.newStopLoss()).isEqualTo(101.50);
+        assertThat(action.reason()).isEqualTo("RUNNER_PROFIT_LOCK_RATCHET");
+    }
+
+    @Test
+    @DisplayName("GIVEN target 1 booked AND candidate stop <= currentStopLoss WHEN evaluate THEN holds (never lowers stop)")
+    void testRunnerDynamicTrailNeverLowersStop() {
+        PositionSnapshot position = new PositionSnapshot(
+                1, 2, "RELIANCE", "NSE", "LONG", 100, 50,
+                100.0, 102.0, 101.46, 99.5, true, LocalDateTime.of(2026, 10, 9, 9, 35)
         );
         LocalTime time = LocalTime.of(10, 30, 0);
-        // candle low = 102.5, 5m ATR = 1.0 -> candidate stop = 102.5 - 0.5 = 102.0 <= current SL 102.2
-        MarketCandle candle1m = createCandle(102.6, 103.0, 102.5, 102.8);
+        MarketCandle candle1m = createCandle(102.6, 103.0, 102.5, 102.8); // peak = 103.0 -> candidate = 101.50 <= 102.0
 
         PositionAction action = handler.evaluatePosition(position, 102.8, candle1m, 1.0, time, Collections.emptyMap());
 

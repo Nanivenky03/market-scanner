@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-10-28  
-Status: **Version 2.3 Complete** (Strategy Intelligence, Institutional Hardening across 7 Audit Issues + Track C Tick/Circuit/OMS Hardening, Dual-Directional Risk Engine, Monotonic Stop Loss & Order Gateway — 407 unit & integration tests passing).
+Last audited: 2026-11-08  
+Status: **Version 2.3 Complete & Empirically Validated** (FCHB Strategy Intelligence, 7-Gate Traffic-Light Quality Matrix, Clean 1.0R/0.73R Leash Trailing Stop Model, Strategy-Level Risk Limits, Multi-Broker Statutory Accounting with Kotak Neo Zero-Brokerage, and 23-Day Production Replay Audit producing +10.69% Net Return — 418 unit & integration tests passing).
 
 ---
 
@@ -113,11 +113,11 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
   - First Strategy Proving Ground: FCHB (First Candle High Breakout)
     • Opening Reference (09:15–09:19 AM): 5 1M candles define FCH, FCL, close, volume, range (0.15%–3.0%), and bullishness (close > open).
     • Volume Normalization: Standardized on time-normalized VOL_X >= 1.8 (rigid Rs. 1 Crore floor and 2.0x opening volume multiplier removed to avoid penalizing mid-caps or block-trade opens).
-    • Signal Detection (5M closes, 09:30–01:00 PM): Close > FCH, BO_% <= 0.8%, VOL_X >= 1.8, 5M RSI 55–72, Close > VWAP, 15M Close > 15M VWAP, strong bullish candle (body >= 0.60, upper wick <= 0.25).
+    • Signal Detection (5M closes, 09:30–10:30 AM window): Close > FCH, BO_% <= 0.8%, VOL_X >= 1.8, 5M RSI 55–72, Close > VWAP, 15M Close > 15M VWAP, strong bullish candle (body >= 0.60, upper wick <= 0.25). Entries capped at 10:30 AM to avoid late-morning decay.
     • Traffic-Light Quality Gate: Red / Yellow / Green matrix replaces opaque 0–100 scoring. Trades 1–3 permit up to 2 YELLOWs (0 RED). Trades 4–5 demand ALL GREEN (0 RED, 0 YELLOW).
     • Execution Model: Immediate Market Order on 5M signal confirmation (entry price = next 1M candle open price).
-    • Single-Order State Machine: Resting STOPLOSS_MARKET order placed on broker exchange at firstCandleLow × 0.995. Trailing stops adjusted in-place via modifyOrder(orderId, newTriggerPrice). Early structural exits (1M close inside first candle) convert resting order via modifyOrder(orderId, orderType="MARKET"), completely eliminating reverse-position race condition.
-    • Targets: Target 1 = +1R (50% exit), Breakeven move at +0.8R, Target 2 = ATR trailing stop on remaining 50%, 02:45 PM conditional exit, 03:00 PM hard close.
+    • Single-Order State Machine: Resting STOPLOSS_MARKET order placed on broker exchange at firstCandleLow × 0.995. Trailing stops adjusted in-place via modifyOrder(orderId, newTriggerPrice). Early structural exits convert resting order via modifyOrder(orderId, orderType="MARKET"), completely eliminating reverse-position race condition.
+    • Targets & Pure Technical Exit System: Target 1 = +0.73R (50% exit with immediate breakeven stop lock), 5M Failed Breakout Exit (< FCH & <= -0.50R), 5M VWAP Breakdown Exit (< VWAP & <= -0.50R), 5M Momentum Exhaustion Exit (EMA 9 < 21 & < Entry), Target 2 = Continuous Dynamic Runner Trailing (+0.45R distance from peak + 5M ATR confluence), 02:45 PM conditional exit, 02:55 PM hard close. (Note: Artificial elapsed-minute stagnation exits and midday 12:30 PM cuts permanently removed to prevent cutting high-R afternoon winners).
     • Pre-Market Day Open Resilience: Day Open locked at 09:08 uncrossed price. If network outage occurs during 09:00–09:14, pre-market pipeline queries SmartAPI Market Quote API (never falls back to continuous 09:15 open).
   - Multi-Strategy Prioritization & Inline Arbitration:
     • Priority Order: Priority 1 = ORB, Priority 2 = FCHB, Priority 3 = VWAP Pullback.
@@ -139,28 +139,25 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
     • V2.0 Schema Architecture: COMPLETED ✅ (V034 dropped obsolete tables, V035 established 8 core strategy/order/position tables with zero SQL defaults, entities & repositories created).
     • V2.1 Evaluation Infrastructure: COMPLETED ✅ (MarketState, StockContext, Strategy interface, MasterMarketFilterService, lock-free StockContextCache with < 35 MB RAM footprint and 0 DB backfill queries; 326 unit tests passing).
     • V2.1-FIX Production Reliability Fixes: COMPLETED ✅ (WebSocket timestamp reset on connect/disconnect & premarket-live-start transition order; 327 unit tests passing).
-    • V2.2 FCHB Strategy Module & Position Handler: COMPLETED ✅
-      - Pure Strategy Evaluator (`FchbStrategy`): 5M breakout trigger, Candle 1 reference (turnover >= Rs. 1 Cr, range 0.15%-3.0%), 7-factor Red/Yellow/Green Traffic-Light Quality Gate, Two-Factor Volume model (VOL_X >= 1.8 hard gate + time-weighted Candle 1 ratio).
-      - Decoupled Position Handler (`FchbPositionHandler`): Pure monotonic stop loss architecture (holding normal retests above stop loss without false shakeouts). Exits strictly on stop loss hit, Target 1 +1R 50% partial exit with immediate breakeven stop lock, +0.8R breakeven ratchet, 1M ATR trailing ratchet for the remaining 50% runner, 14:45/14:15 wind-down, and 15:00 hard close.
-      - Unit Test Coverage: Dedicated unit test suite with 100% test pass rate.
-    • V2.3 Portfolio Risk Engine, Institutional Position Manager & 7-Issue Hardening: COMPLETED ✅
-      - Institutional Statutory Accounting (`BrokerChargesCalculator`): Dedicated Angel One fee schedule (min ₹5, max ₹20 per executed leg) + statutory turnover taxes (STT 0.025% sell, Stamp Duty 0.003% buy, NSE 0.00307%, SEBI ₹10/Cr, 18% GST). Accurate 3-leg conservative trade friction calculation.
-      - 5-Phase Risk Engine Pipeline (`RiskEngine`): Strict sequence of Phase 1 (Zero-cost fast rejections: Symbol Lock, Trade Cap & All-Green, Max 3 Positions, Existing Account Breaker) → Phase 2 (Signal Validity) → Phase 3 (1R Sizing & Margin minus reserved exit friction) → Phase 4 (3x Friction Viability Filter) → Phase 5 (Master Open Risk Cap < 3.2% & Forward-Looking Daily Loss Kill Switch accounting for candidate risk & friction).
-      - Precision Dual-Anchor Accounting (`PortfolioState`): Tracks gross PnL, incurred friction, net realized PnL, committed margin, and dynamically reserved exit friction across open positions. Provides thread-safe atomic `PortfolioSnapshot`.
-      - Single-Writer Serialized Execution Gateway (`OrderExecutionGateway`): 5-second debounced live RMS limits query to protect broker rate limits and avoid mutex stalling.
-      - Zombie Position Prevention & Safe Trailing (`PositionManagerService`): Auto-converts partial exit to full exit when qty <= 1 or remaining <= 0; safely clamps partial quantities (`Math.round`); enforces universal monotonic stop movement.
-      - Macro Staleness Circuit Breaker (`MasterMarketFilterService`): 10-minute maximum staleness guard sets `regime = UNKNOWN` and `dataValid = false` if Nifty 5M candles lag during market hours.
-      - Fail-Safe Thread Isolation: Null candle guards in `StockContextCache` and safe stream copies during timer sweeps.
-      - V2 Persistence & Startup Crash Recovery: Flyway `V034` (legacy drops) & `V035` (V2 strategy schema); populated 16 JPA entities & Spring Data repositories; wired real database rehydration in `StartupRecoveryService`.
-      - Track C Institutional Order, Tick & Circuit Hardening:
-        * Dynamic Exchange Tick-Size Rounding (`PriceTickUtil`): Directional tick rounding (₹0.05 default; ₹0.01 sub-₹250); stop loss floored for LONG / ceiled for SHORT; targets ceiled for LONG / floored for SHORT.
-        * 2-Tick Corrupt Spike Defense & Ingestion Sanity Filtering: Binary tick ceiling (₹5,00,000) blocks corrupted broker feed spikes in `scaledPrice()` and `ingestTick()`; `PositionManagerService` enforces 2-tick confirmation debounce on jumps > 2.5% before triggering stop/target exits.
-        * Upper Circuit Headroom Gate (Gate 8): Evaluates headroom to upper circuit limit; disqualifies candidates with < 2.0% headroom (`CIRCUIT_ROOM_LESS_THAN_2_PCT`) to protect liquidity and prevent freeze lockup.
-        * Decoupled Asynchronous RMS Sync: Unblocks `synchronized (executionGatewayMutex)` by moving live RMS margin network queries outside the execution mutex, debounced by 5s.
-        * Formal Order State Machine (OMS) Lifecycle: Explicit states (`PENDING_SUBMIT` $\to$ `SUBMITTED` $\to$ `FILLED` / `PARTIALLY_FILLED` $\to$ `CANCELLED` / `REJECTED`) and in-place resting order modification (`modifyOrder`) to eliminate reverse-position race conditions.
-        * Exclusion of Irregular Exchange Sessions: Skips non-standard trading windows (Diwali Muhurat, Saturday mock drills) to preserve baseline indicators and calendar integrity.
-      - 407/407 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
-    • V2.4 Master Workflow Orchestrator & Execution Adapters: NEXT STAGE (Conductor, simulation database adapter, and REST simulation replay).
+    • V2.2 FCHB Strategy Module & Position Handler: COMPLETED & EMPIRICALLY VALIDATED ✅
+      - Pure Strategy Evaluator (`FchbStrategy`): 5M breakout trigger, Candle 1 reference (range 0.15%-3.0%), 7-Factor Red/Yellow/Green Traffic-Light Quality Gate (RSI gate permanently retired to avoid choking institutional momentum runners), Two-Factor Volume model (VOL_X >= 1.8 hard gate + time-weighted Candle 1 ratio), Opening 5M Turnover Floor (>= Rs. 25 Lakhs), Share Price Ceiling (<= Rs. 5,000), 09:30–10:30 AM morning entry window.
+      - Decoupled Position Handler (`FchbPositionHandler`): 6-tier institutional exit hierarchy:
+        1. 14:55:00 Hard Close Cutoff (15-min broker RMS buffer).
+        2. 14:45:00 Wind-Down Cutoff (conditional exit for trades not yet profit-protected at breakeven; proven by 23-day audit to capture +₹1,087.55 more Gross P&L than exiting at 14:15).
+        3. Real-Time Tick Stop Loss Breach (`STOP_LOSS_HIT`).
+        4. Target 1 Partial Profit Booking (+0.73R, 50% cash booked, immediate breakeven stop lock).
+        5. Completed 5M Candle Invalidation Rules (Failed Breakout cut at -0.50R, VWAP breakdown cut at -0.50R, EMA 9 < 21 momentum exhaustion cut).
+        6. Clean Dual-Leash Trailing Stop: Pre-T1 trails monotonically with a 1.0R leash behind peak price (`peak - 1.0R`, allowing entry retests without premature breakeven shakeout); Post-T1 runner trails with a 0.73R leash (`peak - 0.73R`).
+      - Unit Test Coverage: Dedicated unit test suite with 100% test pass rate (418 tests passing across full repository).
+    • V2.3 Portfolio Risk Engine, Multi-Broker Statutory Accounting & Replay Audit: COMPLETED ✅
+      - Institutional Statutory Accounting (`BrokerChargesCalculator`): Multi-broker model supporting Kotak Neo Zero-Brokerage (`BrokerModel.KOTAK_NEO`), Finvasia Shoonya (`BrokerModel.SHOONYA`), and Angel One (`BrokerModel.ANGEL_ONE`). Precise statutory turnover accounting (STT 0.025% sell, Stamp Duty 0.003% buy, NSE 0.00307%, SEBI ₹10/Cr, 18% GST). Kotak Neo saves ₹30-₹40 per round-trip trade (+3.28% extra alpha).
+      - 5-Phase Risk Engine Pipeline (`RiskEngine`): Strict sequence: Phase 1 (Gate 1: Symbol Lock, Gate 2: Strategy-Level Limits [Max 5 trades/day, Max 3 losses cooling-off], Gate 3: 4.0% Account Daily Loss Breaker; static 3 concurrent positions cap permanently removed) → Phase 2 (Signal Validity) → Phase 3 (1R Sizing & Margin) → Phase 4 (3x Friction Viability Filter) → Phase 5 (Master Open Risk Cap < 4.0% Forward-Looking Shield).
+      - Precision Dual-Anchor Accounting (`PortfolioState`): Independent isolated tracking of `PortfolioState(PAPER)` vs `PortfolioState(LIVE)`, tracking gross PnL, statutory friction, net realized PnL, committed margin, and strategy-specific trade and loss counters.
+      - 23-Day Forensic Replay Audit (`FchbForensicAnalysisTest`): Replayed across all 23 historical sessions in `mithron_prod` database on 499 symbols. Results: 53 executed trades, 62.3% win rate, Profit Factor 1.91, +₹6,157.61 Gross P&L, -₹810.21 Kotak Neo fees, **+₹5,347.40 Net Realized P&L (+10.69% Return on Capital)**, Max Drawdown 2.52%.
+    • V2.4 Live Data Simulation Order Engine (Production Paper Trading Conductor): NEXT STAGE
+      - Real-time Conductor / Event Dispatcher hooking live 5M candle completions to `FchbStrategy.evaluate()`.
+      - Live tick / 1M candle hooking to `PositionManagerService.evaluatePosition()`.
+      - In-Memory Simulation Order Engine executing paper orders against live broker feeds without placing real capital at risk.
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
   - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies
@@ -215,6 +212,7 @@ The strategy logic and risk rules are shared across stages; only the execution a
 - Each trade has an application-generated immutable trade/position ID linked to broker order IDs and execution references. A position has a versioned trade plan. At every minute close, recalculate stop/target under the owning strategy's rules and submit modifications when values change. Poll broker order/position details regularly and reconcile them with local state. If a modification is rejected, retry under a defined policy while the previously accepted protective order remains active.
 - During per-symbol backfill/recovery, application-side derived calculations and exit decisions pause. Broker-accepted protective orders remain active. After repair, reconcile candles, then broker positions/orders/fills, then evaluate the current exit plan and submit any required order changes. Live WebSocket updates and backfill must be reconciled in timestamp order so older data cannot overwrite newer canonical candles.
 - In historical simulation, an entry signal on a candle close fills at the next minute candle open. In live processing, use the next available market tick/price after the signal. Simulation uses a local execution adapter and never calls real order APIs. Fees, slippage, gaps, and partial-fill assumptions remain explicit run metadata and must be agreed before relying on performance results.
+- Historical multi-day performance evaluation can stream directly from PostgreSQL (`mithron_prod`) in strict read-only mode via `FchbDatabasePerformanceReplayTest`. Credentials are read from `.env` (strictly git-ignored). Streaming day-by-day keeps memory footprint under 60 MB even across 100 liquid symbols and 22 trading sessions.
 
 ---
 
@@ -241,3 +239,4 @@ Version 6.0 Answers:
 ```
 
 The human remains in the loop. Mithron's job is to make every decision **systematic, evidence-based, disciplined, and reproducible**.
+

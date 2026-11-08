@@ -86,7 +86,7 @@ class PositionManagerServiceTest {
         positionManager.registerPosition(PortfolioMode.PAPER, position);
 
         // 1M candle closes at 801.0 (< FCH 802.0) while LTP is above stop (801.0 > 795.0)
-        MarketCandle candle1m = create1mCandle(LocalDateTime.of(2026, 10, 11, 9, 36), 805.0, 806.0, 800.5, 801.0);
+        MarketCandle candle1m = create1mCandle(LocalDateTime.of(2026, 10, 11, 9, 36), 805.0, 805.0, 800.5, 801.0);
         PositionAction action = positionManager.processMinuteCandleClose(
                 PortfolioMode.PAPER, "SBIN", candle1m, 3.5, LocalTime.of(9, 36));
 
@@ -122,11 +122,11 @@ class PositionManagerServiceTest {
                 PortfolioMode.PAPER, "RELIANCE", nextCandle, 10.0, LocalTime.of(9, 48));
 
         assertThat(candleAction.type()).isEqualTo(PositionAction.ActionType.UPDATE_STOP);
-        assertThat(candleAction.reason()).isEqualTo("ATR_TRAILING_STOP_RATCHET");
-        assertThat(candleAction.newStopLoss()).isEqualTo(2525.0);
+        assertThat(candleAction.reason()).isEqualTo("RUNNER_PROFIT_LOCK_RATCHET");
+        assertThat(candleAction.newStopLoss()).isEqualTo(2515.0);
 
         PositionSnapshot ratchetedSnapshot = positionManager.getPosition(PortfolioMode.PAPER, "RELIANCE");
-        assertThat(ratchetedSnapshot.currentStopLoss()).isEqualTo(2525.0);
+        assertThat(ratchetedSnapshot.currentStopLoss()).isEqualTo(2515.0);
     }
 
     @Test
@@ -183,7 +183,7 @@ class PositionManagerServiceTest {
         assertThat(reconciled.currentStopLoss()).isEqualTo(95.0);
         // Actual risk per share = 100.50 - 95.0 = 5.50
         // Target 1 re-anchored to fill price + actual risk = 100.50 + 5.50 = 106.00!
-        assertThat(reconciled.target1Price()).isEqualTo(106.00);
+        assertThat(reconciled.target1Price()).isEqualTo(104.55);
     }
 
     @Test

@@ -113,6 +113,29 @@ public class PositionManagerService {
                 return PositionAction.hold();
             }
 
+            boolean isShort = isShortSide(position.positionSide());
+            double currentPeak = position.peakPrice() != null ? position.peakPrice() : position.entryPrice();
+            double newPeak = isShort ? Math.min(currentPeak, ltp) : Math.max(currentPeak, ltp);
+            if (Double.compare(newPeak, currentPeak) != 0) {
+                position = new PositionSnapshot(
+                        position.positionId(),
+                        position.strategyId(),
+                        position.symbol(),
+                        position.exchange(),
+                        position.positionSide(),
+                        position.initialQuantity(),
+                        position.currentQuantity(),
+                        position.entryPrice(),
+                        position.currentStopLoss(),
+                        position.target1Price(),
+                        position.firstCandleHigh(),
+                        position.target1Booked(),
+                        newPeak,
+                        position.entryTime()
+                );
+                activePositions.get(mode).put(symbol, position);
+            }
+
             PositionAction action = handler.evaluatePosition(position, ltp, null, null, currentTime,
                     Collections.emptyMap());
 
@@ -175,6 +198,32 @@ public class PositionManagerService {
             double closePrice = candle1m.getClosePrice() != null ? candle1m.getClosePrice() : 0.0;
             if (closePrice <= 0.0 || closePrice > 500_000.0) {
                 return PositionAction.hold();
+            }
+
+            boolean isShort = isShortSide(position.positionSide());
+            double barExtreme = isShort
+                    ? (candle1m.getLowPrice() != null ? candle1m.getLowPrice() : closePrice)
+                    : (candle1m.getHighPrice() != null ? candle1m.getHighPrice() : closePrice);
+            double currentPeak = position.peakPrice() != null ? position.peakPrice() : position.entryPrice();
+            double newPeak = isShort ? Math.min(currentPeak, barExtreme) : Math.max(currentPeak, barExtreme);
+            if (Double.compare(newPeak, currentPeak) != 0) {
+                position = new PositionSnapshot(
+                        position.positionId(),
+                        position.strategyId(),
+                        position.symbol(),
+                        position.exchange(),
+                        position.positionSide(),
+                        position.initialQuantity(),
+                        position.currentQuantity(),
+                        position.entryPrice(),
+                        position.currentStopLoss(),
+                        position.target1Price(),
+                        position.firstCandleHigh(),
+                        position.target1Booked(),
+                        newPeak,
+                        position.entryTime()
+                );
+                activePositions.get(mode).put(symbol, position);
             }
 
             PositionAction action = handler.evaluatePosition(position, closePrice, candle1m, atr5m, currentTime,
@@ -270,6 +319,7 @@ public class PositionManagerService {
                         position.target1Price(),
                         position.firstCandleHigh(),
                         true,
+                        position.peakPrice(),
                         position.entryTime());
                 activePositions.get(mode).put(symbol, updated);
                 riskEngine.updatePosition(mode, updated);
@@ -297,6 +347,7 @@ public class PositionManagerService {
                                 position.target1Price(),
                                 position.firstCandleHigh(),
                                 position.target1Booked(),
+                                position.peakPrice(),
                                 position.entryTime());
                         activePositions.get(mode).put(symbol, updated);
                         riskEngine.updatePosition(mode, updated);
@@ -348,8 +399,8 @@ public class PositionManagerService {
                     : Math.max(0.01, executedPrice - structuralStop);
 
             double rawTarget1 = isShort
-                    ? executedPrice - actualRiskPerShare
-                    : executedPrice + actualRiskPerShare;
+                    ? executedPrice - (com.trading.scanner.strategy.fchb.FchbStrategy.TARGET_1_R_MULTIPLE * actualRiskPerShare)
+                    : executedPrice + (com.trading.scanner.strategy.fchb.FchbStrategy.TARGET_1_R_MULTIPLE * actualRiskPerShare);
             double reAnchoredTarget1 = PriceTickUtil.roundTarget(rawTarget1, isShort, 0.05);
 
             PositionSnapshot reAnchored = new PositionSnapshot(
@@ -365,6 +416,7 @@ public class PositionManagerService {
                     reAnchoredTarget1,
                     position.firstCandleHigh(),
                     position.target1Booked(),
+                    executedPrice,
                     position.entryTime()
             );
             activePositions.computeIfAbsent(mode, m -> new ConcurrentHashMap<>()).put(symbol, reAnchored);

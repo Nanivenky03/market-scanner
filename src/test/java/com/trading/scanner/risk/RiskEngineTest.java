@@ -48,17 +48,18 @@ class RiskEngineTest {
     }
 
     @Test
-    @DisplayName("Gate 1: Rejects when 3 concurrent open positions already exist")
+    @DisplayName("Gate 1: Rejects when concurrent open positions exceed dynamic rupee risk shield (4% limit)")
     void testGate1_ConcurrentPositionsCap() {
         riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "SBIN", createPosition("SBIN", 50, 800.0, 795.0));
         riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "INFY", createPosition("INFY", 30, 1900.0, 1890.0));
-        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "TCS", createPosition("TCS", 15, 3500.0, 3480.0));
+        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "TCS", createPosition("TCS", 10, 3000.0, 2980.0));
 
-        StrategyProposal fourthProposal = createProposal("WIPRO", 550.0, 545.0, 0);
-        RiskEvaluationResult result = riskEngine.evaluateProposal(fourthProposal, PortfolioMode.PAPER);
+        // Available margin allows WIPRO, but total downside risk + candidate risk exceeds 4% of 30,000 (1200)
+        StrategyProposal proposal = createProposal("WIPRO", 550.0, 535.0, 0);
+        RiskEvaluationResult result = riskEngine.evaluateProposal(proposal, PortfolioMode.PAPER);
 
         assertThat(result.approved()).isFalse();
-        assertThat(result.rejectionReason()).isEqualTo("MAX_CONCURRENT_POSITIONS_REACHED");
+        assertThat(result.rejectionReason()).isEqualTo("DAILY_LOSS_KILL_SWITCH_TRIGGERED");
     }
 
     @Test
@@ -75,42 +76,49 @@ class RiskEngineTest {
     }
 
     @Test
-    @DisplayName("Gate 3: Enforces 5 daily trades cap and Trade 4-5 ALL GREEN rule")
-    void testGate3_DailyTradesCap_And_Trade4And5AllGreenRule() {
+    @DisplayName("Gate 2: Enforces Strategy-Level Daily Limits (Max 5 trades per strategy, Max 3 losses cooling off)")
+    void testStrategyDailyLimits() {
         PortfolioState state = riskEngine.getPortfolioState(PortfolioMode.PAPER);
 
-        // Record 3 trades (tradeCount = 3)
-        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "S1", createPosition("S1", 10, 500.0, 495.0));
-        riskEngine.recordPositionClosed(PortfolioMode.PAPER, "S1", 50.0);
-        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "S2", createPosition("S2", 10, 500.0, 495.0));
-        riskEngine.recordPositionClosed(PortfolioMode.PAPER, "S2", 50.0);
-        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "S3", createPosition("S3", 10, 500.0, 495.0));
-        riskEngine.recordPositionClosed(PortfolioMode.PAPER, "S3", 50.0);
+        // Record 5 closed trades for Strategy 2
+        for (int i = 1; i <= 5; i++) {
+            String sym = "S" + i;
+            riskEngine.recordTradeExecuted(PortfolioMode.PAPER, sym, createPosition(sym, 10, 500.0, 495.0));
+            riskEngine.recordPositionClosed(PortfolioMode.PAPER, sym, 50.0);
+        }
 
-        assertThat(state.getDailyTradeCount()).isEqualTo(3);
+        assertThat(state.getDailyTradeCount()).isEqualTo(5);
+        assertThat(state.getTradeCountForStrategy(2)).isEqualTo(5);
 
-        // Trade 4 with yellowCount = 1 -> REJECTED (Trades 4-5 require ALL GREEN)
-        StrategyProposal trade4Yellow = createProposal("S4", 600.0, 590.0, 1);
-        RiskEvaluationResult resYellow = riskEngine.evaluateProposal(trade4Yellow, PortfolioMode.PAPER);
-        assertThat(resYellow.approved()).isFalse();
-        assertThat(resYellow.rejectionReason()).isEqualTo("TRADE_4_OR_5_REQUIRES_ALL_GREEN");
-
-        // Trade 4 with yellowCount = 0 -> APPROVED
-        StrategyProposal trade4Green = createProposal("S4", 600.0, 590.0, 0);
-        RiskEvaluationResult resGreen = riskEngine.evaluateProposal(trade4Green, PortfolioMode.PAPER);
-        assertThat(resGreen.approved()).isTrue();
-
-        // Advance to 5 trades completed
-        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "S4", createPosition("S4", 10, 600.0, 590.0));
-        riskEngine.recordPositionClosed(PortfolioMode.PAPER, "S4", 50.0);
-        riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "S5", createPosition("S5", 10, 600.0, 590.0));
-        riskEngine.recordPositionClosed(PortfolioMode.PAPER, "S5", 50.0);
-
-        // Trade 6 -> REJECTED (Max 5 daily trades reached)
-        StrategyProposal trade6 = createProposal("S6", 600.0, 590.0, 0);
-        RiskEvaluationResult resTrade6 = riskEngine.evaluateProposal(trade6, PortfolioMode.PAPER);
+        // Trade 6 for Strategy 2 is rejected because max 5 trades per strategy is reached
+        StrategyProposal trade6Strategy2 = createProposal("S6", 600.0, 590.0, 0);
+        RiskEvaluationResult resTrade6 = riskEngine.evaluateProposal(trade6Strategy2, PortfolioMode.PAPER);
         assertThat(resTrade6.approved()).isFalse();
-        assertThat(resTrade6.rejectionReason()).isEqualTo("MAX_DAILY_TRADES_REACHED");
+        assertThat(resTrade6.rejectionReason()).isEqualTo("STRATEGY_MAX_DAILY_TRADES_EXCEEDED");
+
+        // Trade 1 for Strategy 3 is approved (independent strategy limits)
+        StrategyProposal trade1Strategy3 = new StrategyProposal(
+                "S7", "NSE", 3, "STRATEGY_3", "BUY",
+                600.0, 590.0, 610.0, 595.0, 100.0, Map.of("yellowCount", 0)
+        );
+        RiskEvaluationResult resStrategy3 = riskEngine.evaluateProposal(trade1Strategy3, PortfolioMode.PAPER);
+        assertThat(resStrategy3.approved()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Gate 2: Strategy cooling off triggered after 3 losses on that strategy")
+    void testStrategyCoolingOffAfter3Losses() {
+        // Record 3 loss trades for Strategy 2
+        for (int i = 1; i <= 3; i++) {
+            String sym = "LOSS_" + i;
+            riskEngine.recordTradeExecuted(PortfolioMode.PAPER, sym, createPosition(sym, 10, 500.0, 495.0));
+            riskEngine.recordPositionClosed(PortfolioMode.PAPER, sym, -100.0);
+        }
+
+        StrategyProposal trade4 = createProposal("NEXT_STOCK", 600.0, 590.0, 0);
+        RiskEvaluationResult res = riskEngine.evaluateProposal(trade4, PortfolioMode.PAPER);
+        assertThat(res.approved()).isFalse();
+        assertThat(res.rejectionReason()).isEqualTo("STRATEGY_COOLING_OFF_MAX_LOSSES_REACHED");
     }
 
     @Test
@@ -139,23 +147,23 @@ class RiskEngineTest {
     }
 
     @Test
-    @DisplayName("Gate 6: Rejects when total open downside risk exceeds 3.2% buffer, approves once stop ratchets to entry")
+    @DisplayName("Gate 6: Rejects when total open downside risk exceeds 4% dynamic rupee shield, approves once stop ratchets to entry")
     void testGate6_PortfolioOpenDownsideRiskCap() {
-        // 3.2% of 30,000 = Rs. 960 max portfolio open downside risk
+        // 4.0% of 30,000 = Rs. 1200 max portfolio open downside risk
         // Position 1: qty 45, entry 500, SL 490 -> risk = 45 * 10 = Rs. 450
         // Position 2: qty 45, entry 500, SL 490 -> risk = 45 * 10 = Rs. 450
-        // Current open risk = 900.
+        // Current open risk = 900 + friction ~170 = 1070.
         riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "STOCK1", createPosition("STOCK1", 45, 500.0, 490.0));
         riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "STOCK2", createPosition("STOCK2", 45, 500.0, 490.0));
 
         // Candidate 3: entry 600, SL 595 (risk = 5 pts). Qty = floor(450 / 5) = 90.
         // Actual risk = 90 * 5 = 450.
-        // Potential total risk = 900 + 450 = 1350 > 960!
+        // Potential total risk = 900 + 450 + friction = 1435 > 1200!
         StrategyProposal candidate3 = createProposal("STOCK3", 600.0, 595.0, 0);
         RiskEvaluationResult result = riskEngine.evaluateProposal(candidate3, PortfolioMode.PAPER);
 
         assertThat(result.approved()).isFalse();
-        assertThat(result.rejectionReason()).isEqualTo("PORTFOLIO_OPEN_RISK_CAP_EXCEEDED");
+        assertThat(result.rejectionReason()).isEqualTo("DAILY_LOSS_KILL_SWITCH_TRIGGERED");
 
         // Now STOCK1 reaches Target 1: its trailing stop ratchets to entry (500.0)!
         // Downside risk on STOCK1 drops to 45 * max(0, 500 - 500) = Rs. 0!
@@ -165,7 +173,7 @@ class RiskEngineTest {
                 500.0, 500.0, 510.0, 498.0, true, LocalDateTime.now());
         riskEngine.updatePosition(PortfolioMode.PAPER, ratchetedStock1);
 
-        // Candidate 3 evaluated again: potential risk = 450 + 450 = 900 <= 960!
+        // Candidate 3 evaluated again: potential risk = 450 + 450 + friction <= 1200!
         RiskEvaluationResult reEvaluated = riskEngine.evaluateProposal(candidate3, PortfolioMode.PAPER);
         assertThat(reEvaluated.approved()).isTrue();
     }

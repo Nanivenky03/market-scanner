@@ -67,7 +67,7 @@ class OrderExecutionGatewayTest {
         assertThat(outcome.direction()).isEqualTo("LONG");
         assertThat(outcome.executedPrice()).isEqualTo(800.0);
         assertThat(outcome.structuralStopLoss()).isEqualTo(790.0);
-        assertThat(outcome.reAnchoredTarget1()).isEqualTo(810.0);
+        assertThat(outcome.reAnchoredTarget1()).isEqualTo(807.3);
 
         PositionSnapshot pos = positionManager.getPosition(PortfolioMode.PAPER, "SBIN");
         assertThat(pos).isNotNull();

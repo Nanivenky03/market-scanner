@@ -24,6 +24,8 @@ public class PortfolioState {
 
     private final Map<String, PositionSnapshot> openPositions = new ConcurrentHashMap<>();
     private final Set<String> tradedSymbolsToday = ConcurrentHashMap.newKeySet();
+    private final Map<Integer, Integer> tradesCountByStrategy = new ConcurrentHashMap<>();
+    private final Map<Integer, Integer> lossCountByStrategy = new ConcurrentHashMap<>();
 
     public PortfolioState(PortfolioMode mode, double initialCapital, LocalDate tradingDate) {
         this.mode = mode;
@@ -123,6 +125,9 @@ public class PortfolioState {
         tradedSymbolsToday.add(symbol);
         dailyTradeCount++;
         openPositions.put(symbol, position);
+        if (position != null && position.strategyId() != null) {
+            tradesCountByStrategy.merge(position.strategyId(), 1, Integer::sum);
+        }
     }
 
     /**
@@ -131,6 +136,10 @@ public class PortfolioState {
     public synchronized void unlockSymbol(String symbol) {
         if (symbol != null) {
             tradedSymbolsToday.remove(symbol);
+            PositionSnapshot pos = openPositions.get(symbol);
+            if (pos != null && pos.strategyId() != null) {
+                tradesCountByStrategy.computeIfPresent(pos.strategyId(), (k, v) -> v > 1 ? v - 1 : null);
+            }
             if (!openPositions.containsKey(symbol) && dailyTradeCount > 0) {
                 dailyTradeCount--;
             }
@@ -144,9 +153,20 @@ public class PortfolioState {
     }
 
     public synchronized void recordPositionClosed(String symbol, double pnl) {
-        openPositions.remove(symbol);
+        PositionSnapshot pos = openPositions.remove(symbol);
+        if (pos != null && pos.strategyId() != null && pnl < 0.0) {
+            lossCountByStrategy.merge(pos.strategyId(), 1, Integer::sum);
+        }
         this.realizedPnl += pnl;
         this.currentCapital = this.initialCapital + this.realizedPnl - this.accumulatedIncurredFriction;
+    }
+
+    public int getTradeCountForStrategy(int strategyId) {
+        return tradesCountByStrategy.getOrDefault(strategyId, 0);
+    }
+
+    public int getLossCountForStrategy(int strategyId) {
+        return lossCountByStrategy.getOrDefault(strategyId, 0);
     }
 
     public boolean hasTradedSymbolToday(String symbol) {

@@ -3,7 +3,9 @@
 
 # Log files
 *.log
+*.log.*
 /data/logs/
+projectsmarket-scanner*
 
 # Maven
 target/

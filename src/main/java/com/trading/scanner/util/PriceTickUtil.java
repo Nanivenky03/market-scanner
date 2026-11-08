@@ -1,9 +1,15 @@
 package com.trading.scanner.util;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
 /**
  * Utility for exchange tick-size validation and price rounding.
  * In Indian equity markets (NSE/BSE), all orders and trigger prices must be
  * exact multiples of the instrument's tick size (typically ₹0.05).
+ *
+ * Implemented using exact BigDecimal arithmetic to eliminate IEEE-754 binary floating-point
+ * truncation errors.
  */
 public final class PriceTickUtil {
 
@@ -14,20 +20,26 @@ public final class PriceTickUtil {
 
     public static double roundToTick(double price, double tickSize) {
         double tick = tickSize > 0.0 ? tickSize : DEFAULT_TICK_SIZE;
-        double rounded = Math.round(price / tick) * tick;
-        return roundTo2Decimals(rounded);
+        BigDecimal p = BigDecimal.valueOf(price);
+        BigDecimal t = BigDecimal.valueOf(tick);
+        BigDecimal rounded = p.divide(t, 0, RoundingMode.HALF_UP).multiply(t);
+        return roundTo2Decimals(rounded.doubleValue());
     }
 
     public static double floorToTick(double price, double tickSize) {
         double tick = tickSize > 0.0 ? tickSize : DEFAULT_TICK_SIZE;
-        double floored = Math.floor(price / tick) * tick;
-        return roundTo2Decimals(floored);
+        BigDecimal p = BigDecimal.valueOf(price);
+        BigDecimal t = BigDecimal.valueOf(tick);
+        BigDecimal floored = p.divide(t, 0, RoundingMode.FLOOR).multiply(t);
+        return roundTo2Decimals(floored.doubleValue());
     }
 
     public static double ceilToTick(double price, double tickSize) {
         double tick = tickSize > 0.0 ? tickSize : DEFAULT_TICK_SIZE;
-        double ceiled = Math.ceil(price / tick) * tick;
-        return roundTo2Decimals(ceiled);
+        BigDecimal p = BigDecimal.valueOf(price);
+        BigDecimal t = BigDecimal.valueOf(tick);
+        BigDecimal ceiled = p.divide(t, 0, RoundingMode.CEILING).multiply(t);
+        return roundTo2Decimals(ceiled.doubleValue());
     }
 
     /**
@@ -49,6 +61,6 @@ public final class PriceTickUtil {
     }
 
     public static double roundTo2Decimals(double value) {
-        return Math.round(value * 100.0) / 100.0;
+        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).doubleValue();
     }
 }

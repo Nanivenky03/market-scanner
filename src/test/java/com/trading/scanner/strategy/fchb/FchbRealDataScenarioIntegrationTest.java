@@ -131,8 +131,8 @@ class FchbRealDataScenarioIntegrationTest {
                 PositionAction trailAction = positionHandler.evaluatePosition(
                                 runnerPosition, 1027.0, candle1m, 5.0, LocalTime.of(10, 5), Collections.emptyMap());
                 assertThat(trailAction.type()).isEqualTo(PositionAction.ActionType.UPDATE_STOP);
-                assertThat(trailAction.reason()).isEqualTo("ATR_TRAILING_STOP_RATCHET");
-                assertThat(trailAction.newStopLoss()).isEqualTo(1022.5);
+                assertThat(trailAction.reason()).isEqualTo("RUNNER_PROFIT_LOCK_RATCHET");
+                assertThat(trailAction.newStopLoss()).isEqualTo(1014.85);
         }
 
         @Test
@@ -158,13 +158,13 @@ class FchbRealDataScenarioIntegrationTest {
                 riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "RELIANCE", pos2);
 
                 // Candidate 3 arrives: entry 500, SL 495 -> risk = Rs. 900. Total risk would be
-                // 1800 + 900 = 2700 > 1920!
+                // 1800 + 900 = 2700 > 2400 (4% of 60k)!
                 StrategyProposal candidate3 = new StrategyProposal(
                                 "WIPRO", "NSE", 2, "FCHB", "BUY", 500.0, 495.0, 505.0, 498.0, 85.0,
                                 Map.of("yellowCount", 1L));
                 RiskEvaluationResult rejected3 = riskEngine.evaluateProposal(candidate3, PortfolioMode.PAPER);
                 assertThat(rejected3.approved()).isFalse();
-                assertThat(rejected3.rejectionReason()).isEqualTo("PORTFOLIO_OPEN_RISK_CAP_EXCEEDED");
+                assertThat(rejected3.rejectionReason()).isEqualTo("DAILY_LOSS_KILL_SWITCH_TRIGGERED");
 
                 // Now Position 1 (INFY) reaches Target 1: its stop ratchets to entry (1000.0)
                 // -> downside risk drops to Rs. 0!
@@ -185,13 +185,13 @@ class FchbRealDataScenarioIntegrationTest {
                                 500.0, 495.0, 505.0, 498.0, false, LocalDateTime.of(2026, 10, 11, 9, 40));
                 riskEngine.recordTradeExecuted(PortfolioMode.PAPER, "WIPRO", pos3);
 
-                // Candidate 4 arrives: Gate 1 rejects (Max 3 concurrent positions)
+                // Candidate 4 arrives: Dynamic Rupee Risk Shield rejects (> 4% risk limit)
                 StrategyProposal candidate4 = new StrategyProposal(
                                 "SBIN", "NSE", 2, "FCHB", "BUY", 800.0, 795.0, 805.0, 798.0, 100.0,
                                 Map.of("yellowCount", 0L));
                 RiskEvaluationResult rejected4 = riskEngine.evaluateProposal(candidate4, PortfolioMode.PAPER);
                 assertThat(rejected4.approved()).isFalse();
-                assertThat(rejected4.rejectionReason()).isEqualTo("MAX_CONCURRENT_POSITIONS_REACHED");
+                assertThat(rejected4.rejectionReason()).isEqualTo("DAILY_LOSS_KILL_SWITCH_TRIGGERED");
         }
 
         @Test
@@ -207,9 +207,9 @@ class FchbRealDataScenarioIntegrationTest {
                 // Stock at 800 with tight 5-pt first candle: FCH = 800.0, FCL = 795.0
                 // Bullish 1st candle: open = 795.2, close = 799.9
                 DailyStockContext daily = createDailyContext("BAJFINANCE", 800.0, 795.0);
-                // Breakout candle closes at 801.0 (> FCH 800.0, high 801.5, low 797.5, body
-                // 75%, upper wick 12.5% -> GREEN shape)
-                MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 11, 9, 35), 798.0, 801.5, 797.5, 801.0,
+                // Breakout candle closes at 801.5 (>= FCH * 1.0015 = 801.20, high 802.0, low 797.5, body
+                // 78%, upper wick 11% -> GREEN shape)
+                MarketCandle current5m = createCandle(LocalDateTime.of(2026, 10, 11, 9, 35), 798.0, 802.0, 797.5, 801.5,
                                 799.0, 60.0, 40000L);
                 MarketCandle current15m = createCandle(LocalDateTime.of(2026, 10, 11, 9, 30), 796.0, 802.0, 795.0,
                                 800.0, 798.0, 58.0, 90000L);

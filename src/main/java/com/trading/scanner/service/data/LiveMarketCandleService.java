@@ -12,6 +12,10 @@ import com.trading.scanner.model.StockPrice;
 import com.trading.scanner.repository.LiveMinuteResolutionRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
+import jakarta.annotation.PreDestroy;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import com.trading.scanner.service.engine.DailyDataStatusService;
 import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.engine.IntradayIndicatorService;
@@ -65,6 +69,8 @@ public class LiveMarketCandleService {
         private final Map<String, Boolean> blockedSymbols = new ConcurrentHashMap<>();
 
         private final Map<String, Optional<Double>> previousDayCloseCache = new ConcurrentHashMap<>();
+        private final Executor gapDetectionExecutor;
+        private final Map<String, LocalDateTime> lastGapCheckedTime = new ConcurrentHashMap<>();
 
         @Autowired
         public LiveMarketCandleService(
@@ -77,21 +83,16 @@ public class LiveMarketCandleService {
                         LiveMinuteResolutionRepository liveMinuteResolutionRepository,
                         StockPriceRepository stockPriceRepository) {
 
-                this.marketCandleRepository = marketCandleRepository;
-
-                this.timeProvider = timeProvider;
-
-                this.dailyStockContextService = dailyStockContextService;
-
-                this.intradayIndicatorService = intradayIndicatorService;
-
-                this.dailyDataStatusService = dailyDataStatusService;
-
-                this.eventPublisher = eventPublisher;
-
-                this.liveMinuteResolutionRepository = liveMinuteResolutionRepository;
-
-                this.stockPriceRepository = stockPriceRepository;
+                this(
+                                marketCandleRepository,
+                                timeProvider,
+                                dailyStockContextService,
+                                intradayIndicatorService,
+                                dailyDataStatusService,
+                                eventPublisher,
+                                liveMinuteResolutionRepository,
+                                stockPriceRepository,
+                                defaultGapDetectionExecutor());
         }
 
         /*
@@ -115,7 +116,45 @@ public class LiveMarketCandleService {
                                 dailyDataStatusService,
                                 eventPublisher,
                                 liveMinuteResolutionRepository,
-                                null);
+                                null,
+                                Runnable::run);
+        }
+
+        public LiveMarketCandleService(
+                        MarketCandleRepository marketCandleRepository,
+                        TimeProvider timeProvider,
+                        DailyStockContextService dailyStockContextService,
+                        IntradayIndicatorService intradayIndicatorService,
+                        DailyDataStatusService dailyDataStatusService,
+                        ApplicationEventPublisher eventPublisher,
+                        LiveMinuteResolutionRepository liveMinuteResolutionRepository,
+                        StockPriceRepository stockPriceRepository,
+                        Executor gapDetectionExecutor) {
+
+                this.marketCandleRepository = marketCandleRepository;
+                this.timeProvider = timeProvider;
+                this.dailyStockContextService = dailyStockContextService;
+                this.intradayIndicatorService = intradayIndicatorService;
+                this.dailyDataStatusService = dailyDataStatusService;
+                this.eventPublisher = eventPublisher;
+                this.liveMinuteResolutionRepository = liveMinuteResolutionRepository;
+                this.stockPriceRepository = stockPriceRepository;
+                this.gapDetectionExecutor = gapDetectionExecutor != null ? gapDetectionExecutor : defaultGapDetectionExecutor();
+        }
+
+        private static ExecutorService defaultGapDetectionExecutor() {
+                return Executors.newFixedThreadPool(2, r -> {
+                        Thread thread = new Thread(r, "candle-gap-detector");
+                        thread.setDaemon(true);
+                        return thread;
+                });
+        }
+
+        @PreDestroy
+        public void cleanup() {
+                if (gapDetectionExecutor instanceof ExecutorService es) {
+                        es.shutdown();
+                }
         }
 
         public IngestResult ingestTick(
@@ -157,10 +196,15 @@ public class LiveMarketCandleService {
                         OpenMinuteCandle existing = openCandles.get(key);
 
                         if (existing == null) {
-                                detectPersistedGap(
-                                                symbol,
-                                                exchange,
-                                                tickTime);
+                                if (!tickTime.toLocalTime().equals(MARKET_OPEN)) {
+                                        gapDetectionExecutor.execute(() -> {
+                                                try {
+                                                        detectPersistedGap(symbol, exchange, tickTime);
+                                                } catch (Exception ex) {
+                                                        log.warn("Failed async gap detection for symbol={}: {}", symbol, ex.getMessage());
+                                                }
+                                        });
+                                }
 
                                 openCandles.put(
                                                 key,
@@ -492,6 +536,8 @@ public class LiveMarketCandleService {
                 int count = openCandles.size();
                 openCandles.clear();
                 previousDayCloseCache.clear();
+                lastGapCheckedTime.clear();
+                blockedSymbols.clear();
                 log.info("Cleared {} in-memory open candles without persisting to DB", count);
         }
 
@@ -1148,6 +1194,13 @@ public class LiveMarketCandleService {
                         String exchange,
                         LocalDateTime tickTime) {
 
+                String key = normalize(exchange) + "|" + normalize(symbol);
+                LocalDateTime lastChecked = lastGapCheckedTime.get(key);
+                if (lastChecked != null && !tickTime.isAfter(lastChecked)) {
+                        return;
+                }
+                lastGapCheckedTime.put(key, tickTime);
+
                 marketCandleRepository
                                 .findTopBySymbolAndExchangeAndTimeframeOrderByCandleTimeDesc(
                                                 symbol,
@@ -1190,13 +1243,19 @@ public class LiveMarketCandleService {
 
                 blockedSymbols.put(key, true);
 
-                eventPublisher.publishEvent(
-                                new IntradayGapDetectedEvent(
-                                                normalize(symbol),
-                                                normalize(exchange),
-                                                date,
-                                                clampedFrom,
-                                                clampedTo));
+                gapDetectionExecutor.execute(() -> {
+                        try {
+                                eventPublisher.publishEvent(
+                                                new IntradayGapDetectedEvent(
+                                                                normalize(symbol),
+                                                                normalize(exchange),
+                                                                date,
+                                                                clampedFrom,
+                                                                clampedTo));
+                        } catch (Exception ex) {
+                                log.warn("Failed to publish intraday gap event for symbol={}: {}", symbol, ex.getMessage());
+                        }
+                });
         }
 
         private boolean blocked(String key) {

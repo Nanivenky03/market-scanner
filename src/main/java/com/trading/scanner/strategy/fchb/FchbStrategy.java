@@ -31,9 +31,10 @@ public class FchbStrategy implements Strategy {
 
     public static final int STRATEGY_ID = 2;
     public static final String STRATEGY_KEY = "FCHB";
+    public static final double TARGET_1_R_MULTIPLE = 0.73;
 
     private static final LocalTime ENTRY_WINDOW_START = LocalTime.of(9, 30);
-    private static final LocalTime ENTRY_WINDOW_END = LocalTime.of(13, 0);
+    private static final LocalTime ENTRY_WINDOW_END = LocalTime.of(10, 0);
 
     @Override
     public Integer getStrategyId() {
@@ -79,12 +80,6 @@ public class FchbStrategy implements Strategy {
         if (daily.getPrevDayRangePct() != null && daily.getPrevDayRangePct() > 4.0) {
             return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("PREV_DAY_RANGE_MAX_4"), "PREV_DAY_RANGE_EXCEEDS_4_PCT");
         }
-        if (daily.getDistFromResistancePct() == null) {
-            return StrategyEvaluation.notEvaluable("RESISTANCE_DATA_INCOMPLETE");
-        }
-        if (daily.getDistFromResistancePct() < 1.0) {
-            return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("RESISTANCE_DISTANCE_MIN_1"), "RESISTANCE_CLOSER_THAN_1_PCT");
-        }
 
         // 2. First candle reference validation (from DailyStockContext)
         Double firstCandleHigh = daily.getFirstCandleHigh();
@@ -104,6 +99,15 @@ public class FchbStrategy implements Strategy {
             return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("FIRST_CANDLE_RANGE_0_15_TO_3_0"), "FIRST_CANDLE_RANGE_INVALID");
         }
 
+        // Opening 5-Minute Turnover Floor (Minimum Rs. 25 Lakhs to ensure institutional liquidity)
+        Long firstCandleVolume = daily.getFirstCandleVolume();
+        if (firstCandleVolume != null && firstCandleClose != null) {
+            double openingTurnover = firstCandleVolume * firstCandleClose;
+            if (openingTurnover < 25_00_000.0) {
+                return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("MIN_OPENING_TURNOVER_25L"), "OPENING_TURNOVER_TOO_LOW");
+            }
+        }
+
         // 3. Current 5M candle trigger validation
         MarketCandle current5m = context.latest5mCandle();
         if (current5m == null) {
@@ -111,12 +115,22 @@ public class FchbStrategy implements Strategy {
         }
         LocalTime candleTime = current5m.getCandleTime().toLocalTime();
         if (candleTime.isBefore(ENTRY_WINDOW_START) || candleTime.isAfter(ENTRY_WINDOW_END)) {
-            return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("ENTRY_WINDOW_0930_1300"), "OUTSIDE_ENTRY_WINDOW");
+            return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("ENTRY_WINDOW_0930_1000"), "OUTSIDE_ENTRY_WINDOW");
         }
 
         Double close = current5m.getClosePrice();
         if (close == null || close <= firstCandleHigh) {
             return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("CLOSE_ABOVE_FCH"), "CLOSE_NOT_ABOVE_FCH");
+        }
+
+        // Minimum Breakout Margin (Must close at least +0.15% above FCH to filter out micro-pierce bull traps)
+        if (close < (firstCandleHigh * 1.0015)) {
+            return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("MIN_BREAKOUT_MARGIN_0_15"), "BREAKOUT_LESS_THAN_0_15_PCT_ABOVE_FCH");
+        }
+
+        // Share Price Ceiling (Exclude ultra-high ticket stocks > Rs. 5,000)
+        if (close > 5000.0) {
+            return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("PRICE_CEILING_MAX_5000"), "PRICE_EXCEEDS_5000");
         }
 
         // 4. Traffic-Light Evaluation
@@ -153,23 +167,7 @@ public class FchbStrategy implements Strategy {
             failed.add("VOL_X_RED");
         }
 
-        // Gate 3: 5M RSI (14)
-        Double rsi = current5m.getRsi14();
-        if (rsi == null) {
-            lights.add(TrafficLight.RED);
-            failed.add("RSI_MISSING");
-        } else if (rsi >= 58.0 && rsi <= 65.0) {
-            lights.add(TrafficLight.GREEN);
-            passed.add("RSI_GREEN");
-        } else if ((rsi >= 55.0 && rsi < 58.0) || (rsi > 65.0 && rsi <= 72.0)) {
-            lights.add(TrafficLight.YELLOW);
-            passed.add("RSI_YELLOW");
-        } else {
-            lights.add(TrafficLight.RED);
-            failed.add("RSI_RED");
-        }
-
-        // Gate 4: Candle Shape (Body Ratio & Upper Wick Ratio)
+        // Gate 3: Candle Shape (Body Ratio & Upper Wick Ratio)
         Double open = current5m.getOpenPrice();
         Double high = current5m.getHighPrice();
         Double low = current5m.getLowPrice();
@@ -280,7 +278,7 @@ public class FchbStrategy implements Strategy {
         if (riskPerShare <= 0.0) {
             return StrategyEvaluation.notQualified(score, passed, List.of("INVALID_RISK_PER_SHARE"), "INVALID_RISK_PER_SHARE");
         }
-        double rawTargetPrice = close + riskPerShare;
+        double rawTargetPrice = close + (TARGET_1_R_MULTIPLE * riskPerShare);
         double targetPrice = PriceTickUtil.roundTarget(rawTargetPrice, false, 0.05);
 
         StrategyProposal proposal = new StrategyProposal(

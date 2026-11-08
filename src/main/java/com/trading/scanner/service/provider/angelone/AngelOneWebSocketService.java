@@ -6,6 +6,7 @@ import com.trading.scanner.config.provider.AngelOneProperties;
 import com.trading.scanner.service.data.LiveMarketCandleService;
 import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.angelone.dto.AngelOneAuthDtos;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -56,6 +61,13 @@ public class AngelOneWebSocketService {
     private volatile long parsedTicksReceived;
     private volatile long parserFailures;
 
+    private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "angel-ws-heartbeat");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private ScheduledFuture<?> heartbeatFuture;
+
     public synchronized Status connect() {
         validateConfig();
 
@@ -89,6 +101,7 @@ public class AngelOneWebSocketService {
 
     public synchronized Status disconnect() {
         try {
+            stopHeartbeat();
             if (webSocket != null) {
                 webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "client_disconnect").join();
                 webSocket = null;
@@ -251,7 +264,67 @@ public class AngelOneWebSocketService {
         }
     }
 
-    private final class SocketListener implements WebSocket.Listener {
+    synchronized void startHeartbeat() {
+        stopHeartbeat();
+        heartbeatFuture = heartbeatScheduler.scheduleAtFixedRate(
+                this::sendHeartbeatPing,
+                25,
+                25,
+                TimeUnit.SECONDS
+        );
+        log.info("Started Angel One websocket heartbeat scheduler (25s interval)");
+    }
+
+    synchronized void stopHeartbeat() {
+        if (heartbeatFuture != null) {
+            heartbeatFuture.cancel(true);
+            heartbeatFuture = null;
+            log.debug("Stopped Angel One websocket heartbeat scheduler");
+        }
+    }
+
+    boolean isHeartbeatActive() {
+        return heartbeatFuture != null && !heartbeatFuture.isDone();
+    }
+
+    void sendHeartbeatPing() {
+        try {
+            WebSocket ws = this.webSocket;
+            if (connected && ws != null) {
+                ws.sendText("ping", true).whenComplete((res, err) -> {
+                    if (err != null) {
+                        log.warn("Failed to send Angel One websocket heartbeat ping: {}", err.getMessage());
+                    } else {
+                        log.debug("Sent Angel One websocket heartbeat ping");
+                    }
+                });
+            }
+        } catch (Exception ex) {
+            log.warn("Exception scheduling Angel One websocket heartbeat ping: {}", ex.getMessage());
+        }
+    }
+
+    private boolean isPong(String text) {
+        String trimmed = text.trim();
+        return trimmed.equalsIgnoreCase("pong") || trimmed.equalsIgnoreCase("\"pong\"");
+    }
+
+    void setWebSocketForTesting(WebSocket ws, boolean isConnected) {
+        this.webSocket = ws;
+        this.connected = isConnected;
+    }
+
+    SocketListener createSocketListener() {
+        return new SocketListener();
+    }
+
+    @PreDestroy
+    public void cleanup() {
+        disconnect();
+        heartbeatScheduler.shutdownNow();
+    }
+
+    final class SocketListener implements WebSocket.Listener {
 
         @Override
         public void onOpen(WebSocket webSocket) {
@@ -262,6 +335,8 @@ public class AngelOneWebSocketService {
             lastError = null;
             log.info("Angel One websocket connected");
 
+            startHeartbeat();
+
             webSocket.request(1);
         }
 
@@ -269,10 +344,18 @@ public class AngelOneWebSocketService {
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             messagesReceived++;
             lastMessageReceivedAt = timeProvider.nowDateTime();
-            lastTextMessagePreview = data == null ? null : abbreviate(data.toString(), 500);
-            frameCaptureService.captureText(data != null ? data.toString() : null);
 
-            angelOneTickParserService.tryParseText(data != null ? data.toString() : null)
+            String text = data != null ? data.toString() : null;
+            if (text != null && isPong(text)) {
+                log.debug("Received pong from Angel One websocket");
+                webSocket.request(1);
+                return CompletableFuture.completedFuture(null);
+            }
+
+            lastTextMessagePreview = text == null ? null : abbreviate(text, 500);
+            frameCaptureService.captureText(text);
+
+            angelOneTickParserService.tryParseText(text)
                     .ifPresent(AngelOneWebSocketService.this::handleParsedTick);
 
             webSocket.request(1);
@@ -316,6 +399,7 @@ public class AngelOneWebSocketService {
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
             connected = false;
             connecting = false;
+            stopHeartbeat();
             lastDisconnectedAt = timeProvider.nowDateTime();
             log.info("Angel One websocket closed. statusCode={} reason={}", statusCode, reason);
             return CompletableFuture.completedFuture(null);
@@ -325,6 +409,7 @@ public class AngelOneWebSocketService {
         public void onError(WebSocket webSocket, Throwable error) {
             connected = false;
             connecting = false;
+            stopHeartbeat();
             lastDisconnectedAt = timeProvider.nowDateTime();
             lastError = error != null ? error.getMessage() : "unknown websocket error";
             log.warn("Angel One websocket error: {}", lastError);
