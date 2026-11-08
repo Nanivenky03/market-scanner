@@ -362,4 +362,102 @@ class UniverseWebSocketSubscriptionServiceTest {
         verify(liveFeedStateRepository, times(1))
                 .save(any(LiveFeedState.class));
     }
+
+    @Test
+    void subscribeActiveUniverse_shouldIncludeSectorIndicesAlongsideNiftyAndEquities() {
+        LocalDate date = LocalDate.of(2026, 9, 2);
+        LocalDateTime now = date.atTime(9, 15);
+
+        StockUniverse tcs = StockUniverse.builder()
+                .symbol("TCS")
+                .exchange(Exchange.NSE)
+                .companyName("TCS")
+                .isActive(true)
+                .build();
+
+        InstrumentMaster tcsInstrument = InstrumentMaster.builder()
+                .symbol("TCS")
+                .exchange("NSE")
+                .companyName("TCS")
+                .instrumentType("EQUITY")
+                .segment("CASH")
+                .brokerToken("11536")
+                .isActive(true)
+                .build();
+
+        InstrumentMaster nifty = InstrumentMaster.builder()
+                .symbol("NIFTY")
+                .exchange("NSE")
+                .companyName("NIFTY 50")
+                .instrumentType("INDEX")
+                .segment("INDEX")
+                .brokerToken("99926000")
+                .isActive(true)
+                .build();
+
+        InstrumentMaster bankNifty = InstrumentMaster.builder()
+                .symbol("NIFTY BANK")
+                .exchange("NSE")
+                .companyName("NIFTY BANK")
+                .instrumentType("INDEX")
+                .segment("INDEX")
+                .brokerToken("99926009")
+                .isActive(true)
+                .build();
+
+        InstrumentMaster itIndex = InstrumentMaster.builder()
+                .symbol("NIFTY IT")
+                .exchange("NSE")
+                .companyName("NIFTY IT")
+                .instrumentType("INDEX")
+                .segment("INDEX")
+                .brokerToken("99926008")
+                .isActive(true)
+                .build();
+
+        when(stockUniverseRepository.findByIsActiveTrueOrderBySymbolAsc())
+                .thenReturn(List.of(tcs));
+
+        when(instrumentMasterRepository.findBySymbolAndExchange("TCS", "NSE"))
+                .thenReturn(Optional.of(tcsInstrument));
+        when(instrumentMasterRepository.findBySymbolAndExchange("NIFTY", "NSE"))
+                .thenReturn(Optional.of(nifty));
+        when(instrumentMasterRepository.findBySymbolAndExchange("NIFTY BANK", "NSE"))
+                .thenReturn(Optional.of(bankNifty));
+        when(instrumentMasterRepository.findBySymbolAndExchange("NIFTY IT", "NSE"))
+                .thenReturn(Optional.of(itIndex));
+
+        when(angelOneProperties.websocketMaxSubscriptionsPerConnection())
+                .thenReturn(1000);
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(timeProvider.today()).thenReturn(date);
+
+        LiveFeedState state = LiveFeedState.builder()
+                .symbol("TCS")
+                .exchange("NSE")
+                .tradingDate(date)
+                .blocked(false)
+                .healthStatus(FeedHealthStatus.HEALTHY)
+                .subscriptionActive(false)
+                .consecutiveRecoveryTicks(0)
+                .build();
+
+        when(liveFeedStateRepository.findBySymbolAndExchangeAndTradingDate(anyString(), anyString(), eq(date)))
+                .thenReturn(Optional.of(state));
+        when(liveFeedStateRepository.ensureExists(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(0);
+        when(liveFeedStateRepository.save(any(LiveFeedState.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        UniverseWebSocketSubscriptionService.SubscriptionResult result = service.subscribeActiveUniverse(1);
+
+        assertEquals(4, result.eligibleSymbols(), "Expected 1 equity + NIFTY + 2 sector indices = 4 symbols");
+        assertEquals(4, result.processedSubscriptions());
+
+        verify(angelOneWebSocketService).subscribe(
+                eq("active-universe-1"),
+                eq(1),
+                argThat(tokens -> tokens != null && tokens.size() == 4)
+        );
+    }
 }

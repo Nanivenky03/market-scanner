@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.*;
@@ -146,5 +147,83 @@ class StartupRecoveryServiceTest {
 
                 verify(pms).rehydrateActiveState(eq(com.trading.scanner.risk.model.PortfolioMode.LIVE), anyList());
                 verify(pms).rehydrateActiveState(eq(com.trading.scanner.risk.model.PortfolioMode.PAPER), anyList());
+        }
+
+        @Test
+        void recoverNow_shouldWarmUpStockContextCache_whenMarketIsAlreadyOpenOnTradingDay() {
+                LocalDate today = LocalDate.of(2026, 8, 24);
+                LocalDateTime now = today.atTime(11, 30); // 11:30 AM midday restart
+
+                when(timeProvider.today()).thenReturn(today);
+                when(timeProvider.nowDateTime()).thenReturn(now);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+
+                com.trading.scanner.strategy.cache.StockContextCache cache = mock(com.trading.scanner.strategy.cache.StockContextCache.class);
+                com.trading.scanner.repository.StockUniverseRepository universeRepo = mock(com.trading.scanner.repository.StockUniverseRepository.class);
+
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.strategy.cache.StockContextCache> cacheProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.StockUniverseRepository> universeProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+
+                when(cacheProvider.getIfAvailable()).thenReturn(cache);
+                when(universeProvider.getIfAvailable()).thenReturn(universeRepo);
+
+                com.trading.scanner.model.StockUniverse infy = com.trading.scanner.model.StockUniverse.builder()
+                                .symbol("INFY").exchange(com.trading.scanner.model.Exchange.NSE).companyName("Infosys").isActive(true).build();
+                when(universeRepo.findByIsActiveTrueOrderBySymbolAsc()).thenReturn(List.of(infy));
+
+                StartupRecoveryService serviceWithCache = new StartupRecoveryService(
+                                timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
+                                preMarketWorkflowService, eodReconciliationService, workflowStatusService,
+                                null, null, null, cacheProvider, universeProvider);
+
+                serviceWithCache.recoverNow();
+
+                verify(cache).warmUp(eq(today), eq(List.of("INFY")), eq("NSE"));
+        }
+
+        @Test
+        void recoverNow_shouldNotWarmUpStockContextCache_beforeMarketOpen() {
+                LocalDate today = LocalDate.of(2026, 8, 24);
+                LocalDateTime now = today.atTime(8, 30); // 8:30 AM pre-market
+
+                when(timeProvider.today()).thenReturn(today);
+                when(timeProvider.nowDateTime()).thenReturn(now);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+
+                com.trading.scanner.strategy.cache.StockContextCache cache = mock(com.trading.scanner.strategy.cache.StockContextCache.class);
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.strategy.cache.StockContextCache> cacheProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                when(cacheProvider.getIfAvailable()).thenReturn(cache);
+
+                StartupRecoveryService serviceWithCache = new StartupRecoveryService(
+                                timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
+                                preMarketWorkflowService, eodReconciliationService, workflowStatusService,
+                                null, null, null, cacheProvider, null);
+
+                serviceWithCache.recoverNow();
+
+                verify(cache, never()).warmUp(any(), any(), any());
+        }
+
+        @Test
+        void recoverNow_shouldNotWarmUpStockContextCache_onWeekendOrHoliday() {
+                LocalDate sunday = LocalDate.of(2026, 8, 23); // Sunday
+                LocalDateTime now = sunday.atTime(11, 30);
+
+                when(timeProvider.today()).thenReturn(sunday);
+                when(timeProvider.nowDateTime()).thenReturn(now);
+                when(tradingCalendar.isTradingDay(sunday)).thenReturn(false);
+
+                com.trading.scanner.strategy.cache.StockContextCache cache = mock(com.trading.scanner.strategy.cache.StockContextCache.class);
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.strategy.cache.StockContextCache> cacheProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                when(cacheProvider.getIfAvailable()).thenReturn(cache);
+
+                StartupRecoveryService serviceWithCache = new StartupRecoveryService(
+                                timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
+                                preMarketWorkflowService, eodReconciliationService, workflowStatusService,
+                                null, null, null, cacheProvider, null);
+
+                serviceWithCache.recoverNow();
+
+                verify(cache, never()).warmUp(any(), any(), any());
         }
 }

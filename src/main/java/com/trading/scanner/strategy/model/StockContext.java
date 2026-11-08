@@ -9,9 +9,12 @@ import java.util.List;
 
 /**
  * In-memory micro stock snapshot containing:
- * - Pre-market context and opening 5M/15M reference bars from daily_stock_context
+ * - Pre-market context and opening reference bars from daily_stock_context
  * - Sliding windows of finalized 1M, 5M, and 15M candles for today
- * - Current market indicators (VWAP, RSI, ATR)
+ * - Current market indicators (VWAP, RSI, ATR, VolX)
+ * - Sector context (Sector Name, Sector Index Symbol, Latest Sector Candle, Sector VWAP Distance)
+ * - Macro Benchmark context (Latest NIFTY Candle, NIFTY VWAP Distance)
+ * - Real-time dynamic intraday facts (Current LTP, Current VWAP, Day High, Day Low)
  */
 public record StockContext(
         String symbol,
@@ -22,7 +25,17 @@ public record StockContext(
         List<MarketCandle> candles5m,
         List<MarketCandle> candles15m,
         boolean backfillActive,
-        Double volX
+        Double volX,
+        String sectorName,
+        String sectorIndexSymbol,
+        MarketCandle latestSectorCandle,
+        Double sectorVwapDistancePercent,
+        MarketCandle latestNiftyCandle,
+        Double niftyVwapDistancePercent,
+        Double currentLtp,
+        Double currentVwap,
+        Double dayHigh,
+        Double dayLow
 ) {
 
     public StockContext(
@@ -36,6 +49,21 @@ public record StockContext(
             boolean backfillActive
     ) {
         this(symbol, exchange, tradingDate, dailyContext, candles1m, candles5m, candles15m, backfillActive, null);
+    }
+
+    public StockContext(
+            String symbol,
+            String exchange,
+            LocalDate tradingDate,
+            DailyStockContext dailyContext,
+            List<MarketCandle> candles1m,
+            List<MarketCandle> candles5m,
+            List<MarketCandle> candles15m,
+            boolean backfillActive,
+            Double volX
+    ) {
+        this(symbol, exchange, tradingDate, dailyContext, candles1m, candles5m, candles15m, backfillActive, volX,
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     public StockContext {

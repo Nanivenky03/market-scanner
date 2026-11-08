@@ -19,6 +19,9 @@ import java.util.concurrent.Executors;
 import com.trading.scanner.service.engine.DailyDataStatusService;
 import com.trading.scanner.service.engine.DailyStockContextService;
 import com.trading.scanner.service.engine.IntradayIndicatorService;
+import com.trading.scanner.service.instrument.MarketIndexRegistry;
+import com.trading.scanner.strategy.cache.StockContextCache;
+import com.trading.scanner.strategy.model.CandleFinalizedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -63,6 +66,8 @@ public class LiveMarketCandleService {
         private final LiveMinuteResolutionRepository liveMinuteResolutionRepository;
 
         private final StockPriceRepository stockPriceRepository;
+        private final StockContextCache stockContextCache;
+        private final MarketIndexRegistry marketIndexRegistry;
 
         private final Map<String, OpenMinuteCandle> openCandles = new ConcurrentHashMap<>();
 
@@ -81,7 +86,9 @@ public class LiveMarketCandleService {
                         DailyDataStatusService dailyDataStatusService,
                         ApplicationEventPublisher eventPublisher,
                         LiveMinuteResolutionRepository liveMinuteResolutionRepository,
-                        StockPriceRepository stockPriceRepository) {
+                        StockPriceRepository stockPriceRepository,
+                        @Autowired(required = false) StockContextCache stockContextCache,
+                        @Autowired(required = false) MarketIndexRegistry marketIndexRegistry) {
 
                 this(
                                 marketCandleRepository,
@@ -92,7 +99,9 @@ public class LiveMarketCandleService {
                                 eventPublisher,
                                 liveMinuteResolutionRepository,
                                 stockPriceRepository,
-                                defaultGapDetectionExecutor());
+                                defaultGapDetectionExecutor(),
+                                stockContextCache,
+                                marketIndexRegistry);
         }
 
         /*
@@ -117,7 +126,9 @@ public class LiveMarketCandleService {
                                 eventPublisher,
                                 liveMinuteResolutionRepository,
                                 null,
-                                Runnable::run);
+                                Runnable::run,
+                                null,
+                                null);
         }
 
         public LiveMarketCandleService(
@@ -131,6 +142,33 @@ public class LiveMarketCandleService {
                         StockPriceRepository stockPriceRepository,
                         Executor gapDetectionExecutor) {
 
+                this(
+                                marketCandleRepository,
+                                timeProvider,
+                                dailyStockContextService,
+                                intradayIndicatorService,
+                                dailyDataStatusService,
+                                eventPublisher,
+                                liveMinuteResolutionRepository,
+                                stockPriceRepository,
+                                gapDetectionExecutor,
+                                null,
+                                null);
+        }
+
+        public LiveMarketCandleService(
+                        MarketCandleRepository marketCandleRepository,
+                        TimeProvider timeProvider,
+                        DailyStockContextService dailyStockContextService,
+                        IntradayIndicatorService intradayIndicatorService,
+                        DailyDataStatusService dailyDataStatusService,
+                        ApplicationEventPublisher eventPublisher,
+                        LiveMinuteResolutionRepository liveMinuteResolutionRepository,
+                        StockPriceRepository stockPriceRepository,
+                        Executor gapDetectionExecutor,
+                        StockContextCache stockContextCache,
+                        MarketIndexRegistry marketIndexRegistry) {
+
                 this.marketCandleRepository = marketCandleRepository;
                 this.timeProvider = timeProvider;
                 this.dailyStockContextService = dailyStockContextService;
@@ -140,6 +178,8 @@ public class LiveMarketCandleService {
                 this.liveMinuteResolutionRepository = liveMinuteResolutionRepository;
                 this.stockPriceRepository = stockPriceRepository;
                 this.gapDetectionExecutor = gapDetectionExecutor != null ? gapDetectionExecutor : defaultGapDetectionExecutor();
+                this.stockContextCache = stockContextCache;
+                this.marketIndexRegistry = marketIndexRegistry;
         }
 
         private static ExecutorService defaultGapDetectionExecutor() {
@@ -622,6 +662,21 @@ public class LiveMarketCandleService {
 
                 oneMinute = applyCommonIndicators(oneMinute);
 
+                if (stockContextCache != null && oneMinute != null) {
+                        stockContextCache.onCandleFinalized(oneMinute);
+                }
+
+                if (eventPublisher != null && oneMinute != null) {
+                        boolean isIdx = marketIndexRegistry != null && marketIndexRegistry.isRegisteredIndex(oneMinute.getSymbol());
+                        eventPublisher.publishEvent(new CandleFinalizedEvent(
+                                        oneMinute.getSymbol(),
+                                        oneMinute.getExchange(),
+                                        CandleTimeframe.ONE_MINUTE,
+                                        oneMinute.getCandleTime(),
+                                        oneMinute,
+                                        isIdx));
+                }
+
                 dailyDataStatusService.markLive(
                                 oneMinute.getSymbol(),
                                 oneMinute.getExchange(),
@@ -859,6 +914,21 @@ public class LiveMarketCandleService {
                 }
 
                 MarketCandle calculated = applyCommonIndicators(derived);
+
+                if (stockContextCache != null && calculated != null) {
+                        stockContextCache.onCandleFinalized(calculated);
+                }
+
+                if (eventPublisher != null && calculated != null) {
+                        boolean isIdx = marketIndexRegistry != null && marketIndexRegistry.isRegisteredIndex(calculated.getSymbol());
+                        eventPublisher.publishEvent(new CandleFinalizedEvent(
+                                        calculated.getSymbol(),
+                                        calculated.getExchange(),
+                                        timeframe,
+                                        calculated.getCandleTime(),
+                                        calculated,
+                                        isIdx));
+                }
         }
 
         private MarketCandle upsertDerivedCandle(

@@ -30,6 +30,8 @@ public class StartupRecoveryService {
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider;
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.PositionRepository> positionRepositoryProvider;
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simulatedPositionRepositoryProvider;
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.strategy.cache.StockContextCache> stockContextCacheProvider;
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.StockUniverseRepository> stockUniverseRepositoryProvider;
 
     @org.springframework.beans.factory.annotation.Autowired
     public StartupRecoveryService(
@@ -42,7 +44,9 @@ public class StartupRecoveryService {
             WorkflowStatusService workflowStatusService,
             org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider,
             org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.PositionRepository> positionRepositoryProvider,
-            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simulatedPositionRepositoryProvider) {
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simulatedPositionRepositoryProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.strategy.cache.StockContextCache> stockContextCacheProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.StockUniverseRepository> stockUniverseRepositoryProvider) {
         this.timeProvider = timeProvider;
         this.tradingCalendar = tradingCalendar;
         this.backfillQueueService = backfillQueueService;
@@ -53,6 +57,25 @@ public class StartupRecoveryService {
         this.positionManagerServiceProvider = positionManagerServiceProvider;
         this.positionRepositoryProvider = positionRepositoryProvider;
         this.simulatedPositionRepositoryProvider = simulatedPositionRepositoryProvider;
+        this.stockContextCacheProvider = stockContextCacheProvider;
+        this.stockUniverseRepositoryProvider = stockUniverseRepositoryProvider;
+    }
+
+    public StartupRecoveryService(
+            TimeProvider timeProvider,
+            TradingCalendar tradingCalendar,
+            BackfillQueueService backfillQueueService,
+            LiveMarketSnapshotService liveMarketSnapshotService,
+            PreMarketWorkflowService preMarketWorkflowService,
+            EodReconciliationService eodReconciliationService,
+            WorkflowStatusService workflowStatusService,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.PositionRepository> positionRepositoryProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simulatedPositionRepositoryProvider) {
+        this(timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
+                preMarketWorkflowService, eodReconciliationService, workflowStatusService,
+                positionManagerServiceProvider, positionRepositoryProvider, simulatedPositionRepositoryProvider,
+                null, null);
     }
 
     public StartupRecoveryService(
@@ -148,6 +171,28 @@ public class StartupRecoveryService {
                     }
                 } catch (Exception ex) {
                     log.warn("Position rehydration on startup warning: {}", ex.getMessage());
+                }
+            }
+
+            // 5. If market has already opened (>= 09:15) on an active trading day, warm up StockContextCache
+            LocalTime marketOpen = LocalTime.of(9, 15);
+            if (!now.toLocalTime().isBefore(marketOpen) && stockContextCacheProvider != null) {
+                try {
+                    com.trading.scanner.strategy.cache.StockContextCache cache = stockContextCacheProvider.getIfAvailable();
+                    if (cache != null && stockUniverseRepositoryProvider != null) {
+                        com.trading.scanner.repository.StockUniverseRepository universeRepo = stockUniverseRepositoryProvider.getIfAvailable();
+                        if (universeRepo != null) {
+                            java.util.List<String> activeSymbols = universeRepo.findByIsActiveTrueOrderBySymbolAsc()
+                                    .stream()
+                                    .map(com.trading.scanner.model.StockUniverse::getSymbol)
+                                    .toList();
+                            log.info("Midday startup detected on active trading day ({}, time={}). Warming up StockContextCache for {} equities + indices...",
+                                    today, now.toLocalTime(), activeSymbols.size());
+                            cache.warmUp(today, activeSymbols, "NSE");
+                        }
+                    }
+                } catch (Exception ex) {
+                    log.warn("StockContextCache warmup on startup warning: {}", ex.getMessage());
                 }
             }
         }

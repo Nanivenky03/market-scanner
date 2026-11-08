@@ -20,7 +20,13 @@ This document is the authoritative developer, tester, and architecture guide for
   - **V2.1: Evaluation Infrastructure & In-Memory Cache:** 5-minute candle close evaluation cadence (09:30–01:00 PM), in-memory `StockContextCache` across Nifty 500 (eliminating DB I/O bottleneck), fail-closed checks on active gap repair/backfill.
   - **V2.2: FCHB Strategy Module & Position Handler:** First 5-minute candle (09:15–09:19 AM) reference building, 7-Gate Red/Yellow/Green Traffic-Light Quality Gate (RSI gate permanently removed to allow institutional runners to expand), 5M signal detection (`BO_% <= 0.8%`, `VOL_X >= 1.8`, 15M trend alignment, candle body >= 0.60, upper wick <= 0.25). Decoupled `FchbPositionHandler` with 6-tier technical exit hierarchy: 14:55 hard close, 14:45 wind-down, real-time tick SL, Target 1 (+0.73R) partial exit with immediate breakeven lock, 5M candle invalidation rules (failed breakout cut at -0.5R, VWAP breakdown cut at -0.5R, momentum exhaustion cut), and clean 1.0R/0.73R dual-leash trailing stop.
   - **V2.3: Portfolio Risk Engine, Multi-Broker Accounting & 23-Day Replay Validation:** 5-Phase `RiskEngine` pipeline with strictly 1 entry per stock per day, Strategy-Level Limits (max 5 trades/day, max 3 losses cooling off; static 3 concurrent positions cap permanently removed), 4.0% daily loss shield. Multi-broker statutory charges engine (`BrokerChargesCalculator`) supporting Kotak Neo Zero-Brokerage (`BrokerModel.KOTAK_NEO`) and Angel One. Replayed across 23 historical sessions on 499 stocks: 53 trades, 62.3% win rate, Profit Factor 1.91, +10.69% Net Return. Empirical audit confirmed 14:45 wind-down captures +₹1,087.55 more Gross P&L (+₹1,394.73 Net) than 14:15.
-  - **V2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor - NEXT MILESTONE):** Hooking live 5M candle completions to `FchbStrategy.evaluate()`, real-time tick evaluation to `PositionManagerService`, and executing paper orders against live broker feeds without real financial risk.
+  - **V2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor - CURRENT ACTIVE MILESTONE):**
+    * V2.4.1: Sector Indices Infrastructure & Stock-to-Sector Classification (`stock_sector_classification` table, dynamic NSE scraper/seeder, WebSocket multi-index subscription).
+    * V2.4.2: Real-Time Market Data Ingestion Hooks & `StockContext` Enrichment (direct `onCandleFinalized` hook, instant sector/benchmark metrics).
+    * V2.4.3: Decoupled Order Engine Core & Concurrency Safety (`OrderExecutionService`, `SimulatedOrderAdapter`, per-strategy mode, per-symbol locks).
+    * V2.4.4: In-Flight Position Management, Signal Conductor & Exit Execution (5M setup conductor, live tick SL/T1 exit dispatching).
+    * V2.4.5: Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trailing history JSON, Kotak Neo statutory charges).
+    * V2.4.6: Diagnostic & Operational REST APIs (`/api/v1/simulation/*` endpoints).
 
 - **Version 3.0 (Advanced Risk & Research Laboratory):**
   - Extend V2 baseline risk/position management with advanced portfolio controls and risk policies.
@@ -872,10 +878,23 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - Multi-Broker Statutory Accounting: `BrokerChargesCalculator` with Kotak Neo zero-brokerage support (`BrokerModel.KOTAK_NEO`).
     - 23-Day Empirical Replay Audit: Replayed all 23 historical market sessions in `mithron_prod` database on 499 symbols. Results: 53 executed trades, 62.3% win rate, Profit Factor 1.91, +₹6,157.61 Gross P&L, -₹810.21 Kotak Neo fees, **+₹5,347.40 Net Realized P&L (+10.69% Return on Capital)**, Max Drawdown 2.52%. Empirical wind-down audit proved 14:45 captured +₹1,087.55 more Gross P&L (+₹1,394.73 Net) than 14:15.
     - Verified State: **418 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
-- [ ] **V2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor)** `[NEXT MILESTONE]`
-  - Real-time Conductor / Event Dispatcher hooking live 5M candle completions to `FchbStrategy.evaluate()`.
-  - Live tick / 1M candle hooking to `PositionManagerService.evaluatePosition()`.
-  - In-Memory Simulation Order Engine executing paper orders against live broker feeds without real financial risk.
+- [ ] **V2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor)** `[CURRENT ACTIVE MILESTONE]`
+  - [x] **V2.4.1: Sector Indices Infrastructure & Dynamic Stock-to-Sector Classification** `[COMPLETED & VERIFIED]`
+    - `MarketIndexRegistry` supporting 28 benchmark, sectoral, thematic, and volatility indices (`NIFTY 50`, `NIFTY BANK`, `NIFTY IT`, `NIFTY AUTO`, `NIFTY METAL`, `NIFTY PHARMA`, `NIFTY FMCG`, `NIFTY ENERGY`, `NIFTY INFRA`, `NIFTY REALTY`, etc.).
+    - Database Schema: `stock_sector_classification` (Flyway `V036`) with zero static hardcoding, indexing on symbol and sector symbol.
+    - Dynamic NSE Seeder: `SectorClassificationSyncService` dynamically fetches official Nifty 500 / Total Market constituent CSV on startup if empty, with bundled classpath fallback (`ind_niftytotalmarket_list.csv`).
+    - WebSocket Multi-Index Subscription: `UniverseWebSocketSubscriptionService` subscribes to both active equities and sector indices without polluting `stock_universe`.
+    - REST Endpoints: `SectorClassificationController` (`/api/v1/sectors/*`).
+  - [x] **V2.4.2: Real-Time Market Data Ingestion Hooks & StockContext Enrichment** `[COMPLETED & VERIFIED]`
+    - In-Memory Pipeline: Direct hook from `LiveMarketCandleService` into `StockContextCache.onCandleFinalized()` upon 1M, 5M, and 15M candle completion.
+    - Event Driven: Published `CandleFinalizedEvent` via Spring ApplicationEventPublisher for decouple strategy listeners.
+    - Midday Disconnect / Crash Recovery: `StartupRecoveryService` checks if today is an active trading day (`tradingCalendar.isTradingDay`) and market has opened ($\ge 09:15$), automatically warming up `StockContextCache` from DB historical candles and daily context.
+    - Enriched `StockContext`: Zero-DB memory snapshot containing current LTP, VWAP, day high/low, sector index symbol, sector VWAP distance %, and Nifty benchmark VWAP distance %.
+    - Verified State: **436 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
+  - [ ] **V2.4.3:** Decoupled Order Engine Core & Concurrency Safety (`OrderExecutionService`, `SimulatedOrderAdapter`, per-strategy mode, per-symbol locks).
+  - [ ] **V2.4.4:** In-Flight Position Management, Signal Conductor & Exit Execution (5M setup conductor, live tick SL/T1 exit dispatching).
+  - [ ] **V2.4.5:** Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trailing history JSON, Kotak Neo statutory charges).
+  - [ ] **V2.4.6:** Diagnostic & Operational REST APIs (`/api/v1/simulation/*` endpoints).
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`
 - [ ] **V4.0: Professional Web UI & Trader Dashboard** `[PLANNED]`
 - [ ] **V5.0: Trading Engine & Order Execution (SmartAPI)** `[PLANNED]`

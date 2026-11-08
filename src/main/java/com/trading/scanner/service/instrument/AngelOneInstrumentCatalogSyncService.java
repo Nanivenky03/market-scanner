@@ -34,6 +34,7 @@ public class AngelOneInstrumentCatalogSyncService {
         private final AngelOneProperties angelOneProperties;
         private final InstrumentMasterRepository instrumentMasterRepository;
         private final com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService;
+        private final MarketIndexRegistry marketIndexRegistry;
 
         @Value("${provider.angelone.instrument-master-url:https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json}")
         private String instrumentMasterUrl;
@@ -44,12 +45,14 @@ public class AngelOneInstrumentCatalogSyncService {
                         AngelOneApiExecutor apiExecutor,
                         AngelOneProperties angelOneProperties,
                         InstrumentMasterRepository instrumentMasterRepository,
-                        @Autowired(required = false) com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService) {
+                        @Autowired(required = false) com.trading.scanner.service.provider.angelone.AngelOneTickParserService angelOneTickParserService,
+                        @Autowired(required = false) MarketIndexRegistry marketIndexRegistry) {
                 this.objectMapper = objectMapper;
                 this.apiExecutor = apiExecutor;
                 this.angelOneProperties = angelOneProperties;
                 this.instrumentMasterRepository = instrumentMasterRepository;
                 this.angelOneTickParserService = angelOneTickParserService;
+                this.marketIndexRegistry = marketIndexRegistry != null ? marketIndexRegistry : new MarketIndexRegistry();
         }
 
         public AngelOneInstrumentCatalogSyncService(
@@ -57,7 +60,7 @@ public class AngelOneInstrumentCatalogSyncService {
                         AngelOneApiExecutor apiExecutor,
                         AngelOneProperties angelOneProperties,
                         InstrumentMasterRepository instrumentMasterRepository) {
-                this(objectMapper, apiExecutor, angelOneProperties, instrumentMasterRepository, null);
+                this(objectMapper, apiExecutor, angelOneProperties, instrumentMasterRepository, null, new MarketIndexRegistry());
         }
 
         private volatile java.time.LocalDate lastCatalogSyncDate;
@@ -255,10 +258,24 @@ public class AngelOneInstrumentCatalogSyncService {
                         return null;
                 }
 
+                String token = text(
+                                node,
+                                "token");
+
+                if (isBlank(token)) {
+                        return null;
+                }
+
                 String applicationSymbol;
 
                 if (index) {
-                        if ("NIFTY 50".equalsIgnoreCase(name) || "NIFTY 50".equalsIgnoreCase(providerSymbol)
+                        if (marketIndexRegistry != null && marketIndexRegistry.getByToken(token).isPresent()) {
+                                applicationSymbol = marketIndexRegistry.getByToken(token).get().canonicalSymbol();
+                        } else if (marketIndexRegistry != null && marketIndexRegistry.resolve(name).isPresent()) {
+                                applicationSymbol = marketIndexRegistry.resolve(name).get().canonicalSymbol();
+                        } else if (marketIndexRegistry != null && marketIndexRegistry.resolve(providerSymbol).isPresent()) {
+                                applicationSymbol = marketIndexRegistry.resolve(providerSymbol).get().canonicalSymbol();
+                        } else if ("NIFTY 50".equalsIgnoreCase(name) || "NIFTY 50".equalsIgnoreCase(providerSymbol)
                                         || "NIFTY".equalsIgnoreCase(name) || "NIFTY".equalsIgnoreCase(providerSymbol)) {
                                 applicationSymbol = "NIFTY";
                         } else {
@@ -276,14 +293,6 @@ public class AngelOneInstrumentCatalogSyncService {
                 applicationSymbol = normalize(applicationSymbol);
 
                 if (isBlank(applicationSymbol)) {
-                        return null;
-                }
-
-                String token = text(
-                                node,
-                                "token");
-
-                if (isBlank(token)) {
                         return null;
                 }
 

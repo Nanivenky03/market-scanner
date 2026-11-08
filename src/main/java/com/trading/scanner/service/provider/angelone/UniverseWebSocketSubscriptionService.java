@@ -10,6 +10,8 @@ import com.trading.scanner.repository.InstrumentMasterRepository;
 import com.trading.scanner.repository.LiveFeedStateRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
 import lombok.RequiredArgsConstructor;
+import com.trading.scanner.service.instrument.MarketIndexRegistry;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,7 +24,6 @@ import java.util.Locale;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class UniverseWebSocketSubscriptionService {
 
         private static final String NIFTY_SYMBOL = "NIFTY";
@@ -34,6 +35,36 @@ public class UniverseWebSocketSubscriptionService {
         private final AngelOneProperties angelOneProperties;
         private final AngelOneWebSocketService angelOneWebSocketService;
         private final TimeProvider timeProvider;
+        private final MarketIndexRegistry marketIndexRegistry;
+
+        @Autowired
+        public UniverseWebSocketSubscriptionService(
+                        StockUniverseRepository stockUniverseRepository,
+                        InstrumentMasterRepository instrumentMasterRepository,
+                        LiveFeedStateRepository liveFeedStateRepository,
+                        AngelOneProperties angelOneProperties,
+                        AngelOneWebSocketService angelOneWebSocketService,
+                        TimeProvider timeProvider,
+                        @Autowired(required = false) MarketIndexRegistry marketIndexRegistry) {
+                this.stockUniverseRepository = stockUniverseRepository;
+                this.instrumentMasterRepository = instrumentMasterRepository;
+                this.liveFeedStateRepository = liveFeedStateRepository;
+                this.angelOneProperties = angelOneProperties;
+                this.angelOneWebSocketService = angelOneWebSocketService;
+                this.timeProvider = timeProvider;
+                this.marketIndexRegistry = marketIndexRegistry != null ? marketIndexRegistry : new MarketIndexRegistry();
+        }
+
+        public UniverseWebSocketSubscriptionService(
+                        StockUniverseRepository stockUniverseRepository,
+                        InstrumentMasterRepository instrumentMasterRepository,
+                        LiveFeedStateRepository liveFeedStateRepository,
+                        AngelOneProperties angelOneProperties,
+                        AngelOneWebSocketService angelOneWebSocketService,
+                        TimeProvider timeProvider) {
+                this(stockUniverseRepository, instrumentMasterRepository, liveFeedStateRepository,
+                                angelOneProperties, angelOneWebSocketService, timeProvider, new MarketIndexRegistry());
+        }
 
         @Transactional
         public SubscriptionResult subscribeActiveUniverse(
@@ -191,6 +222,49 @@ public class UniverseWebSocketSubscriptionService {
                                                 new AngelOneWebSocketService.TokenRef(
                                                                 NIFTY_SYMBOL,
                                                                 niftyToken)));
+
+                if (marketIndexRegistry != null) {
+                        for (MarketIndexRegistry.IndexDefinition idx : marketIndexRegistry.getAllRegisteredIndices()) {
+                                if (NIFTY_SYMBOL.equalsIgnoreCase(idx.canonicalSymbol())) {
+                                        continue;
+                                }
+
+                                instrumentMasterRepository
+                                                .findBySymbolAndExchange(
+                                                                idx.canonicalSymbol(),
+                                                                idx.exchange())
+                                                .filter(this::hasValidToken)
+                                                .ifPresentOrElse(
+                                                                instrument -> {
+                                                                        String token = instrument.getBrokerToken();
+                                                                        targets.putIfAbsent(
+                                                                                        token,
+                                                                                        new SubscriptionTarget(
+                                                                                                        idx.canonicalSymbol(),
+                                                                                                        idx.exchange(),
+                                                                                                        new AngelOneWebSocketService.TokenRef(
+                                                                                                                        idx.canonicalSymbol(),
+                                                                                                                        token)));
+                                                                },
+                                                                () -> {
+                                                                        if (idx.brokerToken() != null && !idx.brokerToken().isBlank()) {
+                                                                                instrumentMasterRepository
+                                                                                                .findByBrokerToken(idx.brokerToken())
+                                                                                                .filter(this::hasValidToken)
+                                                                                                .ifPresent(instrument -> {
+                                                                                                        targets.putIfAbsent(
+                                                                                                                        idx.brokerToken(),
+                                                                                                                        new SubscriptionTarget(
+                                                                                                                                        idx.canonicalSymbol(),
+                                                                                                                                        idx.exchange(),
+                                                                                                                                        new AngelOneWebSocketService.TokenRef(
+                                                                                                                                                        idx.canonicalSymbol(),
+                                                                                                                                                        idx.brokerToken())));
+                                                                                                });
+                                                                        }
+                                                                });
+                        }
+                }
 
                 return new ArrayList<>(
                                 targets.values());
