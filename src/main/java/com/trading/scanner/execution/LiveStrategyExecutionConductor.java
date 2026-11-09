@@ -44,7 +44,7 @@ import java.util.Optional;
 public class LiveStrategyExecutionConductor {
 
     private static final LocalTime ENTRY_WINDOW_START = LocalTime.of(9, 30);
-    private static final LocalTime ENTRY_WINDOW_END = LocalTime.of(10, 45);
+    private static final LocalTime ENTRY_WINDOW_END = LocalTime.of(10, 15);
     private static final LocalTime WIND_DOWN_TIME = LocalTime.of(14, 45);
 
     private final StockContextCache stockContextCache;

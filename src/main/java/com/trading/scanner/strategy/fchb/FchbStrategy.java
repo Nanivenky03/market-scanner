@@ -34,7 +34,7 @@ public class FchbStrategy implements Strategy {
     public static final double TARGET_1_R_MULTIPLE = 0.73;
 
     private static final LocalTime ENTRY_WINDOW_START = LocalTime.of(9, 30);
-    private static final LocalTime ENTRY_WINDOW_END = LocalTime.of(10, 45);
+    private static final LocalTime ENTRY_WINDOW_END = LocalTime.of(10, 15);
 
     @Override
     public Integer getStrategyId() {
@@ -115,7 +115,7 @@ public class FchbStrategy implements Strategy {
         }
         LocalTime candleTime = current5m.getCandleTime().toLocalTime();
         if (candleTime.isBefore(ENTRY_WINDOW_START) || candleTime.isAfter(ENTRY_WINDOW_END)) {
-            return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("ENTRY_WINDOW_0930_1000"), "OUTSIDE_ENTRY_WINDOW");
+            return StrategyEvaluation.notQualified(0.0, Collections.emptyList(), List.of("ENTRY_WINDOW_0930_1015"), "OUTSIDE_ENTRY_WINDOW");
         }
 
         Double close = current5m.getClosePrice();

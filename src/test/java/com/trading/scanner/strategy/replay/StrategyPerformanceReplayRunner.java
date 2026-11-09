@@ -23,15 +23,24 @@ public class StrategyPerformanceReplayRunner {
 
     private final double initialCapital;
     private final LocalTime entryWindowStart = LocalTime.of(9, 30);
-    private final LocalTime entryWindowEnd = LocalTime.of(10, 0);
+    private final LocalTime entryWindowEnd;
     private final LocalTime eodSquareOffTime = LocalTime.of(15, 25);
 
     public StrategyPerformanceReplayRunner() {
-        this(30000.0);
+        this(30000.0, LocalTime.of(10, 0));
     }
 
     public StrategyPerformanceReplayRunner(double initialCapital) {
+        this(initialCapital, LocalTime.of(10, 0));
+    }
+
+    public StrategyPerformanceReplayRunner(double initialCapital, LocalTime entryWindowEnd) {
         this.initialCapital = initialCapital;
+        this.entryWindowEnd = entryWindowEnd;
+    }
+
+    public LocalTime getEntryWindowEnd() {
+        return entryWindowEnd;
     }
 
     public MultiDayReplayReport replayAllDays(Strategy strategy, StrategyPositionHandler positionHandler) {
@@ -229,6 +238,9 @@ public class StrategyPerformanceReplayRunner {
                             // Directly register position into production PositionManagerService
                             positionManager.registerPosition(PortfolioMode.PAPER, pos);
 
+                            double entryTurnover = qty * proposal.entryPrice();
+                            double buyCharges = BrokerChargesCalculator.calculateBuyLegCharges(entryTurnover);
+
                             ReplayTrade trade = ReplayTrade.builder()
                                     .tradeId(symbol + "-" + day.getTradingDate() + "-" + time)
                                     .symbol(symbol)
@@ -238,6 +250,9 @@ public class StrategyPerformanceReplayRunner {
                                     .quantity(qty)
                                     .initialStopLoss(proposal.initialStopLoss())
                                     .target1Price(proposal.initialTarget())
+                                    .grossPnl(0.0)
+                                    .charges(buyCharges)
+                                    .netPnl(-buyCharges)
                                     .build();
                             activeTrades.put(symbol, trade);
 
@@ -316,34 +331,32 @@ public class StrategyPerformanceReplayRunner {
         if (action.type() == PositionAction.ActionType.PARTIAL_EXIT) {
             int partialQty = posBefore.currentQuantity() / 2;
             if (partialQty > 0) {
-                double buyTurnover = partialQty * posBefore.entryPrice();
                 double sellTurnover = partialQty * executedPrice;
                 double gross = (executedPrice - posBefore.entryPrice()) * partialQty;
-                double charges = BrokerChargesCalculator.calculateRoundTripCharges(buyTurnover, sellTurnover);
-                double net = gross - charges;
+                double sellCharges = BrokerChargesCalculator.calculateSellLegCharges(sellTurnover);
+                double net = gross - sellCharges;
 
                 trade.setTarget1Hit(true);
                 trade.setTarget1ExitPrice(executedPrice);
                 trade.setTarget1ExitTime(current1m.getCandleTime());
                 trade.setTarget1Quantity(partialQty);
                 trade.setGrossPnl(trade.getGrossPnl() + gross);
-                trade.setCharges(trade.getCharges() + charges);
+                trade.setCharges(trade.getCharges() + sellCharges);
                 trade.setNetPnl(trade.getNetPnl() + net);
             }
         } else if (action.type() == PositionAction.ActionType.FULL_EXIT) {
             int exitQty = posBefore.currentQuantity();
-            double buyTurnover = exitQty * posBefore.entryPrice();
             double sellTurnover = exitQty * executedPrice;
             double gross = (executedPrice - posBefore.entryPrice()) * exitQty;
-            double charges = BrokerChargesCalculator.calculateRoundTripCharges(buyTurnover, sellTurnover);
-            double net = gross - charges;
+            double sellCharges = BrokerChargesCalculator.calculateSellLegCharges(sellTurnover);
+            double net = gross - sellCharges;
 
             trade.setFinalExitPrice(executedPrice);
             trade.setFinalExitTime(current1m.getCandleTime());
             trade.setFinalExitQuantity(exitQty);
             trade.setExitReason(action.reason());
             trade.setGrossPnl(trade.getGrossPnl() + gross);
-            trade.setCharges(trade.getCharges() + charges);
+            trade.setCharges(trade.getCharges() + sellCharges);
             trade.setNetPnl(trade.getNetPnl() + net);
 
             completedTrades.add(trade);
