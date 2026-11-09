@@ -20,13 +20,13 @@ This document is the authoritative developer, tester, and architecture guide for
   - **V2.1: Evaluation Infrastructure & In-Memory Cache:** 5-minute candle close evaluation cadence (09:30–01:00 PM), in-memory `StockContextCache` across Nifty 500 (eliminating DB I/O bottleneck), fail-closed checks on active gap repair/backfill.
   - **V2.2: FCHB Strategy Module & Position Handler:** First 5-minute candle (09:15–09:19 AM) reference building, 7-Gate Red/Yellow/Green Traffic-Light Quality Gate (RSI gate permanently removed to allow institutional runners to expand), 5M signal detection (`BO_% <= 0.8%`, `VOL_X >= 1.8`, 15M trend alignment, candle body >= 0.60, upper wick <= 0.25). Decoupled `FchbPositionHandler` with 6-tier technical exit hierarchy: 14:55 hard close, 14:45 wind-down, real-time tick SL, Target 1 (+0.73R) partial exit with immediate breakeven lock, 5M candle invalidation rules (failed breakout cut at -0.5R, VWAP breakdown cut at -0.5R, momentum exhaustion cut), and clean 1.0R/0.73R dual-leash trailing stop.
   - **V2.3: Portfolio Risk Engine, Multi-Broker Accounting & 23-Day Replay Validation:** 5-Phase `RiskEngine` pipeline with strictly 1 entry per stock per day, Strategy-Level Limits (max 5 trades/day, max 3 losses cooling off; static 3 concurrent positions cap permanently removed), 4.0% daily loss shield. Multi-broker statutory charges engine (`BrokerChargesCalculator`) supporting Kotak Neo Zero-Brokerage (`BrokerModel.KOTAK_NEO`) and Angel One. Replayed across 23 historical sessions on 499 stocks: 53 trades, 62.3% win rate, Profit Factor 1.91, +10.69% Net Return. Empirical audit confirmed 14:45 wind-down captures +₹1,087.55 more Gross P&L (+₹1,394.73 Net) than 14:15.
-  - **V2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor - CURRENT ACTIVE MILESTONE):**
+  - **Version 2.4 (Live Data Simulation Order Engine - COMPLETE ✅):**
     * V2.4.1: Sector Indices Infrastructure & Stock-to-Sector Classification (`stock_sector_classification` table, dynamic NSE scraper/seeder, WebSocket multi-index subscription).
-    * V2.4.2: Real-Time Market Data Ingestion Hooks & `StockContext` Enrichment (direct `onCandleFinalized` hook, instant sector/benchmark metrics).
-    * V2.4.3: Decoupled Order Engine Core & Concurrency Safety (`OrderExecutionService`, `SimulatedOrderAdapter`, per-strategy mode, per-symbol locks).
-    * V2.4.4: In-Flight Position Management, Signal Conductor & Exit Execution (5M setup conductor, live tick SL/T1 exit dispatching).
-    * V2.4.5: Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trailing history JSON, Kotak Neo statutory charges).
-    * V2.4.6: Diagnostic & Operational REST APIs (`/api/v1/simulation/*` endpoints).
+    * V2.4.2: Real-Time Market Data Ingestion Hooks & StockContext Enrichment (direct zero-DB `onCandleFinalized` hooks, midday crash warmup recovery, enriched `StockContext` memory cache).
+    * V2.4.3: Decoupled Order Engine Core & Concurrency Safety (`BrokerOrderAdapter` decoupling, `SimulatedOrderAdapter` with Kotak Neo charges, striped per-symbol locks, Modify-to-Market reverse position prevention).
+    * V2.4.4: In-Flight Position Management, Signal Conductor & Exit Execution (5M setup conductor, live tick SL/T1 exit dispatching, Target 1 partial profit banking, 14:45 wind-down, 1M candle technical invalidation, minute rollover SL sync).
+    * V2.4.5: Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trough price, holding duration, JSON trailing history, JSON setup context, granular statutory breakdown).
+    * V2.4.6: Diagnostic & Operational REST APIs (Dynamic compounding simulation engine, two-tier reset TODAY vs TOTAL, live LTP-enriched active positions, orders ledger, lifetime/custom performance analytics, dynamic strategy mode management).
 
 - **Version 3.0 (Advanced Risk & Research Laboratory):**
   - Extend V2 baseline risk/position management with advanced portfolio controls and risk policies.
@@ -915,7 +915,15 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - Setup & Market Context Serialization: Persists complete quantitative candidate snapshot in `market_context` JSON (`volX`, extension %, yellow count, FCH/FCL reference levels, strategy score, structural invalidation level).
     - Itemized Statutory Friction Breakdown: Added `BrokerChargesCalculator.calculateItemizedCharges()` capturing exact itemized statutory friction (turnover, zero-brokerage Kotak Neo, STT, stamp duty, exchange turnover fee, SEBI fee, GST).
     - Verified State: **457 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
-  - [ ] **V2.4.6:** Diagnostic & Operational REST APIs (`/api/v1/simulation/*` endpoints).
+  - [x] **V2.4.6: Diagnostic & Operational REST APIs** `[COMPLETED & VERIFIED]`
+    - Lean REST Endpoints: Exposes 7 operational and diagnostic endpoints under `/api/v1/simulation/*`.
+    - Dynamic Compounding Capital: Capital naturally compounds from historical closed trades in `simulated_positions` without artificial daily cron snapshots. Supports setting baseline capital via `POST /api/v1/simulation/capital?amount=...`.
+    - Two-Tier Simulation Reset: Implemented `POST /api/v1/simulation/reset` with `scope=TODAY` (clears today's in-memory positions, resting SL orders, today's database orders/positions, and restores capital to today's morning opening balance) vs `scope=TOTAL` (full database wipeout of simulated trades and resets baseline capital to default ₹50,000).
+    - Live In-Flight Positions: `GET /api/v1/simulation/positions/open` returns active positions enriched with zero-DB live LTP from `StockContextCache`, live unrealized P&L, current trailing stop, Target 1 status, peak price, trough price, and resting broker SL-M order ID.
+    - Orders Ledger: `GET /api/v1/simulation/orders` returns simulated order history for today or date range, merging historical fills with live pending resting orders from memory.
+    - Multi-Period Performance Analytics: `GET /api/v1/simulation/performance` calculates lifetime or date-filtered metrics: capital progression, win rate, gross P&L, Kotak Neo statutory friction, net P&L, profit factor, avg win/loss, win/loss ratio, max MFE, max MAE, and average holding duration.
+    - Strategy Control: `GET /api/v1/simulation/strategies` and `POST /api/v1/simulation/strategies/{strategyId}/mode` for real-time strategy monitoring and execution mode toggling (`PAPER`, `LIVE`, `DISABLED`).
+    - Verified State: **472 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`
 - [ ] **V4.0: Professional Web UI & Trader Dashboard** `[PLANNED]`
 - [ ] **V5.0: Trading Engine & Order Execution (SmartAPI)** `[PLANNED]`

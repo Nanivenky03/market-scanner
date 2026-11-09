@@ -369,6 +369,11 @@ public class SimulatedOrderAdapter implements BrokerOrderAdapter {
         return Collections.unmodifiableMap(restingOrders);
     }
 
+    public void clearAllRestingOrders() {
+        restingOrders.clear();
+        log.info("[PAPER] Cleared all resting simulated orders");
+    }
+
     private String generateBrokerOrderId() {
         return "SIM_ORD_" + System.currentTimeMillis() + "_" + orderSequence.incrementAndGet();
     }

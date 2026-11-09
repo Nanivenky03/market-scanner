@@ -14,7 +14,7 @@
 
     <groupId>com.trading</groupId>
     <artifactId>Mithron</artifactId>
-    <version>2.4.5</version>
+    <version>2.4.6</version>
     <name>Mithron</name>
     <description>Production-grade market data scanner</description>
 

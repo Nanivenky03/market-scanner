@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-11-08  
-Status: **Version 2.3 Complete & Empirically Validated** (FCHB Strategy Intelligence, 7-Gate Traffic-Light Quality Matrix, Clean 1.0R/0.73R Leash Trailing Stop Model, Strategy-Level Risk Limits, Multi-Broker Statutory Accounting with Kotak Neo Zero-Brokerage, and 23-Day Production Replay Audit producing +10.69% Net Return — 418 unit & integration tests passing).
+Last audited: 2026-11-09  
+Status: **Version 2.4 Complete & Empirically Validated** (Live Data Simulation Order Engine, Sector Indices Infrastructure, Zero-DB StockContext Enrichment, Decoupled Broker Order Adapter, Event-Driven Signal & Position Conductor, Data Gold Mine Trade Forensics with MFE/MAE Excursion Tracking, Dynamic Compounding Capital Simulation & Diagnostic REST APIs — 472 unit & integration tests passing).
 
 ---
 
@@ -154,7 +154,7 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
       - 5-Phase Risk Engine Pipeline (`RiskEngine`): Strict sequence: Phase 1 (Gate 1: Symbol Lock, Gate 2: Strategy-Level Limits [Max 5 trades/day, Max 3 losses cooling-off], Gate 3: 4.0% Account Daily Loss Breaker; static 3 concurrent positions cap permanently removed) → Phase 2 (Signal Validity) → Phase 3 (1R Sizing & Margin) → Phase 4 (3x Friction Viability Filter) → Phase 5 (Master Open Risk Cap < 4.0% Forward-Looking Shield).
       - Precision Dual-Anchor Accounting (`PortfolioState`): Independent isolated tracking of `PortfolioState(PAPER)` vs `PortfolioState(LIVE)`, tracking gross PnL, statutory friction, net realized PnL, committed margin, and strategy-specific trade and loss counters.
       - 23-Day Forensic Replay Audit (`FchbForensicAnalysisTest`): Replayed across all 23 historical sessions in `mithron_prod` database on 499 symbols. Results: 53 executed trades, 62.3% win rate, Profit Factor 1.91, +₹6,157.61 Gross P&L, -₹810.21 Kotak Neo fees, **+₹5,347.40 Net Realized P&L (+10.69% Return on Capital)**, Max Drawdown 2.52%.
-    • V2.4 Live Data Simulation Order Engine (Production Paper Trading Conductor): CURRENT ACTIVE MILESTONE 🚀
+    • V2.4 Live Data Simulation Order Engine (Production Paper Trading Conductor): COMPLETED & VERIFIED ✅
       - V2.4.1 Sector Indices Infrastructure & Stock-to-Sector Classification: COMPLETED & VERIFIED ✅
         * Dedicated `MarketIndexRegistry` subscribing to 28 benchmark, sectoral, thematic, and volatility indices (`NIFTY 50`, `NIFTY BANK`, `NIFTY IT`, `NIFTY AUTO`, `NIFTY METAL`, `NIFTY PHARMA`, `NIFTY FMCG`, `NIFTY ENERGY`, `NIFTY INFRA`, `NIFTY REALTY`, etc.) via WebSocket alongside the equity universe without polluting `stock_universe`.
         * Official NSE sector classification table `stock_sector_classification` (Flyway `V036`) populated dynamically from NSE/NiftyIndices official constituent files without hardcoded SQL seeds, with bundled classpath fallback (`ind_niftytotalmarket_list.csv`).
@@ -184,8 +184,15 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
         * Extended `V035` Flyway schema directly with zero extra migration files.
         * Added `calculateItemizedCharges()` to `BrokerChargesCalculator` for granular statutory reporting.
         * Verified State: 457 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
-      - V2.4.6 Diagnostic & Operational REST APIs: NEXT STEP ⏳
-        * `/api/v1/simulation/*` endpoints for real-time portfolio metrics, active positions, order ledger, and strategy execution toggles.
+      - V2.4.6 Diagnostic & Operational REST APIs: COMPLETED & VERIFIED ✅
+        * `/api/v1/simulation/*` REST controller exposing lean diagnostic and operational APIs.
+        * Dynamic compounding simulation engine tracking capital from closed trades in `simulated_positions`.
+        * Two-tier simulation reset (`scope=TODAY` restoring morning opening balance vs `scope=TOTAL` full wipeout).
+        * Live enriched active positions with zero-DB LTP from `StockContextCache`, unrealized PnL, peak/trough excursions, and resting SL-M order IDs.
+        * Orders ledger merging DB history with active resting order queues.
+        * Multi-period performance analytics (win rate, gross/net PnL, Kotak Neo friction, profit factor, max MFE/MAE, duration).
+        * Strategy configuration inspection and dynamic execution mode toggles (`PAPER`, `LIVE`, `DISABLED`).
+        * Verified State: 472 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
   - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies

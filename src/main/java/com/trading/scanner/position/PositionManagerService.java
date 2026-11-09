@@ -90,6 +90,19 @@ public class PositionManagerService {
         }
     }
 
+    /**
+     * Clears all in-memory open positions for the specified portfolio mode.
+     */
+    public synchronized void clearPositionsForMode(PortfolioMode mode) {
+        Map<String, PositionSnapshot> map = activePositions.get(mode);
+        if (map != null) {
+            map.clear();
+        }
+        lastConfirmedLtp.clear();
+        pendingExitCandidatePrice.clear();
+        log.info("[{}] Cleared all active in-memory positions", mode);
+    }
+
     public Map<String, PositionSnapshot> getActivePositions(PortfolioMode mode) {
         Map<String, PositionSnapshot> map = activePositions.get(mode);
         return map != null ? Collections.unmodifiableMap(map) : Collections.emptyMap();
