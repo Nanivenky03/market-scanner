@@ -27,6 +27,7 @@ This document is the authoritative developer, tester, and architecture guide for
     * V2.4.4: In-Flight Position Management, Signal Conductor & Exit Execution (5M setup conductor, live tick SL/T1 exit dispatching, Target 1 partial profit banking, 14:45 wind-down, 1M candle technical invalidation, minute rollover SL sync).
     * V2.4.5: Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trough price, holding duration, JSON trailing history, JSON setup context, granular statutory breakdown).
     * V2.4.6: Diagnostic & Operational REST APIs (Dynamic compounding simulation engine, two-tier reset TODAY vs TOTAL, live LTP-enriched active positions, orders ledger, lifetime/custom performance analytics, dynamic strategy mode management).
+    * V2.4.7: Production Hardening, Daily Capital Ledger, Single-Flow Execution & Midday Recovery (Two identical daily capital ledger tables `capital` & `simulation_capital`, unified single-flow Modify-to-Market exit, ghost position elimination, 14:55 EOD hard close sweep, full 16-parameter snapshot crash recovery, resting order rehydration, zero-DB NIFTY filter, and documentation of 7 Real-World Live Broker Realities).
 
 - **Version 3.0 (Advanced Risk & Research Laboratory):**
   - Extend V2 baseline risk/position management with advanced portfolio controls and risk policies.
@@ -924,6 +925,16 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - Multi-Period Performance Analytics: `GET /api/v1/simulation/performance` calculates lifetime or date-filtered metrics: capital progression, win rate, gross P&L, Kotak Neo statutory friction, net P&L, profit factor, avg win/loss, win/loss ratio, max MFE, max MAE, and average holding duration.
     - Strategy Control: `GET /api/v1/simulation/strategies` and `POST /api/v1/simulation/strategies/{strategyId}/mode` for real-time strategy monitoring and execution mode toggling (`PAPER`, `LIVE`, `DISABLED`).
     - Verified State: **472 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
+  - [x] **V2.4.7: Production Hardening, Daily Capital Ledger, Single-Flow Execution & Midday Recovery** `[COMPLETED & VERIFIED]`
+    - Two Identical Daily Capital Ledgers (`capital` & `simulation_capital` tables): Tracks daily capital progression (`id`, `trading_date`, `portfolio_mode`, `opening_capital`, `total_trades`, `realized_gross_pnl`, `statutory_charges`, `statutory_taxes`, `available_capital`, `net_pnl`, `closing_capital`, `created_at`, `updated_at`). Automatically created/updated on each order fill, partial exit, and full position closure. Morning capital naturally compounds from previous day's closing balance.
+    - Unified Single-Flow Exit (Zero Double-Orders): Eliminated secondary market sell fallback. Stop-loss breaches trigger a single fill via `handleRestingStopLossFilled()`. Tactical exits (14:45 wind-down, 14:55 hard close, technical invalidation cuts) modify the resting SL-M order to MARKET in a single atomic flow.
+    - Ghost Position Elimination: `PositionManagerService` never prematurely purges active positions from memory upon exit evaluation. Positions remain locked in RAM until broker API confirms fill and DB persistence succeeds.
+    - 14:55 EOD Hard Close Integration: Wired `MarketScheduler.scheduledEodHardCloseSweep()` to execute via `orderExecutionService.executeTacticalExit()`, guaranteeing 100% intraday position closure before market close.
+    - Midday Server Restart / Crash Recovery: `StartupRecoveryService` restores full 16-parameter `PositionSnapshot` (retaining `peakPrice`, `troughPrice`, and `restingSlOrderId`), reloads pending resting SL orders into `SimulatedOrderAdapter.restingOrders`, syncs compounded capital, and rehydrates today's traded symbol locks (`tradedSymbolsToday`), strategy trade counts, and loss counts into `RiskEngine`.
+    - Zero-DB NIFTY Filter: `MasterMarketFilterService` reads NIFTY 5M candles directly from `StockContextCache` in memory in $< 1\,\mu\text{s}$, completely eliminating N+1 database queries during sweeps.
+    - 7 Real-World Live Broker Realities Documented: Forensic operational guidelines covering Order IDs vs Position IDs, Order Modification Race Conditions, Execution Latency & Price Slippage, Partial Fills, Broker RMS Pre-Trade Validation, Network Timeouts & Idempotency, and Broker Session Token Expiry.
+    - Verified State: **476 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
+- [x] **Version 2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor)** `[COMPLETED & EMPIRICALLY VALIDATED]`
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`
 - [ ] **V4.0: Professional Web UI & Trader Dashboard** `[PLANNED]`
 - [ ] **V5.0: Trading Engine & Order Execution (SmartAPI)** `[PLANNED]`

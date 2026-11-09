@@ -70,11 +70,10 @@ class PositionManagerServiceTest {
         assertThat(action.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
         assertThat(action.reason()).isEqualTo("STOP_LOSS_HIT");
 
-        // Position removed from active positions in RAM
+        // Position retained in RAM until OrderExecutionService processes fill and deregisters
+        assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).hasSize(1);
+        positionManager.deregisterPosition(PortfolioMode.PAPER, "TCS");
         assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).isEmpty();
-        // Position removed from RiskEngine and realized P&L recorded
-        assertThat(riskEngine.getPortfolioState(PortfolioMode.PAPER).getOpenPositions()).isEmpty();
-        assertThat(riskEngine.getPortfolioState(PortfolioMode.PAPER).getRealizedPnl()).isLessThan(0.0);
     }
 
     @Test
@@ -209,6 +208,8 @@ class PositionManagerServiceTest {
         PositionAction tick2 = positionManager.processTick(PortfolioMode.PAPER, "SPIKE_STOCK", 950.50, LocalTime.of(10, 11));
         assertThat(tick2.type()).isEqualTo(PositionAction.ActionType.FULL_EXIT);
         assertThat(tick2.reason()).isEqualTo("STOP_LOSS_HIT");
+        assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).hasSize(1);
+        positionManager.deregisterPosition(PortfolioMode.PAPER, "SPIKE_STOCK");
         assertThat(positionManager.getActivePositions(PortfolioMode.PAPER)).isEmpty();
     }
 }

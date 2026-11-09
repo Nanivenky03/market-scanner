@@ -5,8 +5,9 @@ import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.strategy.model.MarketState;
-import lombok.RequiredArgsConstructor;
+import com.trading.scanner.strategy.cache.StockContextCache;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -26,7 +27,6 @@ import java.util.List;
  *   - NIFTY 5M Close == NIFTY VWAP -> regime = NEUTRAL
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class MasterMarketFilterService {
 
@@ -38,6 +38,23 @@ public class MasterMarketFilterService {
 
     private final MarketCandleRepository marketCandleRepository;
     private final TimeProvider timeProvider;
+    private final StockContextCache stockContextCache;
+
+    @Autowired
+    public MasterMarketFilterService(
+            MarketCandleRepository marketCandleRepository,
+            TimeProvider timeProvider,
+            @Autowired(required = false) StockContextCache stockContextCache) {
+        this.marketCandleRepository = marketCandleRepository;
+        this.timeProvider = timeProvider;
+        this.stockContextCache = stockContextCache;
+    }
+
+    public MasterMarketFilterService(
+            MarketCandleRepository marketCandleRepository,
+            TimeProvider timeProvider) {
+        this(marketCandleRepository, timeProvider, null);
+    }
 
     public MarketState evaluateCurrentState(LocalDate tradingDate) {
         LocalDateTime now = timeProvider.nowDateTime();
@@ -71,15 +88,28 @@ public class MasterMarketFilterService {
             );
         }
 
-        LocalDateTime sessionStart = tradingDate.atTime(LocalTime.of(9, 15));
-        List<MarketCandle> nifty5mCandles = marketCandleRepository
-                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
-                        NIFTY_SYMBOL,
-                        NIFTY_EXCHANGE,
-                        CandleTimeframe.FIVE_MINUTE,
-                        sessionStart,
-                        now
-                );
+        List<MarketCandle> nifty5mCandles = null;
+        if (stockContextCache != null) {
+            List<MarketCandle> cached = stockContextCache.getCandles(NIFTY_SYMBOL, NIFTY_EXCHANGE, CandleTimeframe.FIVE_MINUTE);
+            if (cached.isEmpty()) {
+                cached = stockContextCache.getCandles("NIFTY 50", NIFTY_EXCHANGE, CandleTimeframe.FIVE_MINUTE);
+            }
+            if (!cached.isEmpty()) {
+                nifty5mCandles = cached;
+            }
+        }
+
+        if (nifty5mCandles == null) {
+            LocalDateTime sessionStart = tradingDate.atTime(LocalTime.of(9, 15));
+            nifty5mCandles = marketCandleRepository
+                    .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                            NIFTY_SYMBOL,
+                            NIFTY_EXCHANGE,
+                            CandleTimeframe.FIVE_MINUTE,
+                            sessionStart,
+                            now
+                    );
+        }
 
         if (nifty5mCandles.isEmpty()) {
             return new MarketState(

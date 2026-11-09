@@ -246,6 +246,20 @@ public class RiskEngine {
         }
     }
 
+    public synchronized void recordStrategyTradeCount(PortfolioMode mode, int strategyId, int count) {
+        PortfolioState portfolio = portfolios.get(mode);
+        if (portfolio != null) {
+            portfolio.recordStrategyTradeCount(strategyId, count);
+        }
+    }
+
+    public synchronized void recordStrategyLossCount(PortfolioMode mode, int strategyId, int count) {
+        PortfolioState portfolio = portfolios.get(mode);
+        if (portfolio != null) {
+            portfolio.recordStrategyLossCount(strategyId, count);
+        }
+    }
+
     /**
      * Updates an open position (e.g. after a partial exit or trailing stop update).
      */

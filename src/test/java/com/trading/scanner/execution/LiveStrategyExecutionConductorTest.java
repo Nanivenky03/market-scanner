@@ -206,8 +206,8 @@ class LiveStrategyExecutionConductorTest {
 
         conductor.processIncomingTick("RELIANCE", "NSE", 2479.50, today.atTime(10, 5));
 
-        verify(orderExecutionService).executeTacticalExit(
-                PortfolioMode.PAPER, "RELIANCE", 2479.50, "STOP_LOSS_TRIGGERED");
+        verify(orderExecutionService).handleRestingStopLossFilled(
+                PortfolioMode.PAPER, "RELIANCE", triggeredOrder);
     }
 
     @Test

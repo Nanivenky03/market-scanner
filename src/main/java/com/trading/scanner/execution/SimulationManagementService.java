@@ -17,8 +17,11 @@ import com.trading.scanner.risk.model.PortfolioState;
 import com.trading.scanner.strategy.cache.StockContextCache;
 import com.trading.scanner.strategy.model.PositionSnapshot;
 import com.trading.scanner.strategy.model.StockContext;
-import lombok.RequiredArgsConstructor;
+import com.trading.scanner.model.SimulationCapital;
+import com.trading.scanner.repository.CapitalRepository;
+import com.trading.scanner.repository.SimulationCapitalRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,7 +35,6 @@ import java.util.*;
  */
 @Service
 @Slf4j
-@RequiredArgsConstructor
 public class SimulationManagementService {
 
     public static final String SETTING_INITIAL_CAPITAL = "simulation.initial.capital";
@@ -47,6 +49,49 @@ public class SimulationManagementService {
     private final SimulatedOrderAdapter simulatedOrderAdapter;
     private final StockContextCache stockContextCache;
     private final TimeProvider timeProvider;
+    private final SimulationCapitalRepository simulationCapitalRepository;
+    private final CapitalRepository capitalRepository;
+
+    @Autowired
+    public SimulationManagementService(
+            RuntimeSettingRepository runtimeSettingRepository,
+            SimulatedPositionRepository simulatedPositionRepository,
+            SimulatedOrderRepository simulatedOrderRepository,
+            StrategyConfigRepository strategyConfigRepository,
+            RiskEngine riskEngine,
+            PositionManagerService positionManagerService,
+            SimulatedOrderAdapter simulatedOrderAdapter,
+            StockContextCache stockContextCache,
+            TimeProvider timeProvider,
+            @Autowired(required = false) SimulationCapitalRepository simulationCapitalRepository,
+            @Autowired(required = false) CapitalRepository capitalRepository) {
+        this.runtimeSettingRepository = runtimeSettingRepository;
+        this.simulatedPositionRepository = simulatedPositionRepository;
+        this.simulatedOrderRepository = simulatedOrderRepository;
+        this.strategyConfigRepository = strategyConfigRepository;
+        this.riskEngine = riskEngine;
+        this.positionManagerService = positionManagerService;
+        this.simulatedOrderAdapter = simulatedOrderAdapter;
+        this.stockContextCache = stockContextCache;
+        this.timeProvider = timeProvider;
+        this.simulationCapitalRepository = simulationCapitalRepository;
+        this.capitalRepository = capitalRepository;
+    }
+
+    public SimulationManagementService(
+            RuntimeSettingRepository runtimeSettingRepository,
+            SimulatedPositionRepository simulatedPositionRepository,
+            SimulatedOrderRepository simulatedOrderRepository,
+            StrategyConfigRepository strategyConfigRepository,
+            RiskEngine riskEngine,
+            PositionManagerService positionManagerService,
+            SimulatedOrderAdapter simulatedOrderAdapter,
+            StockContextCache stockContextCache,
+            TimeProvider timeProvider) {
+        this(runtimeSettingRepository, simulatedPositionRepository, simulatedOrderRepository,
+                strategyConfigRepository, riskEngine, positionManagerService, simulatedOrderAdapter,
+                stockContextCache, timeProvider, null, null);
+    }
 
     public record SimulationCapitalResponse(
             double baselineCapital,
@@ -189,6 +234,28 @@ public class SimulationManagementService {
         setting.setUpdatedAt(LocalDateTime.now().toString());
         runtimeSettingRepository.save(setting);
 
+        if (simulationCapitalRepository != null) {
+            LocalDate today = timeProvider.today();
+            String todayPrefix = today.toString();
+            SimulationCapital cap = simulationCapitalRepository.findByTradingDate(todayPrefix).orElseGet(() ->
+                    SimulationCapital.builder()
+                            .tradingDate(todayPrefix)
+                            .portfolioMode("PAPER")
+                            .totalTrades(0)
+                            .realizedGrossPnl(0.0)
+                            .statutoryCharges(0.0)
+                            .statutoryTaxes(0.0)
+                            .netPnl(0.0)
+                            .build()
+            );
+            cap.setOpeningCapital(amount);
+            double net = cap.getNetPnl() != null ? cap.getNetPnl() : 0.0;
+            cap.setAvailableCapital(amount + net);
+            cap.setClosingCapital(amount + net);
+            cap.setUpdatedAt(LocalDateTime.now().toString());
+            simulationCapitalRepository.save(cap);
+        }
+
         log.info("[SIMULATION] Configured baseline capital to {}", amount);
         syncCompoundedCapital();
         return getCapitalStatus();
@@ -201,6 +268,27 @@ public class SimulationManagementService {
         LocalDate today = timeProvider.today();
         String todayPrefix = today.toString();
         double baseline = getBaselineCapital();
+
+        if (simulationCapitalRepository != null) {
+            Optional<SimulationCapital> todayOpt = simulationCapitalRepository.findByTradingDate(todayPrefix);
+            if (todayOpt.isPresent()) {
+                SimulationCapital cap = todayOpt.get();
+                double startingCapitalToday = cap.getOpeningCapital();
+                double currentCompoundedCapital = cap.getAvailableCapital();
+                double todayNetPnl = cap.getNetPnl() != null ? cap.getNetPnl() : 0.0;
+                double cumulativeRealizedPnl = (startingCapitalToday - baseline) + todayNetPnl;
+                double cumulativeReturn = baseline > 0.0 ? (cumulativeRealizedPnl / baseline) * 100.0 : 0.0;
+                return new SimulationCapitalResponse(
+                        baseline,
+                        startingCapitalToday,
+                        currentCompoundedCapital,
+                        todayNetPnl,
+                        cumulativeRealizedPnl,
+                        cumulativeReturn,
+                        today
+                );
+            }
+        }
 
         List<SimulatedPosition> allClosed = simulatedPositionRepository.findByPositionStatus("CLOSED");
 
@@ -236,6 +324,35 @@ public class SimulationManagementService {
      * Synchronizes in-memory RiskEngine portfolio state with the calculated compounded capital.
      */
     public void syncCompoundedCapital() {
+        LocalDate today = timeProvider.today();
+        String todayPrefix = today.toString();
+        double baseline = getBaselineCapital();
+
+        if (simulationCapitalRepository != null) {
+            SimulationCapital cap = simulationCapitalRepository.findByTradingDate(todayPrefix).orElseGet(() -> {
+                Optional<SimulationCapital> prev = simulationCapitalRepository.findTopByTradingDateLessThanOrderByTradingDateDesc(todayPrefix);
+                double morningCap = prev.map(p -> p.getClosingCapital() != null ? p.getClosingCapital()
+                        : (p.getOpeningCapital() + (p.getNetPnl() != null ? p.getNetPnl() : 0.0))).orElse(baseline);
+                SimulationCapital newRec = SimulationCapital.builder()
+                        .tradingDate(todayPrefix)
+                        .portfolioMode("PAPER")
+                        .openingCapital(morningCap)
+                        .availableCapital(morningCap)
+                        .closingCapital(morningCap)
+                        .totalTrades(0)
+                        .realizedGrossPnl(0.0)
+                        .statutoryCharges(0.0)
+                        .statutoryTaxes(0.0)
+                        .netPnl(0.0)
+                        .build();
+                return simulationCapitalRepository.save(newRec);
+            });
+            riskEngine.initializePortfolio(PortfolioMode.PAPER, cap.getOpeningCapital(), today);
+            log.info("[SIMULATION] Synced RiskEngine PAPER portfolio from simulation_capital: startingCapital={} available={}",
+                    cap.getOpeningCapital(), cap.getAvailableCapital());
+            return;
+        }
+
         SimulationCapitalResponse status = getCapitalStatus();
         riskEngine.initializePortfolio(PortfolioMode.PAPER, status.startingCapitalToday(), status.tradingDate());
         log.info("[SIMULATION] Synced RiskEngine PAPER portfolio: startingCapital={} currentCompounded={}",
@@ -262,13 +379,38 @@ public class SimulationManagementService {
             simulatedOrderRepository.deleteByPlacedAtStartingWith(todayPrefix);
             simulatedPositionRepository.deleteByEntryTimeStartingWith(todayPrefix);
 
-            // 4. Recalculate today's starting capital from history prior to today
+            // 4. Delete today's simulation capital ledger entry
+            if (simulationCapitalRepository != null) {
+                simulationCapitalRepository.deleteByTradingDate(todayPrefix);
+            }
+
+            // 5. Recalculate today's starting capital from history prior to today
             double baseline = getBaselineCapital();
-            List<SimulatedPosition> remaining = simulatedPositionRepository.findByPositionStatus("CLOSED");
-            double priorNetPnl = remaining.stream()
-                    .mapToDouble(p -> p.getNetPnl() != null ? p.getNetPnl() : 0.0)
-                    .sum();
-            double morningCapital = baseline + priorNetPnl;
+            double morningCapital;
+            if (simulationCapitalRepository != null) {
+                Optional<SimulationCapital> prev = simulationCapitalRepository.findTopByTradingDateLessThanOrderByTradingDateDesc(todayPrefix);
+                morningCapital = prev.map(p -> p.getClosingCapital() != null ? p.getClosingCapital()
+                        : (p.getOpeningCapital() + (p.getNetPnl() != null ? p.getNetPnl() : 0.0))).orElse(baseline);
+                SimulationCapital newRec = SimulationCapital.builder()
+                        .tradingDate(todayPrefix)
+                        .portfolioMode("PAPER")
+                        .openingCapital(morningCapital)
+                        .availableCapital(morningCapital)
+                        .closingCapital(morningCapital)
+                        .totalTrades(0)
+                        .realizedGrossPnl(0.0)
+                        .statutoryCharges(0.0)
+                        .statutoryTaxes(0.0)
+                        .netPnl(0.0)
+                        .build();
+                simulationCapitalRepository.save(newRec);
+            } else {
+                List<SimulatedPosition> remaining = simulatedPositionRepository.findByPositionStatus("CLOSED");
+                double priorNetPnl = remaining.stream()
+                        .mapToDouble(p -> p.getNetPnl() != null ? p.getNetPnl() : 0.0)
+                        .sum();
+                morningCapital = baseline + priorNetPnl;
+            }
 
             riskEngine.initializePortfolio(PortfolioMode.PAPER, morningCapital, today);
 
@@ -287,7 +429,26 @@ public class SimulationManagementService {
             simulatedOrderRepository.deleteAll();
             simulatedPositionRepository.deleteAll();
 
+            if (simulationCapitalRepository != null) {
+                simulationCapitalRepository.deleteAll();
+            }
+
             double baseline = getBaselineCapital();
+            if (simulationCapitalRepository != null) {
+                SimulationCapital fresh = SimulationCapital.builder()
+                        .tradingDate(todayPrefix)
+                        .portfolioMode("PAPER")
+                        .openingCapital(baseline)
+                        .availableCapital(baseline)
+                        .closingCapital(baseline)
+                        .totalTrades(0)
+                        .realizedGrossPnl(0.0)
+                        .statutoryCharges(0.0)
+                        .statutoryTaxes(0.0)
+                        .netPnl(0.0)
+                        .build();
+                simulationCapitalRepository.save(fresh);
+            }
             riskEngine.initializePortfolio(PortfolioMode.PAPER, baseline, today);
 
             log.info("[SIMULATION] TOTAL simulation wiped. Reset capital to baseline={}", baseline);

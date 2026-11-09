@@ -169,6 +169,14 @@ public class PortfolioState {
         return lossCountByStrategy.getOrDefault(strategyId, 0);
     }
 
+    public synchronized void recordStrategyTradeCount(int strategyId, int count) {
+        tradesCountByStrategy.put(strategyId, count);
+    }
+
+    public synchronized void recordStrategyLossCount(int strategyId, int count) {
+        lossCountByStrategy.put(strategyId, count);
+    }
+
     public boolean hasTradedSymbolToday(String symbol) {
         return tradedSymbolsToday.contains(symbol);
     }

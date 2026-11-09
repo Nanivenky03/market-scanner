@@ -374,6 +374,44 @@ public class SimulatedOrderAdapter implements BrokerOrderAdapter {
         log.info("[PAPER] Cleared all resting simulated orders");
     }
 
+    /**
+     * Rehydrates pending resting SL-M orders from the database into in-memory restingOrders map.
+     * Essential for zero-state loss on mid-day crash recovery.
+     */
+    public int rehydratePendingOrdersFromDb() {
+        List<SimulatedOrder> pendingOrders = simulatedOrderRepository.findByOrderStatus("PENDING_TRIGGER");
+        int count = 0;
+        for (SimulatedOrder order : pendingOrders) {
+            if (order.getBrokerOrderId() != null && !restingOrders.containsKey(order.getBrokerOrderId())) {
+                LocalDateTime placedAt = null;
+                if (order.getPlacedAt() != null) {
+                    try {
+                        placedAt = LocalDateTime.parse(order.getPlacedAt());
+                    } catch (Exception ignored) {
+                        placedAt = LocalDateTime.now();
+                    }
+                }
+                RestingOrderState state = new RestingOrderState(
+                        order.getBrokerOrderId(),
+                        order.getId(),
+                        order.getSymbol(),
+                        order.getExchange(),
+                        order.getTransactionType(),
+                        order.getQuantity() != null ? order.getQuantity() : 0,
+                        order.getTriggerPrice() != null ? order.getTriggerPrice() : 0.0,
+                        order.getStrategyId(),
+                        order.getSignalId(),
+                        order.getParentOrderId(),
+                        placedAt != null ? placedAt : LocalDateTime.now()
+                );
+                restingOrders.put(order.getBrokerOrderId(), state);
+                count++;
+            }
+        }
+        log.info("[PAPER] Rehydrated {} pending resting orders from database into memory", count);
+        return count;
+    }
+
     private String generateBrokerOrderId() {
         return "SIM_ORD_" + System.currentTimeMillis() + "_" + orderSequence.incrementAndGet();
     }

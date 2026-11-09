@@ -8,6 +8,7 @@ import com.trading.scanner.execution.lock.StripedSymbolLockManager;
 import com.trading.scanner.model.*;
 import com.trading.scanner.position.PositionManagerService;
 import com.trading.scanner.repository.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.trading.scanner.risk.BrokerChargesCalculator;
 import com.trading.scanner.risk.RiskEngine;
 import com.trading.scanner.risk.model.PortfolioMode;
@@ -46,9 +47,43 @@ public class OrderExecutionService {
     private final PositionRepository positionRepository;
     private final SimulatedOrderRepository simulatedOrderRepository;
     private final OrderRepository orderRepository;
+    private final CapitalRepository capitalRepository;
+    private final SimulationCapitalRepository simulationCapitalRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final Map<PortfolioMode, BrokerOrderAdapter> adaptersByMode = new ConcurrentHashMap<>();
+
+    @Autowired
+    public OrderExecutionService(
+            RiskEngine riskEngine,
+            PositionManagerService positionManagerService,
+            StripedSymbolLockManager lockManager,
+            StrategyConfigRepository strategyConfigRepository,
+            SimulatedPositionRepository simulatedPositionRepository,
+            PositionRepository positionRepository,
+            SimulatedOrderRepository simulatedOrderRepository,
+            OrderRepository orderRepository,
+            List<BrokerOrderAdapter> adapters,
+            @Autowired(required = false) CapitalRepository capitalRepository,
+            @Autowired(required = false) SimulationCapitalRepository simulationCapitalRepository
+    ) {
+        this.riskEngine = riskEngine;
+        this.positionManagerService = positionManagerService;
+        this.lockManager = lockManager;
+        this.strategyConfigRepository = strategyConfigRepository;
+        this.simulatedPositionRepository = simulatedPositionRepository;
+        this.positionRepository = positionRepository;
+        this.simulatedOrderRepository = simulatedOrderRepository;
+        this.orderRepository = orderRepository;
+        this.capitalRepository = capitalRepository;
+        this.simulationCapitalRepository = simulationCapitalRepository;
+
+        if (adapters != null) {
+            for (BrokerOrderAdapter adapter : adapters) {
+                adaptersByMode.put(adapter.getSupportedMode(), adapter);
+            }
+        }
+    }
 
     public OrderExecutionService(
             RiskEngine riskEngine,
@@ -61,20 +96,9 @@ public class OrderExecutionService {
             OrderRepository orderRepository,
             List<BrokerOrderAdapter> adapters
     ) {
-        this.riskEngine = riskEngine;
-        this.positionManagerService = positionManagerService;
-        this.lockManager = lockManager;
-        this.strategyConfigRepository = strategyConfigRepository;
-        this.simulatedPositionRepository = simulatedPositionRepository;
-        this.positionRepository = positionRepository;
-        this.simulatedOrderRepository = simulatedOrderRepository;
-        this.orderRepository = orderRepository;
-
-        if (adapters != null) {
-            for (BrokerOrderAdapter adapter : adapters) {
-                adaptersByMode.put(adapter.getSupportedMode(), adapter);
-            }
-        }
+        this(riskEngine, positionManagerService, lockManager, strategyConfigRepository,
+                simulatedPositionRepository, positionRepository, simulatedOrderRepository,
+                orderRepository, adapters, null, null);
     }
 
     public record ExecutionResult(
@@ -307,6 +331,11 @@ public class OrderExecutionService {
                 positionRepository.save(livePos);
             }
 
+            double entryTurnover = filledQty * fillPrice;
+            com.trading.scanner.risk.BrokerChargesCalculator.ItemizedCharges buyCharges =
+                    com.trading.scanner.risk.BrokerChargesCalculator.calculateItemizedCharges(entryTurnover, true);
+            updateDailyCapitalOnTradeExecuted(mode, buyCharges.getBrokerageAndExchangeCharges(), buyCharges.getStatutoryTaxes());
+
             log.info("[{}] OrderExecutionService opened symbol={} side={} qty={} fillPrice={} SL={} T1={} restingSlId={}",
                     mode, symbol, positionSide, filledQty, fillPrice, stopLoss, reAnchoredTarget1, restingSlOrderId);
 
@@ -376,6 +405,9 @@ public class OrderExecutionService {
 
             riskEngine.recordPartialExit(mode, partialPnl);
             riskEngine.recordFrictionIncurred(mode, partialFriction);
+            com.trading.scanner.risk.BrokerChargesCalculator.ItemizedCharges partCharges =
+                    com.trading.scanner.risk.BrokerChargesCalculator.calculateItemizedCharges(partialTurnover, false);
+            updateDailyCapitalOnPartialExit(mode, partialPnl, partCharges.getBrokerageAndExchangeCharges(), partCharges.getStatutoryTaxes());
 
             // Step 3: Update in-memory PositionSnapshot
             double peak = Math.max(pos.peakPrice(), fillPrice);
@@ -433,8 +465,27 @@ public class OrderExecutionService {
     }
 
     /**
-     * Executes tactical cutoff exits (14:45 wind-down, 5M breakout failure, VWAP cut)
-     * using the atomic Modify-to-Market pattern (Pattern A) with Cancel-Confirm-Market fallback (Pattern B).
+     * Handles exchange/simulator-triggered stop-loss fill events.
+     * Records fill, persists trade forensics, updates daily capital, and deregisters position.
+     * Guaranteed single-flow: zero secondary orders.
+     */
+    public boolean handleRestingStopLossFilled(PortfolioMode mode, String symbol, OrderResponse fillResp) {
+        if (symbol == null || fillResp == null) return false;
+        return lockManager.executeWithLock(symbol, () -> {
+            PositionSnapshot pos = positionManagerService.getPosition(mode, symbol);
+            if (pos == null) {
+                return false;
+            }
+
+            double fillPrice = fillResp.averageFillPrice() != null ? fillResp.averageFillPrice() : pos.currentStopLoss();
+            completePositionClosure(mode, symbol, pos, fillPrice, "STOP_LOSS_TRIGGERED", pos.currentStopLoss());
+            return true;
+        });
+    }
+
+    /**
+     * Executes tactical cutoff exits (14:45 wind-down, 14:55 hard close, VWAP cut, failed breakout)
+     * using the single unified Modify-to-Market flow. Modifies existing resting SL order to MARKET.
      */
     public boolean executeTacticalExit(PortfolioMode mode, String symbol, double currentTickPrice, String exitReason) {
         if (symbol == null) return false;
@@ -451,7 +502,7 @@ public class OrderExecutionService {
             String restingSlId = pos.restingSlOrderId();
             OrderResponse exitFill = null;
 
-            // Pattern A: Attempt atomic Modify-to-Market on resting SL-M order
+            // Single Unified Flow: Modify resting SL-M order to MARKET
             if (restingSlId != null) {
                 OrderModifyRequest modifyToMarket = OrderModifyRequest.modifyToMarket(
                         restingSlId,
@@ -462,14 +513,13 @@ public class OrderExecutionService {
                 OrderResponse modResp = adapter.modifyOrder(modifyToMarket);
                 if (modResp.success() && modResp.orderStatus() == com.trading.scanner.execution.adapter.model.OrderStatusType.FILLED) {
                     exitFill = modResp;
+                } else {
+                    log.warn("[{}] Modify-to-Market failed for restingSlId={} symbol={}: {}", mode, restingSlId, symbol, modResp.message());
                 }
             }
 
-            // Pattern B: Fallback if Modify-to-Market was not supported or resting order already cancelled
-            if (exitFill == null) {
-                if (restingSlId != null) {
-                    adapter.cancelOrder(restingSlId, symbol);
-                }
+            // Fallback ONLY if there was no resting SL ID recorded on the position
+            if (exitFill == null && restingSlId == null) {
                 OrderRequest marketSell = OrderRequest.marketSell(
                         symbol,
                         pos.exchange(),
@@ -483,87 +533,243 @@ public class OrderExecutionService {
                 exitFill = adapter.placeOrder(marketSell);
             }
 
-            double fillPrice = exitFill != null && exitFill.averageFillPrice() != null
-                    ? exitFill.averageFillPrice() : currentTickPrice;
-
-            double pnl = (fillPrice - pos.entryPrice()) * pos.currentQuantity();
-            double turnover = pos.currentQuantity() * fillPrice;
-            double friction = BrokerChargesCalculator.calculateSellLegCharges(turnover);
-
-            riskEngine.recordPositionClosed(mode, symbol, pnl);
-            riskEngine.recordFrictionIncurred(mode, friction);
-            positionManagerService.deregisterPosition(mode, symbol);
-
-            // Update DB position to CLOSED with full forensics
-            if (mode == PortfolioMode.PAPER) {
-                simulatedPositionRepository.findBySymbolAndPositionStatus(symbol, "OPEN").ifPresent(dbPos -> {
-                    double peak = Math.max(pos.peakPrice() != null ? pos.peakPrice() : pos.entryPrice(), fillPrice);
-                    double trough = Math.min(pos.troughPrice() != null ? pos.troughPrice() : pos.entryPrice(), fillPrice);
-                    double initialRisk = Math.max(0.01, pos.entryPrice() - (dbPos.getInitialStopLoss() != null ? dbPos.getInitialStopLoss() : pos.currentStopLoss()));
-                    double mfePrice = peak;
-                    double mfeR = (mfePrice - pos.entryPrice()) / initialRisk;
-                    double mfePct = ((mfePrice - pos.entryPrice()) / pos.entryPrice()) * 100.0;
-
-                    double maePrice = trough;
-                    double maeR = (trough - pos.entryPrice()) / initialRisk;
-                    double maePct = ((trough - pos.entryPrice()) / pos.entryPrice()) * 100.0;
-
-                    double totalGross = (dbPos.getGrossPnl() != null ? dbPos.getGrossPnl() : 0.0) + pnl;
-                    double totalCharges = (dbPos.getStatutoryCharges() != null ? dbPos.getStatutoryCharges() : 0.0) + friction;
-                    double netPnl = totalGross - totalCharges;
-
-                    String exitTime = LocalDateTime.now().toString();
-                    Integer durationSeconds = null;
-                    if (dbPos.getEntryTime() != null) {
-                        try {
-                            LocalDateTime entryLdt = LocalDateTime.parse(dbPos.getEntryTime());
-                            LocalDateTime exitLdt = LocalDateTime.parse(exitTime);
-                            durationSeconds = (int) java.time.Duration.between(entryLdt, exitLdt).getSeconds();
-                        } catch (Exception ignored) {}
-                    }
-
-                    dbPos.setCurrentQuantity(0);
-                    dbPos.setExitPrice(fillPrice);
-                    dbPos.setExitTime(exitTime);
-                    dbPos.setExitReason(exitReason);
-                    dbPos.setPositionStatus("CLOSED");
-                    dbPos.setPeakPrice(peak);
-                    dbPos.setTroughPrice(trough);
-                    dbPos.setMfePrice(mfePrice);
-                    dbPos.setMfeR(mfeR);
-                    dbPos.setMfePercent(mfePct);
-                    dbPos.setMaePrice(maePrice);
-                    dbPos.setMaeR(maeR);
-                    dbPos.setMaePercent(maePct);
-                    dbPos.setHoldingDurationSeconds(durationSeconds);
-                    dbPos.setGrossPnl(totalGross);
-                    dbPos.setStatutoryCharges(totalCharges);
-                    dbPos.setNetPnl(netPnl);
-                    dbPos.setPnl(netPnl);
-                    dbPos.setPnlPercent((netPnl / (pos.entryPrice() * pos.initialQuantity())) * 100.0);
-                    dbPos.setExitTriggerPrice(currentTickPrice);
-                    dbPos.setSlippage(Math.abs(currentTickPrice - fillPrice));
-                    dbPos.setUpdatedAt(exitTime);
-
-                    Map<String, Object> exitEvent = new LinkedHashMap<>();
-                    exitEvent.put("timestamp", exitTime);
-                    exitEvent.put("event", exitReason);
-                    exitEvent.put("exitPrice", fillPrice);
-                    exitEvent.put("grossPnl", pnl);
-                    exitEvent.put("netPnl", pnl - friction);
-                    exitEvent.put("mfeR", mfeR);
-                    exitEvent.put("maeR", maeR);
-                    dbPos.setTrailingHistory(appendTrailingHistory(dbPos.getTrailingHistory(), exitEvent));
-
-                    simulatedPositionRepository.save(dbPos);
-                });
+            if (exitFill == null || !exitFill.success()) {
+                log.error("[{}] Tactical exit execution failed for symbol={}", mode, symbol);
+                return false;
             }
 
-            log.info("[{}] Executed tactical exit for symbol={} reason={} fillPrice={} PnL={} netPnL={}",
-                    mode, symbol, exitReason, fillPrice, pnl, pnl - friction);
-
+            double fillPrice = exitFill.averageFillPrice() != null ? exitFill.averageFillPrice() : currentTickPrice;
+            completePositionClosure(mode, symbol, pos, fillPrice, exitReason, currentTickPrice);
             return true;
         });
+    }
+
+    /**
+     * Authoritative position closure pipeline:
+     * 1. Realizes P&L and itemized statutory charges
+     * 2. Synchronizes RiskEngine
+     * 3. Persists full forensics to PostgreSQL (positions / simulated_positions)
+     * 4. Updates daily capital ledger (capital / simulation_capital)
+     * 5. Purges position from RAM
+     */
+    private void completePositionClosure(PortfolioMode mode, String symbol, PositionSnapshot pos,
+                                          double fillPrice, String exitReason, double triggerPrice) {
+        double pnl = (fillPrice - pos.entryPrice()) * pos.currentQuantity();
+        double turnover = pos.currentQuantity() * fillPrice;
+        com.trading.scanner.risk.BrokerChargesCalculator.ItemizedCharges itemized =
+                com.trading.scanner.risk.BrokerChargesCalculator.calculateItemizedCharges(turnover, false);
+        double friction = itemized.totalCharges();
+
+        riskEngine.recordPositionClosed(mode, symbol, pnl);
+        riskEngine.recordFrictionIncurred(mode, friction);
+        positionManagerService.deregisterPosition(mode, symbol);
+
+        // Update DB position to CLOSED with full forensics
+        if (mode == PortfolioMode.PAPER) {
+            simulatedPositionRepository.findBySymbolAndPositionStatus(symbol, "OPEN").ifPresent(dbPos -> {
+                double peak = Math.max(pos.peakPrice() != null ? pos.peakPrice() : pos.entryPrice(), fillPrice);
+                double trough = Math.min(pos.troughPrice() != null ? pos.troughPrice() : pos.entryPrice(), fillPrice);
+                double initialRisk = Math.max(0.01, pos.entryPrice() - (dbPos.getInitialStopLoss() != null ? dbPos.getInitialStopLoss() : pos.currentStopLoss()));
+                double mfePrice = peak;
+                double mfeR = (mfePrice - pos.entryPrice()) / initialRisk;
+                double mfePct = ((mfePrice - pos.entryPrice()) / pos.entryPrice()) * 100.0;
+
+                double maePrice = trough;
+                double maeR = (trough - pos.entryPrice()) / initialRisk;
+                double maePct = ((trough - pos.entryPrice()) / pos.entryPrice()) * 100.0;
+
+                double totalGross = (dbPos.getGrossPnl() != null ? dbPos.getGrossPnl() : 0.0) + pnl;
+                double totalCharges = (dbPos.getStatutoryCharges() != null ? dbPos.getStatutoryCharges() : 0.0) + friction;
+                double netPnl = totalGross - totalCharges;
+
+                String exitTime = LocalDateTime.now().toString();
+                Integer durationSeconds = null;
+                if (dbPos.getEntryTime() != null) {
+                    try {
+                        LocalDateTime entryLdt = LocalDateTime.parse(dbPos.getEntryTime());
+                        LocalDateTime exitLdt = LocalDateTime.parse(exitTime);
+                        durationSeconds = (int) java.time.Duration.between(entryLdt, exitLdt).getSeconds();
+                    } catch (Exception ignored) {}
+                }
+
+                dbPos.setCurrentQuantity(0);
+                dbPos.setExitPrice(fillPrice);
+                dbPos.setExitTime(exitTime);
+                dbPos.setExitReason(exitReason);
+                dbPos.setPositionStatus("CLOSED");
+                dbPos.setPeakPrice(peak);
+                dbPos.setTroughPrice(trough);
+                dbPos.setMfePrice(mfePrice);
+                dbPos.setMfeR(mfeR);
+                dbPos.setMfePercent(mfePct);
+                dbPos.setMaePrice(maePrice);
+                dbPos.setMaeR(maeR);
+                dbPos.setMaePercent(maePct);
+                dbPos.setHoldingDurationSeconds(durationSeconds);
+                dbPos.setGrossPnl(totalGross);
+                dbPos.setStatutoryCharges(totalCharges);
+                dbPos.setNetPnl(netPnl);
+                dbPos.setPnl(netPnl);
+                dbPos.setPnlPercent((netPnl / (pos.entryPrice() * pos.initialQuantity())) * 100.0);
+                dbPos.setExitTriggerPrice(triggerPrice);
+                dbPos.setSlippage(Math.abs(triggerPrice - fillPrice));
+                dbPos.setUpdatedAt(exitTime);
+
+                Map<String, Object> exitEvent = new LinkedHashMap<>();
+                exitEvent.put("timestamp", exitTime);
+                exitEvent.put("event", exitReason);
+                exitEvent.put("exitPrice", fillPrice);
+                exitEvent.put("grossPnl", pnl);
+                exitEvent.put("netPnl", pnl - friction);
+                exitEvent.put("mfeR", mfeR);
+                exitEvent.put("maeR", maeR);
+                dbPos.setTrailingHistory(appendTrailingHistory(dbPos.getTrailingHistory(), exitEvent));
+
+                simulatedPositionRepository.save(dbPos);
+            });
+        }
+
+        updateDailyCapitalOnPositionClosed(mode, pnl, itemized.getBrokerageAndExchangeCharges(), itemized.getStatutoryTaxes());
+        log.info("[{}] Executed tactical exit for symbol={} reason={} fillPrice={} PnL={} netPnL={}",
+                mode, symbol, exitReason, fillPrice, pnl, pnl - friction);
+    }
+
+    private void updateDailyCapitalOnTradeExecuted(PortfolioMode mode, double charges, double taxes) {
+        LocalDate today = LocalDate.now();
+        String dateStr = today.toString();
+        if (mode == PortfolioMode.PAPER && simulationCapitalRepository != null) {
+            SimulationCapital cap = simulationCapitalRepository.findByTradingDate(dateStr)
+                    .orElseGet(() -> createInitialSimulationCapital(dateStr));
+            cap.setTotalTrades(cap.getTotalTrades() + 1);
+            cap.setStatutoryCharges(cap.getStatutoryCharges() + charges);
+            cap.setStatutoryTaxes(cap.getStatutoryTaxes() + taxes);
+            double net = cap.getRealizedGrossPnl() - cap.getStatutoryCharges() - cap.getStatutoryTaxes();
+            cap.setNetPnl(net);
+            cap.setAvailableCapital(cap.getOpeningCapital() + net);
+            cap.setClosingCapital(cap.getOpeningCapital() + net);
+            cap.setUpdatedAt(LocalDateTime.now().toString());
+            simulationCapitalRepository.save(cap);
+        } else if (mode == PortfolioMode.LIVE && capitalRepository != null) {
+            Capital cap = capitalRepository.findByTradingDate(dateStr)
+                    .orElseGet(() -> createInitialLiveCapital(dateStr));
+            cap.setTotalTrades(cap.getTotalTrades() + 1);
+            cap.setStatutoryCharges(cap.getStatutoryCharges() + charges);
+            cap.setStatutoryTaxes(cap.getStatutoryTaxes() + taxes);
+            double net = cap.getRealizedGrossPnl() - cap.getStatutoryCharges() - cap.getStatutoryTaxes();
+            cap.setNetPnl(net);
+            cap.setAvailableCapital(cap.getOpeningCapital() + net);
+            cap.setClosingCapital(cap.getOpeningCapital() + net);
+            cap.setUpdatedAt(LocalDateTime.now().toString());
+            capitalRepository.save(cap);
+        }
+    }
+
+    private void updateDailyCapitalOnPartialExit(PortfolioMode mode, double partialGrossPnl, double charges, double taxes) {
+        LocalDate today = LocalDate.now();
+        String dateStr = today.toString();
+        if (mode == PortfolioMode.PAPER && simulationCapitalRepository != null) {
+            simulationCapitalRepository.findByTradingDate(dateStr).ifPresent(cap -> {
+                cap.setRealizedGrossPnl(cap.getRealizedGrossPnl() + partialGrossPnl);
+                cap.setStatutoryCharges(cap.getStatutoryCharges() + charges);
+                cap.setStatutoryTaxes(cap.getStatutoryTaxes() + taxes);
+                double net = cap.getRealizedGrossPnl() - cap.getStatutoryCharges() - cap.getStatutoryTaxes();
+                cap.setNetPnl(net);
+                cap.setAvailableCapital(cap.getOpeningCapital() + net);
+                cap.setClosingCapital(cap.getOpeningCapital() + net);
+                cap.setUpdatedAt(LocalDateTime.now().toString());
+                simulationCapitalRepository.save(cap);
+            });
+        } else if (mode == PortfolioMode.LIVE && capitalRepository != null) {
+            capitalRepository.findByTradingDate(dateStr).ifPresent(cap -> {
+                cap.setRealizedGrossPnl(cap.getRealizedGrossPnl() + partialGrossPnl);
+                cap.setStatutoryCharges(cap.getStatutoryCharges() + charges);
+                cap.setStatutoryTaxes(cap.getStatutoryTaxes() + taxes);
+                double net = cap.getRealizedGrossPnl() - cap.getStatutoryCharges() - cap.getStatutoryTaxes();
+                cap.setNetPnl(net);
+                cap.setAvailableCapital(cap.getOpeningCapital() + net);
+                cap.setClosingCapital(cap.getOpeningCapital() + net);
+                cap.setUpdatedAt(LocalDateTime.now().toString());
+                capitalRepository.save(cap);
+            });
+        }
+    }
+
+    private void updateDailyCapitalOnPositionClosed(PortfolioMode mode, double grossPnl, double charges, double taxes) {
+        LocalDate today = LocalDate.now();
+        String dateStr = today.toString();
+        if (mode == PortfolioMode.PAPER && simulationCapitalRepository != null) {
+            simulationCapitalRepository.findByTradingDate(dateStr).ifPresent(cap -> {
+                cap.setRealizedGrossPnl(cap.getRealizedGrossPnl() + grossPnl);
+                cap.setStatutoryCharges(cap.getStatutoryCharges() + charges);
+                cap.setStatutoryTaxes(cap.getStatutoryTaxes() + taxes);
+                double net = cap.getRealizedGrossPnl() - cap.getStatutoryCharges() - cap.getStatutoryTaxes();
+                cap.setNetPnl(net);
+                cap.setAvailableCapital(cap.getOpeningCapital() + net);
+                cap.setClosingCapital(cap.getOpeningCapital() + net);
+                cap.setUpdatedAt(LocalDateTime.now().toString());
+                simulationCapitalRepository.save(cap);
+            });
+        } else if (mode == PortfolioMode.LIVE && capitalRepository != null) {
+            capitalRepository.findByTradingDate(dateStr).ifPresent(cap -> {
+                cap.setRealizedGrossPnl(cap.getRealizedGrossPnl() + grossPnl);
+                cap.setStatutoryCharges(cap.getStatutoryCharges() + charges);
+                cap.setStatutoryTaxes(cap.getStatutoryTaxes() + taxes);
+                double net = cap.getRealizedGrossPnl() - cap.getStatutoryCharges() - cap.getStatutoryTaxes();
+                cap.setNetPnl(net);
+                cap.setAvailableCapital(cap.getOpeningCapital() + net);
+                cap.setClosingCapital(cap.getOpeningCapital() + net);
+                cap.setUpdatedAt(LocalDateTime.now().toString());
+                capitalRepository.save(cap);
+            });
+        }
+    }
+
+    private SimulationCapital createInitialSimulationCapital(String dateStr) {
+        double opening = 50000.0;
+        if (simulationCapitalRepository != null) {
+            var prev = simulationCapitalRepository.findTopByOrderByTradingDateDesc();
+            if (prev.isPresent() && prev.get().getClosingCapital() != null) {
+                opening = prev.get().getClosingCapital();
+            }
+        }
+        return SimulationCapital.builder()
+                .tradingDate(dateStr)
+                .portfolioMode("PAPER")
+                .openingCapital(opening)
+                .totalTrades(0)
+                .realizedGrossPnl(0.0)
+                .statutoryCharges(0.0)
+                .statutoryTaxes(0.0)
+                .availableCapital(opening)
+                .netPnl(0.0)
+                .closingCapital(opening)
+                .createdAt(LocalDateTime.now().toString())
+                .updatedAt(LocalDateTime.now().toString())
+                .build();
+    }
+
+    private Capital createInitialLiveCapital(String dateStr) {
+        double opening = 50000.0;
+        if (capitalRepository != null) {
+            var prev = capitalRepository.findTopByOrderByTradingDateDesc();
+            if (prev.isPresent() && prev.get().getClosingCapital() != null) {
+                opening = prev.get().getClosingCapital();
+            }
+        }
+        return Capital.builder()
+                .tradingDate(dateStr)
+                .portfolioMode("LIVE")
+                .openingCapital(opening)
+                .totalTrades(0)
+                .realizedGrossPnl(0.0)
+                .statutoryCharges(0.0)
+                .statutoryTaxes(0.0)
+                .availableCapital(opening)
+                .netPnl(0.0)
+                .closingCapital(opening)
+                .createdAt(LocalDateTime.now().toString())
+                .updatedAt(LocalDateTime.now().toString())
+                .build();
     }
 
     /**

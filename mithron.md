@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
 Last audited: 2026-11-09  
-Status: **Version 2.4 Complete & Empirically Validated** (Live Data Simulation Order Engine, Sector Indices Infrastructure, Zero-DB StockContext Enrichment, Decoupled Broker Order Adapter, Event-Driven Signal & Position Conductor, Data Gold Mine Trade Forensics with MFE/MAE Excursion Tracking, Dynamic Compounding Capital Simulation & Diagnostic REST APIs — 472 unit & integration tests passing).
+Status: **Version 2.4 Complete & Empirically Validated** (Live Data Simulation Order Engine, Sector Indices Infrastructure, Zero-DB StockContext Enrichment, Decoupled Broker Order Adapter, Event-Driven Signal & Position Conductor, Data Gold Mine Trade Forensics with MFE/MAE Excursion Tracking, Dynamic Compounding Capital Simulation & Diagnostic REST APIs, Daily Capital Ledgers, Unified Single-Flow Execution, Zero-DB NIFTY Filter, Midday Crash Recovery — 476 unit & integration tests passing).
 
 ---
 
@@ -193,6 +193,22 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
         * Multi-period performance analytics (win rate, gross/net PnL, Kotak Neo friction, profit factor, max MFE/MAE, duration).
         * Strategy configuration inspection and dynamic execution mode toggles (`PAPER`, `LIVE`, `DISABLED`).
         * Verified State: 472 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
+      - V2.4.7 Production Hardening, Daily Capital Ledgers & Execution Truth: COMPLETED & VERIFIED ✅
+        * Daily Capital Ledgers (`capital` & `simulation_capital` tables): Tracks daily capital progression (`trading_date`, `portfolio_mode`, `opening_capital`, `total_trades`, `realized_gross_pnl`, `statutory_charges`, `statutory_taxes`, `available_capital`, `net_pnl`, `closing_capital`). Updated synchronously on trade execution, partial exits, and final position closure. Capital compounds naturally from previous session closing balances.
+        * Unified Single-Flow Exit (Zero Double-Orders): Eliminated secondary market sell fallback. Stop-loss breaches trigger a single fill via `handleRestingStopLossFilled()`. Tactical exits (14:45 wind-down, 14:55 hard close, technical cuts) modify the resting SL-M order to MARKET in a single atomic call.
+        * Ghost Position Elimination: `PositionManagerService` never prematurely purges active positions from memory upon exit evaluation. Positions remain locked in RAM until broker API confirms fill and DB persistence succeeds.
+        * 14:55 EOD Hard Close Integration: Wired `MarketScheduler.scheduledEodHardCloseSweep()` to execute via `orderExecutionService.executeTacticalExit()`, guaranteeing 100% intraday square-off before market close.
+        * Midday Server Restart / Crash Recovery: `StartupRecoveryService` restores full 16-parameter `PositionSnapshot` (retaining `peakPrice`, `troughPrice`, and `restingSlOrderId`), reloads pending resting SL orders into `SimulatedOrderAdapter.restingOrders`, syncs compounded capital, and rehydrates today's traded symbol locks (`tradedSymbolsToday`), strategy trade counts, and loss counts into `RiskEngine`.
+        * Zero-DB NIFTY Filter: `MasterMarketFilterService` reads NIFTY 5M candles directly from `StockContextCache` in memory in $< 1\,\mu\text{s}$, completely eliminating N+1 database queries during sweeps.
+        * The 7 Real-World Live Broker Realities (What Paper Trading Hides):
+          1. **Order IDs vs Position IDs:** Exchanges and broker OMS (Angel One `orderid`, Kotak Neo `nOrdNo`) do not maintain persistent "position IDs". Position ID is an internal application concept. Order modification and cancellation must strictly use the broker's order ID.
+          2. **Order Modification Race Conditions:** If market price moves through the SL trigger while an API modify request is in-flight, the broker rejects the modification with "Order Already Triggered / Executed". The application must handle this by confirming the fill rather than retrying the modify.
+          3. **Execution Latency & Price Slippage:** Market orders and SL-M triggers incur execution slippage (minimum 1 tick = ₹0.05, and up to ₹0.20–₹0.50 during high volatility or fast momentum breakouts).
+          4. **Partial Fills:** In live markets, large quantities may fill across multiple price tranches or remain partially filled. The application must handle `OrderStatusType.PARTIALLY_FILLED` and manage the unfilled quantity.
+          5. **Broker RMS Pre-Trade Validation:** Live broker RMS checks cash margin, exposure limits, price bands, and freeze quantities. Rejections can occur even if application risk engine approves.
+          6. **Network Timeouts & Idempotency:** API requests to broker endpoints can time out without returning a response. The application must query order book status by `uniqueOrderId` / client order ID before retrying to prevent duplicate orders.
+          7. **Broker Session Token Expiry:** TOTP/JWT access tokens expire midday (Angel One JWT expires daily; Kotak Neo session tokens expire after 24h). Automatic session renewal and re-login must happen seamlessly without interrupting WebSocket tick ingestion or order execution.
+        * Verified State: 476 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
   - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies

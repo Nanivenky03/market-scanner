@@ -54,6 +54,9 @@ public class MarketScheduler implements SchedulingConfigurer {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.LiveStrategyExecutionConductor> conductorProvider;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.OrderExecutionService> orderExecutionServiceProvider;
+
     @Override
     public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
         // 1. Dynamic Database-Driven Trigger for Morning Maintenance (Default: 07:00
@@ -287,16 +290,28 @@ public class MarketScheduler implements SchedulingConfigurer {
 
         try {
             java.util.Map<String, Double> lastKnownPrices = liveMarketSnapshotService.getLatestTickPrices();
-            positionManagerService.closeExpiredPositions(
+            com.trading.scanner.execution.OrderExecutionService orderExec = orderExecutionServiceProvider != null
+                    ? orderExecutionServiceProvider.getIfAvailable() : null;
+
+            for (com.trading.scanner.risk.model.PortfolioMode mode : java.util.List.of(
                     com.trading.scanner.risk.model.PortfolioMode.PAPER,
-                    java.time.LocalTime.of(14, 55),
-                    lastKnownPrices
-            );
-            positionManagerService.closeExpiredPositions(
-                    com.trading.scanner.risk.model.PortfolioMode.LIVE,
-                    java.time.LocalTime.of(14, 55),
-                    lastKnownPrices
-            );
+                    com.trading.scanner.risk.model.PortfolioMode.LIVE)) {
+
+                java.util.Map<String, com.trading.scanner.strategy.model.PositionSnapshot> active = positionManagerService.getActivePositions(mode);
+                if (active != null && !active.isEmpty()) {
+                    for (com.trading.scanner.strategy.model.PositionSnapshot pos : new java.util.ArrayList<>(active.values())) {
+                        double exitPrice = (lastKnownPrices != null && lastKnownPrices.containsKey(pos.symbol()))
+                                ? lastKnownPrices.get(pos.symbol())
+                                : pos.entryPrice();
+
+                        if (orderExec != null) {
+                            orderExec.executeTacticalExit(mode, pos.symbol(), exitPrice, "SCHEDULED_EOD_HARD_CLOSE_SWEEP");
+                        } else {
+                            positionManagerService.forceClosePosition(mode, pos.symbol(), exitPrice, "SCHEDULED_EOD_HARD_CLOSE_SWEEP");
+                        }
+                    }
+                }
+            }
         } catch (Exception ex) {
             log.error("Scheduled EOD hard close sweep encountered an error: {}", ex.getMessage(), ex);
         }

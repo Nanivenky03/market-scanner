@@ -283,27 +283,13 @@ public class PositionManagerService {
         switch (action.type()) {
             case FULL_EXIT -> {
                 double pnl = calculatePnl(position, currentPrice, position.currentQuantity());
-                double exitTurnover = position.currentQuantity() * currentPrice;
-                double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
-                activePositions.get(mode).remove(symbol);
-                lastConfirmedLtp.remove(symbol);
-                pendingExitCandidatePrice.remove(symbol);
-                riskEngine.recordPositionClosed(mode, symbol, pnl);
-                riskEngine.recordFrictionIncurred(mode, exitFriction);
-                log.info("[{}] FULL EXIT executed for symbol={} at price={} P&L={} friction={} reason={}",
-                        mode, symbol, currentPrice, pnl, exitFriction, action.reason());
+                log.info("[{}] FULL EXIT signal evaluated for symbol={} at price={} calculatedPnl={} reason={}. Retaining in memory for OrderExecutionService.",
+                        mode, symbol, currentPrice, pnl, action.reason());
             }
             case PARTIAL_EXIT -> {
                 if (position.currentQuantity() <= 1) {
                     double pnl = calculatePnl(position, currentPrice, position.currentQuantity());
-                    double exitTurnover = position.currentQuantity() * currentPrice;
-                    double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
-                    activePositions.get(mode).remove(symbol);
-                    lastConfirmedLtp.remove(symbol);
-                    pendingExitCandidatePrice.remove(symbol);
-                    riskEngine.recordPositionClosed(mode, symbol, pnl);
-                    riskEngine.recordFrictionIncurred(mode, exitFriction);
-                    log.info("[{}] PARTIAL EXIT auto-converted to FULL EXIT (qty <= 1) for symbol={} at price={} P&L={}",
+                    log.info("[{}] PARTIAL EXIT signal evaluated for qty <= 1 on symbol={} at price={} P&L={}",
                             mode, symbol, currentPrice, pnl);
                     return;
                 }
@@ -315,14 +301,7 @@ public class PositionManagerService {
 
                 if (remainingQty <= 0) {
                     double pnl = calculatePnl(position, currentPrice, position.currentQuantity());
-                    double exitTurnover = position.currentQuantity() * currentPrice;
-                    double exitFriction = com.trading.scanner.risk.BrokerChargesCalculator.calculateSellLegCharges(exitTurnover);
-                    activePositions.get(mode).remove(symbol);
-                    lastConfirmedLtp.remove(symbol);
-                    pendingExitCandidatePrice.remove(symbol);
-                    riskEngine.recordPositionClosed(mode, symbol, pnl);
-                    riskEngine.recordFrictionIncurred(mode, exitFriction);
-                    log.info("[{}] PARTIAL EXIT auto-converted to FULL EXIT (remainingQty <= 0) for symbol={} at price={} P&L={}",
+                    log.info("[{}] PARTIAL EXIT signal evaluated for remainingQty <= 0 on symbol={} at price={} P&L={}",
                             mode, symbol, currentPrice, pnl);
                     return;
                 }

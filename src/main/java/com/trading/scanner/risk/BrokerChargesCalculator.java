@@ -146,7 +146,15 @@ public final class BrokerChargesCalculator {
             double sebiFee,
             double gst,
             double totalCharges
-    ) {}
+    ) {
+        public double getBrokerageAndExchangeCharges() {
+            return brokerage + exchangeFee;
+        }
+
+        public double getStatutoryTaxes() {
+            return stt + stampDuty + sebiFee + gst;
+        }
+    }
 
     public static ItemizedCharges calculateItemizedCharges(double turnover, boolean isBuy) {
         return calculateItemizedCharges(turnover, isBuy, activeBroker);

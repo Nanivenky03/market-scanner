@@ -205,7 +205,9 @@ public class LiveStrategyExecutionConductor {
                 List<OrderResponse> triggered = simulatedOrderAdapter.checkRestingTriggers(symbol, ltp);
                 if (!triggered.isEmpty()) {
                     log.info("[CONDUCTOR] [PAPER] Resting SL triggered for symbol={} at tick={}", symbol, ltp);
-                    orderExecutionService.executeTacticalExit(PortfolioMode.PAPER, symbol, ltp, "STOP_LOSS_TRIGGERED");
+                    for (OrderResponse fill : triggered) {
+                        orderExecutionService.handleRestingStopLossFilled(PortfolioMode.PAPER, symbol, fill);
+                    }
                     return;
                 }
 

@@ -32,6 +32,9 @@ public class StartupRecoveryService {
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simulatedPositionRepositoryProvider;
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.strategy.cache.StockContextCache> stockContextCacheProvider;
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.StockUniverseRepository> stockUniverseRepositoryProvider;
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.adapter.SimulatedOrderAdapter> simulatedOrderAdapterProvider;
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.risk.RiskEngine> riskEngineProvider;
+    private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.SimulationManagementService> simulationManagementServiceProvider;
 
     @org.springframework.beans.factory.annotation.Autowired
     public StartupRecoveryService(
@@ -46,7 +49,10 @@ public class StartupRecoveryService {
             org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.PositionRepository> positionRepositoryProvider,
             org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simulatedPositionRepositoryProvider,
             org.springframework.beans.factory.ObjectProvider<com.trading.scanner.strategy.cache.StockContextCache> stockContextCacheProvider,
-            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.StockUniverseRepository> stockUniverseRepositoryProvider) {
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.StockUniverseRepository> stockUniverseRepositoryProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.adapter.SimulatedOrderAdapter> simulatedOrderAdapterProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.risk.RiskEngine> riskEngineProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.SimulationManagementService> simulationManagementServiceProvider) {
         this.timeProvider = timeProvider;
         this.tradingCalendar = tradingCalendar;
         this.backfillQueueService = backfillQueueService;
@@ -59,6 +65,28 @@ public class StartupRecoveryService {
         this.simulatedPositionRepositoryProvider = simulatedPositionRepositoryProvider;
         this.stockContextCacheProvider = stockContextCacheProvider;
         this.stockUniverseRepositoryProvider = stockUniverseRepositoryProvider;
+        this.simulatedOrderAdapterProvider = simulatedOrderAdapterProvider;
+        this.riskEngineProvider = riskEngineProvider;
+        this.simulationManagementServiceProvider = simulationManagementServiceProvider;
+    }
+
+    public StartupRecoveryService(
+            TimeProvider timeProvider,
+            TradingCalendar tradingCalendar,
+            BackfillQueueService backfillQueueService,
+            LiveMarketSnapshotService liveMarketSnapshotService,
+            PreMarketWorkflowService preMarketWorkflowService,
+            EodReconciliationService eodReconciliationService,
+            WorkflowStatusService workflowStatusService,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.PositionRepository> positionRepositoryProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simulatedPositionRepositoryProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.strategy.cache.StockContextCache> stockContextCacheProvider,
+            org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.StockUniverseRepository> stockUniverseRepositoryProvider) {
+        this(timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
+                preMarketWorkflowService, eodReconciliationService, workflowStatusService,
+                positionManagerServiceProvider, positionRepositoryProvider, simulatedPositionRepositoryProvider,
+                stockContextCacheProvider, stockUniverseRepositoryProvider, null, null, null);
     }
 
     public StartupRecoveryService(
@@ -75,7 +103,7 @@ public class StartupRecoveryService {
         this(timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
                 preMarketWorkflowService, eodReconciliationService, workflowStatusService,
                 positionManagerServiceProvider, positionRepositoryProvider, simulatedPositionRepositoryProvider,
-                null, null);
+                null, null, null, null, null);
     }
 
     public StartupRecoveryService(
@@ -87,7 +115,8 @@ public class StartupRecoveryService {
             EodReconciliationService eodReconciliationService,
             WorkflowStatusService workflowStatusService) {
         this(timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
-                preMarketWorkflowService, eodReconciliationService, workflowStatusService, null, null, null);
+                preMarketWorkflowService, eodReconciliationService, workflowStatusService,
+                null, null, null, null, null, null, null, null);
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -168,6 +197,85 @@ public class StartupRecoveryService {
 
                         pms.rehydrateActiveState(com.trading.scanner.risk.model.PortfolioMode.PAPER, paperSnapshots);
                         pms.rehydrateActiveState(com.trading.scanner.risk.model.PortfolioMode.LIVE, liveSnapshots);
+
+                        // 4.1 Rehydrate pending resting SL orders into SimulatedOrderAdapter
+                        if (simulatedOrderAdapterProvider != null) {
+                            com.trading.scanner.execution.adapter.SimulatedOrderAdapter adapter = simulatedOrderAdapterProvider.getIfAvailable();
+                            if (adapter != null) {
+                                adapter.rehydratePendingOrdersFromDb();
+                            }
+                        }
+
+                        // 4.2 Sync compounded capital into simulation management
+                        if (simulationManagementServiceProvider != null) {
+                            com.trading.scanner.execution.SimulationManagementService sms = simulationManagementServiceProvider.getIfAvailable();
+                            if (sms != null) {
+                                sms.syncCompoundedCapital();
+                            }
+                        }
+
+                        // 4.3 Rehydrate traded symbols and strategy limits into RiskEngine
+                        if (riskEngineProvider != null) {
+                            com.trading.scanner.risk.RiskEngine re = riskEngineProvider.getIfAvailable();
+                            if (re != null) {
+                                String todayPrefix = today.toString();
+                                if (simPosRepo != null) {
+                                    java.util.List<com.trading.scanner.model.SimulatedPosition> todayPaperPositions =
+                                            simPosRepo.findByEntryTimeStartingWith(todayPrefix);
+                                    java.util.Set<String> paperTradedSymbols = new java.util.HashSet<>();
+                                    java.util.Map<Integer, Integer> paperTradesCount = new java.util.HashMap<>();
+                                    java.util.Map<Integer, Integer> paperLossCount = new java.util.HashMap<>();
+
+                                    for (com.trading.scanner.model.SimulatedPosition pos : todayPaperPositions) {
+                                        if (pos.getSymbol() != null) {
+                                            paperTradedSymbols.add(pos.getSymbol());
+                                        }
+                                        if (pos.getStrategyId() != null) {
+                                            paperTradesCount.merge(pos.getStrategyId(), 1, Integer::sum);
+                                            if ("CLOSED".equalsIgnoreCase(pos.getPositionStatus()) && pos.getNetPnl() != null && pos.getNetPnl() < 0.0) {
+                                                paperLossCount.merge(pos.getStrategyId(), 1, Integer::sum);
+                                            }
+                                        }
+                                    }
+
+                                    re.rehydrateState(com.trading.scanner.risk.model.PortfolioMode.PAPER,
+                                            paperSnapshots, todayPaperPositions.size(), paperTradedSymbols, null);
+
+                                    paperTradesCount.forEach((stratId, count) ->
+                                            re.recordStrategyTradeCount(com.trading.scanner.risk.model.PortfolioMode.PAPER, stratId, count));
+                                    paperLossCount.forEach((stratId, count) ->
+                                            re.recordStrategyLossCount(com.trading.scanner.risk.model.PortfolioMode.PAPER, stratId, count));
+                                }
+
+                                if (posRepo != null) {
+                                    java.util.List<com.trading.scanner.model.Position> todayLivePositions =
+                                            posRepo.findByEntryTimeStartingWith(todayPrefix);
+                                    java.util.Set<String> liveTradedSymbols = new java.util.HashSet<>();
+                                    java.util.Map<Integer, Integer> liveTradesCount = new java.util.HashMap<>();
+                                    java.util.Map<Integer, Integer> liveLossCount = new java.util.HashMap<>();
+
+                                    for (com.trading.scanner.model.Position pos : todayLivePositions) {
+                                        if (pos.getSymbol() != null) {
+                                            liveTradedSymbols.add(pos.getSymbol());
+                                        }
+                                        if (pos.getStrategyId() != null) {
+                                            liveTradesCount.merge(pos.getStrategyId(), 1, Integer::sum);
+                                            if ("CLOSED".equalsIgnoreCase(pos.getPositionStatus()) && pos.getNetPnl() != null && pos.getNetPnl() < 0.0) {
+                                                liveLossCount.merge(pos.getStrategyId(), 1, Integer::sum);
+                                            }
+                                        }
+                                    }
+
+                                    re.rehydrateState(com.trading.scanner.risk.model.PortfolioMode.LIVE,
+                                            liveSnapshots, todayLivePositions.size(), liveTradedSymbols, null);
+
+                                    liveTradesCount.forEach((stratId, count) ->
+                                            re.recordStrategyTradeCount(com.trading.scanner.risk.model.PortfolioMode.LIVE, stratId, count));
+                                    liveLossCount.forEach((stratId, count) ->
+                                            re.recordStrategyLossCount(com.trading.scanner.risk.model.PortfolioMode.LIVE, stratId, count));
+                                }
+                            }
+                        }
                     }
                 } catch (Exception ex) {
                     log.warn("Position rehydration on startup warning: {}", ex.getMessage());
@@ -215,6 +323,8 @@ public class StartupRecoveryService {
                 && p.getCurrentQuantity() < p.getInitialQuantity();
         Double sl = p.getUpdatedStopLoss() != null ? p.getUpdatedStopLoss() : p.getInitialStopLoss();
         Double target = p.getUpdatedTarget() != null ? p.getUpdatedTarget() : p.getInitialTarget();
+        Double peak = p.getPeakPrice() != null ? p.getPeakPrice() : p.getEntryPrice();
+        Double trough = p.getTroughPrice() != null ? p.getTroughPrice() : p.getEntryPrice();
 
         return new com.trading.scanner.strategy.model.PositionSnapshot(
                 p.getId(),
@@ -229,7 +339,10 @@ public class StartupRecoveryService {
                 target,
                 p.getEntryPrice(),
                 target1Booked,
-                entryTime
+                peak,
+                trough,
+                entryTime,
+                p.getRestingSlOrderId()
         );
     }
 
@@ -244,6 +357,8 @@ public class StartupRecoveryService {
                 && p.getCurrentQuantity() < p.getInitialQuantity();
         Double sl = p.getUpdatedStopLoss() != null ? p.getUpdatedStopLoss() : p.getInitialStopLoss();
         Double target = p.getUpdatedTarget() != null ? p.getUpdatedTarget() : p.getInitialTarget();
+        Double peak = p.getPeakPrice() != null ? p.getPeakPrice() : p.getEntryPrice();
+        Double trough = p.getTroughPrice() != null ? p.getTroughPrice() : p.getEntryPrice();
 
         return new com.trading.scanner.strategy.model.PositionSnapshot(
                 p.getId(),
@@ -258,7 +373,10 @@ public class StartupRecoveryService {
                 target,
                 p.getEntryPrice(),
                 target1Booked,
-                entryTime
+                peak,
+                trough,
+                entryTime,
+                p.getRestingSlOrderId()
         );
     }
 

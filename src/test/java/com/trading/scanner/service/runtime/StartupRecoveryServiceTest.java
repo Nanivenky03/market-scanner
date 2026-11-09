@@ -226,4 +226,79 @@ class StartupRecoveryServiceTest {
 
                 verify(cache, never()).warmUp(any(), any(), any());
         }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        void recoverNow_shouldRehydrateOpenPositions_RestingOrders_and_RiskEngine() {
+                LocalDate today = LocalDate.of(2026, 8, 24);
+                LocalDateTime now = today.atTime(11, 30);
+
+                when(timeProvider.today()).thenReturn(today);
+                when(timeProvider.nowDateTime()).thenReturn(now);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+
+                com.trading.scanner.position.PositionManagerService pms = mock(com.trading.scanner.position.PositionManagerService.class);
+                com.trading.scanner.repository.SimulatedPositionRepository simPosRepo = mock(com.trading.scanner.repository.SimulatedPositionRepository.class);
+                com.trading.scanner.execution.adapter.SimulatedOrderAdapter adapter = mock(com.trading.scanner.execution.adapter.SimulatedOrderAdapter.class);
+                com.trading.scanner.execution.SimulationManagementService sms = mock(com.trading.scanner.execution.SimulationManagementService.class);
+                com.trading.scanner.risk.RiskEngine riskEngine = mock(com.trading.scanner.risk.RiskEngine.class);
+
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> pmsProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                when(pmsProvider.getIfAvailable()).thenReturn(pms);
+
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.repository.SimulatedPositionRepository> simPosRepoProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                when(simPosRepoProvider.getIfAvailable()).thenReturn(simPosRepo);
+
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.adapter.SimulatedOrderAdapter> adapterProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                when(adapterProvider.getIfAvailable()).thenReturn(adapter);
+
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.execution.SimulationManagementService> smsProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                when(smsProvider.getIfAvailable()).thenReturn(sms);
+
+                org.springframework.beans.factory.ObjectProvider<com.trading.scanner.risk.RiskEngine> riskEngineProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
+                when(riskEngineProvider.getIfAvailable()).thenReturn(riskEngine);
+
+                com.trading.scanner.model.SimulatedPosition openPos = com.trading.scanner.model.SimulatedPosition.builder()
+                                .id(101)
+                                .strategyId(2)
+                                .symbol("RELIANCE")
+                                .exchange("NSE")
+                                .positionSide("LONG")
+                                .initialQuantity(50)
+                                .currentQuantity(50)
+                                .entryPrice(2500.0)
+                                .initialStopLoss(2460.0)
+                                .updatedStopLoss(2460.0)
+                                .peakPrice(2520.0)
+                                .troughPrice(2490.0)
+                                .restingSlOrderId("SIM_SL_101")
+                                .positionStatus("OPEN")
+                                .entryTime(today.atTime(9, 30).toString())
+                                .build();
+
+                when(simPosRepo.findByPositionStatus("OPEN")).thenReturn(List.of(openPos));
+                when(simPosRepo.findByEntryTimeStartingWith(today.toString())).thenReturn(List.of(openPos));
+
+                StartupRecoveryService recoveryService = new StartupRecoveryService(
+                                timeProvider, tradingCalendar, backfillQueueService, liveMarketSnapshotService,
+                                preMarketWorkflowService, eodReconciliationService, workflowStatusService,
+                                pmsProvider, null, simPosRepoProvider, null, null,
+                                adapterProvider, riskEngineProvider, smsProvider);
+
+                recoveryService.recoverNow();
+
+                verify(pms).rehydrateActiveState(eq(com.trading.scanner.risk.model.PortfolioMode.PAPER), argThat(list -> {
+                        if (list.size() != 1) return false;
+                        com.trading.scanner.strategy.model.PositionSnapshot snap = list.get(0);
+                        return "RELIANCE".equals(snap.symbol()) &&
+                               Double.valueOf(2520.0).equals(snap.peakPrice()) &&
+                               Double.valueOf(2490.0).equals(snap.troughPrice()) &&
+                               "SIM_SL_101".equals(snap.restingSlOrderId());
+                }));
+
+                verify(adapter).rehydratePendingOrdersFromDb();
+                verify(sms).syncCompoundedCapital();
+                verify(riskEngine).rehydrateState(eq(com.trading.scanner.risk.model.PortfolioMode.PAPER), any(), eq(1), argThat(set -> set.contains("RELIANCE")), isNull());
+                verify(riskEngine).recordStrategyTradeCount(eq(com.trading.scanner.risk.model.PortfolioMode.PAPER), eq(2), eq(1));
+        }
 }

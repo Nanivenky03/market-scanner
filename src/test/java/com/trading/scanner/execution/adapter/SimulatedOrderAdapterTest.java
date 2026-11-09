@@ -142,4 +142,28 @@ class SimulatedOrderAdapterTest {
         // Order removed from resting map
         assertFalse(adapter.getActiveRestingOrders().containsKey(orderId));
     }
+
+    @Test
+    @DisplayName("rehydratePendingOrdersFromDb reloads resting PENDING_TRIGGER orders on crash recovery")
+    void rehydratePendingOrdersFromDb_shouldRestoreRestingOrders() {
+        SimulatedOrder pendingOrder = SimulatedOrder.builder()
+                .id(999)
+                .brokerOrderId("SIM_ORD_PENDING_1")
+                .symbol("WIPRO")
+                .exchange("NSE")
+                .transactionType("SELL")
+                .quantity(50)
+                .triggerPrice(450.0)
+                .orderStatus("PENDING_TRIGGER")
+                .placedAt(java.time.LocalDateTime.now().toString())
+                .build();
+
+        when(simulatedOrderRepository.findByOrderStatus("PENDING_TRIGGER"))
+                .thenReturn(List.of(pendingOrder));
+
+        int rehydrated = adapter.rehydratePendingOrdersFromDb();
+        assertEquals(1, rehydrated);
+        assertTrue(adapter.getActiveRestingOrders().containsKey("SIM_ORD_PENDING_1"));
+        assertEquals(450.0, adapter.getActiveRestingOrders().get("SIM_ORD_PENDING_1").triggerPrice());
+    }
 }

@@ -18,7 +18,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class MasterMarketFilterServiceTest {
@@ -135,5 +135,33 @@ class MasterMarketFilterServiceTest {
         assertEquals(25000.0, state.niftyVwap());
         assertEquals(-0.4, state.vwapDistancePct(), 0.001);
         assertTrue(state.reason().contains("BEARISH"));
+    }
+
+    @Test
+    void evaluateCurrentState_withStockContextCache_shouldBypassDatabaseQuery() {
+        com.trading.scanner.strategy.cache.StockContextCache mockCache = mock(com.trading.scanner.strategy.cache.StockContextCache.class);
+        MasterMarketFilterService cachedFilter = new MasterMarketFilterService(marketCandleRepository, timeProvider, mockCache);
+
+        LocalDateTime time = today.atTime(10, 15);
+        when(timeProvider.nowDateTime()).thenReturn(time);
+
+        MarketCandle candle = MarketCandle.builder()
+                .symbol("NIFTY")
+                .exchange("NSE")
+                .timeframe(CandleTimeframe.FIVE_MINUTE)
+                .candleTime(today.atTime(10, 10))
+                .closePrice(25100.0)
+                .vwap(25000.0)
+                .build();
+
+        when(mockCache.getCandles(eq("NIFTY"), eq("NSE"), eq(CandleTimeframe.FIVE_MINUTE)))
+                .thenReturn(List.of(candle));
+
+        MarketState state = cachedFilter.evaluateCurrentState(today);
+
+        assertTrue(state.dataValid());
+        assertTrue(state.isBullish());
+        assertEquals(25100.0, state.niftyClose());
+        verifyNoInteractions(marketCandleRepository);
     }
 }

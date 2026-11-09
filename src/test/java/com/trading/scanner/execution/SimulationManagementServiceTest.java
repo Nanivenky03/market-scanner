@@ -291,4 +291,47 @@ class SimulationManagementServiceTest {
         assertTrue(resp.isActive());
         verify(strategyConfigRepository).save(cfg);
     }
+
+    @Test
+    @DisplayName("getCapitalStatus reads directly from simulation_capital ledger if record exists")
+    void getCapitalStatus_withSimulationCapitalRepository_shouldReadFromLedger() {
+        com.trading.scanner.repository.SimulationCapitalRepository simCapRepo = mock(com.trading.scanner.repository.SimulationCapitalRepository.class);
+        SimulationManagementService serviceWithCap = new SimulationManagementService(
+                runtimeSettingRepository,
+                simulatedPositionRepository,
+                simulatedOrderRepository,
+                strategyConfigRepository,
+                riskEngine,
+                positionManagerService,
+                simulatedOrderAdapter,
+                stockContextCache,
+                timeProvider,
+                simCapRepo,
+                null
+        );
+
+        when(runtimeSettingRepository.findByNameAndIsActiveTrue(SimulationManagementService.SETTING_INITIAL_CAPITAL))
+                .thenReturn(Optional.empty());
+
+        com.trading.scanner.model.SimulationCapital cap = com.trading.scanner.model.SimulationCapital.builder()
+                .tradingDate(today.toString())
+                .portfolioMode("PAPER")
+                .openingCapital(55000.0)
+                .availableCapital(56200.0)
+                .totalTrades(3)
+                .realizedGrossPnl(1300.0)
+                .statutoryCharges(80.0)
+                .statutoryTaxes(20.0)
+                .netPnl(1200.0)
+                .build();
+
+        when(simCapRepo.findByTradingDate(today.toString())).thenReturn(Optional.of(cap));
+
+        SimulationManagementService.SimulationCapitalResponse res = serviceWithCap.getCapitalStatus();
+        assertEquals(50000.0, res.baselineCapital());
+        assertEquals(55000.0, res.startingCapitalToday());
+        assertEquals(56200.0, res.currentCompoundedCapital());
+        assertEquals(1200.0, res.realizedPnlToday());
+        assertEquals(6200.0, res.cumulativeRealizedPnl());
+    }
 }

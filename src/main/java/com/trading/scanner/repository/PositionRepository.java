@@ -14,5 +14,7 @@ public interface PositionRepository extends JpaRepository<Position, Integer> {
 
     List<Position> findByPositionStatusAndEntryTimeStartingWith(String positionStatus, String datePrefix);
 
+    List<Position> findByEntryTimeStartingWith(String datePrefix);
+
     Optional<Position> findBySymbolAndPositionStatus(String symbol, String positionStatus);
 }
