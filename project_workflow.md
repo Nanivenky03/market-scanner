@@ -757,7 +757,7 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
 
 ---
 
-#### 7. V2.5 — Institutional Hardening, Persistence & Test Suite `[COMPLETED ✅]`
+#### 7. V2 Baseline — Institutional Hardening, Persistence & Initial Entity Setup `[COMPLETED ✅]`
 
 - Implemented 7-issue institutional hardening:
   - `BrokerChargesCalculator` for statutory Angel One / NSE fees & 3-leg friction modeling.

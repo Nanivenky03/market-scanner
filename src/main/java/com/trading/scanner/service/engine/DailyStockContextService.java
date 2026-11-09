@@ -18,7 +18,9 @@ import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
+import com.trading.scanner.strategy.cache.StockContextCache;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -73,6 +75,13 @@ public class DailyStockContextService {
         private final MarketStateService marketStateService;
         private final TradingCalendar tradingCalendar;
         private final TimeProvider timeProvider;
+
+        @Autowired(required = false)
+        private StockContextCache stockContextCache;
+
+        public void setStockContextCache(StockContextCache stockContextCache) {
+                this.stockContextCache = stockContextCache;
+        }
 
         @Transactional
         public void processFinalizedOneMinuteCandle(
@@ -176,6 +185,10 @@ public class DailyStockContextService {
                                 timeProvider.nowDateTime());
 
                 dailyStockContextRepository.save(context);
+
+                if (stockContextCache != null) {
+                        stockContextCache.updateDailyContext(context);
+                }
         }
 
         @Transactional(readOnly = true)

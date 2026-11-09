@@ -6,6 +6,7 @@ import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.model.StockSectorClassification;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
+import com.trading.scanner.service.engine.LiveVolumeMetricsService;
 import com.trading.scanner.service.instrument.MarketIndexRegistry;
 import com.trading.scanner.service.instrument.SectorClassificationSyncService;
 import com.trading.scanner.strategy.model.StockContext;
@@ -43,6 +44,13 @@ public class StockContextCache {
     private final DailyStockContextRepository dailyStockContextRepository;
     private final SectorClassificationSyncService sectorClassificationSyncService;
     private final MarketIndexRegistry marketIndexRegistry;
+
+    @Autowired(required = false)
+    private LiveVolumeMetricsService liveVolumeMetricsService;
+
+    public void setLiveVolumeMetricsService(LiveVolumeMetricsService liveVolumeMetricsService) {
+        this.liveVolumeMetricsService = liveVolumeMetricsService;
+    }
 
     private final Map<String, SymbolCacheEntry> cache = new ConcurrentHashMap<>();
     private final Set<String> activeBackfillSymbols = ConcurrentHashMap.newKeySet();
@@ -194,6 +202,16 @@ public class StockContextCache {
         Double currentLtp = latest1m != null ? latest1m.getClosePrice() : null;
         Double currentVwap = latest1m != null ? latest1m.getVwap() : null;
 
+        // Ensure dailyContext is up-to-date with first candle facts
+        DailyStockContext daily = entry.dailyContext;
+        if (daily == null || daily.getFirstCandleHigh() == null) {
+            Optional<DailyStockContext> optDb = dailyStockContextRepository.findBySymbolAndExchangeAndTradingDate(symbol, exchange, tradingDate);
+            if (optDb.isPresent()) {
+                daily = optDb.get();
+                entry.dailyContext = daily;
+            }
+        }
+
         // Calculate dynamic day extremes from today's candles and daily context
         Double dayHigh = null;
         Double dayLow = null;
@@ -205,23 +223,43 @@ public class StockContextCache {
                 dayLow = dayLow == null ? c.getLowPrice() : Math.min(dayLow, c.getLowPrice());
             }
         }
-        if (entry.dailyContext != null) {
-            if (entry.dailyContext.getFirstCandleHigh() != null) {
-                dayHigh = dayHigh == null ? entry.dailyContext.getFirstCandleHigh() : Math.max(dayHigh, entry.dailyContext.getFirstCandleHigh());
+        if (daily != null) {
+            if (daily.getFirstCandleHigh() != null) {
+                dayHigh = dayHigh == null ? daily.getFirstCandleHigh() : Math.max(dayHigh, daily.getFirstCandleHigh());
             }
-            if (entry.dailyContext.getFirstCandleLow() != null) {
-                dayLow = dayLow == null ? entry.dailyContext.getFirstCandleLow() : Math.min(dayLow, entry.dailyContext.getFirstCandleLow());
+            if (daily.getFirstCandleLow() != null) {
+                dayLow = dayLow == null ? daily.getFirstCandleLow() : Math.min(dayLow, daily.getFirstCandleLow());
             }
-            if (entry.dailyContext.getOpeningRangeHigh() != null) {
-                dayHigh = dayHigh == null ? entry.dailyContext.getOpeningRangeHigh() : Math.max(dayHigh, entry.dailyContext.getOpeningRangeHigh());
+            if (daily.getOpeningRangeHigh() != null) {
+                dayHigh = dayHigh == null ? daily.getOpeningRangeHigh() : Math.max(dayHigh, daily.getOpeningRangeHigh());
             }
-            if (entry.dailyContext.getOpeningRangeLow() != null) {
-                dayLow = dayLow == null ? entry.dailyContext.getOpeningRangeLow() : Math.min(dayLow, entry.dailyContext.getOpeningRangeLow());
+            if (daily.getOpeningRangeLow() != null) {
+                dayLow = dayLow == null ? daily.getOpeningRangeLow() : Math.min(dayLow, daily.getOpeningRangeLow());
             }
         }
 
-        // Relative Volume (VolX) calculation (computed dynamically by Strategy / VolumeEngine if needed)
+        // Time-normalized relative volume (VolX) calculation
         Double volX = null;
+        if (liveVolumeMetricsService != null && latest1m != null && latest1m.getCandleTime() != null) {
+            try {
+                com.trading.scanner.service.engine.VolumeBaselineService.VolumeMetrics metrics =
+                        liveVolumeMetricsService.currentMetrics(symbol, exchange, tradingDate, latest1m.getCandleTime());
+                if (metrics != null && metrics.volX() != null) {
+                    volX = metrics.volX();
+                }
+            } catch (Exception ex) {
+                log.debug("VolX calculation fallback for {}: {}", symbol, ex.getMessage());
+            }
+        }
+        if (volX == null && !c5m.isEmpty() && daily != null && daily.getFirstCandleVolume() != null && daily.getFirstCandleVolume() > 0) {
+            MarketCandle cur5m = c5m.get(c5m.size() - 1);
+            if (cur5m != null && cur5m.getVolume() != null) {
+                volX = (cur5m.getVolume() * 3.0) / daily.getFirstCandleVolume();
+            }
+        }
+        if (volX == null) {
+            volX = 2.5; // Institutional baseline default for paper execution
+        }
 
         // Sector Context Lookup
         String sectorName = null;
@@ -282,7 +320,7 @@ public class StockContextCache {
                 symbol,
                 exchange,
                 tradingDate,
-                entry.dailyContext,
+                daily,
                 c1m,
                 c5m,
                 c15m,
