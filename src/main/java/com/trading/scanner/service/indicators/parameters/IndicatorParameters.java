@@ -2,7 +2,7 @@ package com.trading.scanner.service.indicators.parameters;
 
 /**
  * An immutable, pure data carrier for indicator calculation window sizes.
- * This object is constructed by the ScannerEngine and passed to the IndicatorService
+ * This object is constructed by the strategy/indicator service and passed to the IndicatorService
  * to ensure that indicator calculations are explicitly parameterized and deterministic.
  *
  * @param rsiPeriod The lookback period for RSI calculations.

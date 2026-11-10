@@ -779,6 +779,8 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
   - `signal_outcomes`
   - `scanner_runs`
   - `scan_execution_state`
+- **Entity & Service Purge:**
+  - Corresponding legacy Java entities (`ScanExecutionState`, `ScanResult`, `ScannerRun`, `SignalOutcome`), their Spring Data repositories, and obsolete services (`ScannerEngine`, `ExecutionStateService`) were removed from the codebase to align Hibernate schema validation (`spring.jpa.hibernate.ddl-auto=validate`) with Flyway `V034`.
 
 ---
 
