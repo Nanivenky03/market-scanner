@@ -120,9 +120,19 @@ public class EodHistoricalBackfillService {
                 int dailyInserted = backfillDailyBars(target, missingDates);
                 totalDailyBars += dailyInserted;
 
-                // Step 2: Gap-only 1-minute intraday candles and resolution backfill
-                int minuteDatesFilled = backfillMissingIntradayMinutes(target, missingDates);
-                totalMinuteDates += minuteDatesFilled;
+                // Step 2: Gap-only 1-minute intraday candles and resolution backfill (equities & NIFTY)
+                if (!target.isIndex() || "NIFTY".equalsIgnoreCase(target.symbol())) {
+                    int minuteDatesFilled = backfillMissingIntradayMinutes(target, missingDates);
+                    totalMinuteDates += minuteDatesFilled;
+                }
+
+                // Throttle slightly to respect Angel One historical API rate limit (10 req/s)
+                try {
+                    Thread.sleep(120);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
 
             } catch (Exception ex) {
                 log.warn("[BACKFILL] Exception during historical gap backfill for target={}: {}",

@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 @Slf4j
@@ -50,6 +51,13 @@ public class AngelOneMarketDataProvider
         private final InstrumentMasterRepository instrumentMasterRepository;
         private final AngelOneSessionService angelOneSessionService;
         private final AngelOneApiExecutor angelOneApiExecutor;
+
+        @org.springframework.beans.factory.annotation.Autowired(required = false)
+        private com.trading.scanner.service.instrument.MarketIndexRegistry marketIndexRegistry;
+
+        public void setMarketIndexRegistry(com.trading.scanner.service.instrument.MarketIndexRegistry registry) {
+                this.marketIndexRegistry = registry;
+        }
 
         @Override
         public ProviderType getProviderType() {
@@ -492,23 +500,42 @@ public class AngelOneMarketDataProvider
         private InstrumentMaster getRequiredInstrument(
                         String symbol) {
 
-                InstrumentMaster instrument = instrumentMasterRepository
+                Optional<InstrumentMaster> opt = instrumentMasterRepository
                                 .findBySymbolAndExchange(
                                                 symbol,
-                                                "NSE")
-                                .orElseThrow(() -> new ProviderException(
-                                                "Instrument not found in instrument_master for symbol="
-                                                                + symbol
-                                                                + ", exchange=NSE"));
+                                                "NSE");
 
-                if (instrument.getBrokerToken() == null
-                                || instrument.getBrokerToken().isBlank()) {
+                if (opt.isPresent() && opt.get().getBrokerToken() != null && !opt.get().getBrokerToken().isBlank()) {
+                        return opt.get();
+                }
+
+                if (marketIndexRegistry != null) {
+                        Optional<com.trading.scanner.service.instrument.MarketIndexRegistry.IndexDefinition> idx =
+                                        marketIndexRegistry.resolve(symbol);
+                        if (idx.isPresent() && idx.get().brokerToken() != null && !idx.get().brokerToken().isBlank()) {
+                                return InstrumentMaster.builder()
+                                                .symbol(idx.get().canonicalSymbol())
+                                                .exchange(idx.get().exchange())
+                                                .companyName(idx.get().providerSymbol())
+                                                .brokerToken(idx.get().brokerToken())
+                                                .brokerSymbol(idx.get().providerSymbol())
+                                                .instrumentType("INDEX")
+                                                .segment("INDEX")
+                                                .isActive(true)
+                                                .build();
+                        }
+                }
+
+                if (opt.isPresent()) {
                         throw new ProviderException(
                                         "broker_token is missing for symbol="
                                                         + symbol);
                 }
 
-                return instrument;
+                throw new ProviderException(
+                                "Instrument not found in instrument_master for symbol="
+                                                + symbol
+                                                + ", exchange=NSE");
         }
 
         public Map<String, AngelOneMarketDtos.AngelOneMarketQuoteItem> fetchMarketQuotes(

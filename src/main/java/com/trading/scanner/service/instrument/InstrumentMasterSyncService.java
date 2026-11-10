@@ -19,8 +19,17 @@ public class InstrumentMasterSyncService {
 
     private final InstrumentMasterRepository instrumentMasterRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MarketIndexRegistry marketIndexRegistry;
+
+    public void setMarketIndexRegistry(MarketIndexRegistry registry) {
+        this.marketIndexRegistry = registry;
+    }
+
     @Transactional
     public int ensureRequiredMarketReferences() {
+        int totalChanges = 0;
+
         Optional<InstrumentMaster> existing = instrumentMasterRepository
                 .findBySymbolAndExchange(NIFTY_SYMBOL, NSE);
 
@@ -40,53 +49,97 @@ public class InstrumentMasterSyncService {
 
             instrumentMasterRepository.save(nifty);
             log.info("Created required NIFTY instrument-master row");
-            return 1;
+            totalChanges++;
+        } else {
+            InstrumentMaster nifty = existing.get();
+            boolean changed = false;
+
+            if (!"99926000".equals(nifty.getBrokerToken())) {
+                nifty.setBrokerToken("99926000");
+                changed = true;
+            }
+
+            if (!"Nifty 50".equals(nifty.getBrokerSymbol())) {
+                nifty.setBrokerSymbol("Nifty 50");
+                changed = true;
+            }
+
+            if (!"NIFTY 50".equals(nifty.getCompanyName())) {
+                nifty.setCompanyName("NIFTY 50");
+                changed = true;
+            }
+
+            if (!"INDEX".equalsIgnoreCase(nifty.getInstrumentType())) {
+                nifty.setInstrumentType("INDEX");
+                changed = true;
+            }
+
+            if (!"INDEX".equalsIgnoreCase(nifty.getSegment())) {
+                nifty.setSegment("INDEX");
+                changed = true;
+            }
+
+            if (!Boolean.TRUE.equals(nifty.getIsActive())) {
+                nifty.setIsActive(true);
+                changed = true;
+            }
+
+            if (nifty.getMetadataSource() == null || nifty.getMetadataSource().isBlank()) {
+                nifty.setMetadataSource("REQUIRED_MARKET_REFERENCE");
+                changed = true;
+            }
+
+            if (changed) {
+                instrumentMasterRepository.save(nifty);
+                log.info("Corrected required NIFTY instrument-master row");
+                totalChanges++;
+            }
         }
 
-        InstrumentMaster nifty = existing.get();
-        boolean changed = false;
+        // Sync all other registered sector/benchmark indices
+        if (marketIndexRegistry != null) {
+            for (MarketIndexRegistry.IndexDefinition idx : marketIndexRegistry.getAllRegisteredIndices()) {
+                if (idx == null || NIFTY_SYMBOL.equalsIgnoreCase(idx.canonicalSymbol())) {
+                    continue;
+                }
+                String sym = idx.canonicalSymbol();
+                String exch = idx.exchange() != null ? idx.exchange() : "NSE";
+                Optional<InstrumentMaster> opt = instrumentMasterRepository.findBySymbolAndExchange(sym, exch);
 
-        if (!"99926000".equals(nifty.getBrokerToken())) {
-            nifty.setBrokerToken("99926000");
-            changed = true;
+                if (opt.isEmpty()) {
+                    InstrumentMaster im = InstrumentMaster.builder()
+                            .symbol(sym)
+                            .exchange(exch)
+                            .companyName(idx.providerSymbol())
+                            .instrumentType("INDEX")
+                            .segment("INDEX")
+                            .brokerSymbol(idx.providerSymbol())
+                            .brokerToken(idx.brokerToken())
+                            .metadataSource("REQUIRED_MARKET_REFERENCE")
+                            .isActive(true)
+                            .build();
+                    instrumentMasterRepository.save(im);
+                    log.info("Created required {} instrument-master row (token={})", sym, idx.brokerToken());
+                    totalChanges++;
+                } else {
+                    InstrumentMaster im = opt.get();
+                    boolean changed = false;
+                    if (idx.brokerToken() != null && !idx.brokerToken().equals(im.getBrokerToken())) {
+                        im.setBrokerToken(idx.brokerToken());
+                        changed = true;
+                    }
+                    if (!Boolean.TRUE.equals(im.getIsActive())) {
+                        im.setIsActive(true);
+                        changed = true;
+                    }
+                    if (changed) {
+                        instrumentMasterRepository.save(im);
+                        totalChanges++;
+                    }
+                }
+            }
         }
 
-        if (!"Nifty 50".equals(nifty.getBrokerSymbol())) {
-            nifty.setBrokerSymbol("Nifty 50");
-            changed = true;
-        }
-
-        if (!"NIFTY 50".equals(nifty.getCompanyName())) {
-            nifty.setCompanyName("NIFTY 50");
-            changed = true;
-        }
-
-        if (!"INDEX".equalsIgnoreCase(nifty.getInstrumentType())) {
-            nifty.setInstrumentType("INDEX");
-            changed = true;
-        }
-
-        if (!"INDEX".equalsIgnoreCase(nifty.getSegment())) {
-            nifty.setSegment("INDEX");
-            changed = true;
-        }
-
-        if (!Boolean.TRUE.equals(nifty.getIsActive())) {
-            nifty.setIsActive(true);
-            changed = true;
-        }
-
-        if (nifty.getMetadataSource() == null || nifty.getMetadataSource().isBlank()) {
-            nifty.setMetadataSource("REQUIRED_MARKET_REFERENCE");
-            changed = true;
-        }
-
-        if (changed) {
-            instrumentMasterRepository.save(nifty);
-            log.info("Corrected required NIFTY instrument-master row");
-            return 1;
-        }
-
-        return 0;
+        return totalChanges;
     }
 }
