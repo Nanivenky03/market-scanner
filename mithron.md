@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-11-09  
-Status: **Version 2.4 Complete & Empirically Validated** (Live Data Simulation Order Engine, Sector Indices Infrastructure, Zero-DB StockContext Enrichment, Decoupled Broker Order Adapter, Event-Driven Signal & Position Conductor, Data Gold Mine Trade Forensics with MFE/MAE Excursion Tracking, Dynamic Compounding Capital Simulation & Diagnostic REST APIs, Daily Capital Ledgers, Unified Single-Flow Execution, Zero-DB NIFTY Filter, Midday Crash Recovery — 476 unit & integration tests passing).
+Last audited: 2026-11-10  
+Status: **Version 2.4.9 Complete & Production-Hardened** (20-Day Gap-Only EOD Backfill for Equities & Registered Indices, Automated 20-Day Tradability Promotion with Index Protection, Automated Post-Market PostgreSQL Database Backup with Rolling Retention, Dynamic Dual-Broker Runtime Control, 60-Day Data Retention, Baseline Capital Seeding — 481 unit & integration tests passing).
 
 ---
 
@@ -209,6 +209,14 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
           6. **Network Timeouts & Idempotency:** API requests to broker endpoints can time out without returning a response. The application must query order book status by `uniqueOrderId` / client order ID before retrying to prevent duplicate orders.
           7. **Broker Session Token Expiry:** TOTP/JWT access tokens expire midday (Angel One JWT expires daily; Kotak Neo session tokens expire after 24h). Automatic session renewal and re-login must happen seamlessly without interrupting WebSocket tick ingestion or order execution.
         * Verified State: 476 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped).
+      - V2.4.9 Production Hardening, 20-Day Gap-Only EOD Backfill, Tradability Promotion & Postmarket Backup: COMPLETED & VERIFIED ✅
+        * Gap-Only 20-Day Historical Backfill (`EodHistoricalBackfillService`): Scans active `stock_universe` equities and all 28 registered market indices (`MarketIndexRegistry.getAllRegisteredIndices()`). Calculates 20 official trading days via `TradingCalendar`. Inspects `stock_prices` and idempotently fetches only missing dates. Backfills daily OHLCV bars via Angel One `fetchHistoricalBars` (INTERVAL_ONE_DAY) $\to$ `stock_prices`, 1M bars via `fetchHistoricalOneMinuteCandles` $\to$ `market_candles`, fills untraded minutes with `NO_TRADE_CONFIRMED` in `live_minute_resolution`, and logs `eod_data_entry` status as `RECONCILED`.
+        * Automated Tradability Promotion Gate: At 08:00 AM in Step 4 (`premarket-universe-sync`) of `PreMarketWorkflowService`, verifies previous-day EOD completion and `stock_prices` count $\ge 20$. Automatically promotes eligible active equities to `isTradable = true`. Strictly protects all indices (`MarketIndexRegistry`) as `isTradable = false` to prevent trade execution on benchmark/sector index scrips.
+        * Automated Post-Market PostgreSQL Database Backup (`DatabaseBackupService`): Runs native compressed custom-format dumps (`pg_dump -Fc`) to configured directory (`DB_BACKUP_DIR`, e.g. `backups/mithron_prod_YYYY-MM-DD.dump`). Integrated into EOD reconciliation workflow via new stage `POSTMARKET_DATABASE_BACKUP` (`postmarket-database-backup`) in `WorkflowStatusService`. Enforces 10-file rolling retention policy (purges older dumps). Exposed via admin REST API `POST /api/v1/admin/backup/create`.
+        * Dynamic Dual-Broker Runtime Control: Independent `trading.broker.live` and `trading.broker.paper` keys in `runtime_setting` (defaulting to `'KOTAK_NEO'`), allowing paper trading simulations and live broker routing to use independent statutory friction and order engines.
+        * Extended 60-Day Data Retention Window: Extended `retention.candles.days` and `retention.live.signals.days` from 30 to 60 days.
+        * Simulation Capital Seeding: Seeded baseline `simulation.initial.capital` = `'50000.00'` in `runtime_setting`.
+        * Verified State: **481 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
   - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies

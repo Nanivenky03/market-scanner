@@ -28,6 +28,13 @@ This document is the authoritative developer, tester, and architecture guide for
     * V2.4.5: Context-Rich Database Persistence ("Data Gold Mine" capturing MFE, MAE, trough price, holding duration, JSON trailing history, JSON setup context, granular statutory breakdown).
     * V2.4.6: Diagnostic & Operational REST APIs (Dynamic compounding simulation engine, two-tier reset TODAY vs TOTAL, live LTP-enriched active positions, orders ledger, lifetime/custom performance analytics, dynamic strategy mode management).
     * V2.4.7: Production Hardening, Daily Capital Ledger, Single-Flow Execution & Midday Recovery (Two identical daily capital ledger tables `capital` & `simulation_capital`, unified single-flow Modify-to-Market exit, ghost position elimination, 14:55 EOD hard close sweep, full 16-parameter snapshot crash recovery, resting order rehydration, zero-DB NIFTY filter, and documentation of 7 Real-World Live Broker Realities).
+    * V2.4.9: Production Hardening, 20-Day Gap-Only EOD Backfill, Automated Tradability Promotion, Dual-Broker Settings & Post-Market Automated Database Backup:
+      - 20-Day Gap-Only Historical Backfill (`EodHistoricalBackfillService`): Scans active `stock_universe` equities and all 28 registered market indices (`MarketIndexRegistry`). Inspects the last 20 official trading days in `stock_prices`. Idempotently queries only missing gap dates. Automatically backfills daily bars to `stock_prices`, 1M candles to `market_candles`, resolves missing minutes with `NO_TRADE_CONFIRMED`, and marks `eod_data_entry` as `RECONCILED`.
+      - Automated `isTradable` Promotion Gate: Step 4 (`premarket-universe-sync`) of `PreMarketWorkflowService` automatically promotes active stocks to `isTradable = true` when previous-day EOD is complete and historical daily bars in `stock_prices` $\ge 20$. Strictly protects all sector and benchmark indices as `isTradable = false`.
+      - Automated Post-Market PostgreSQL Backup (`DatabaseBackupService`): Executes compressed binary dumps (`pg_dump -Fc`) to `DB_BACKUP_DIR` (`backups/mithron_prod_YYYY-MM-DD.dump`) upon successful completion of the daily EOD reconciliation workflow. Tracked via workflow stage `POSTMARKET_DATABASE_BACKUP` (`postmarket-database-backup`). Automatically purges older dumps beyond 10-file rolling retention. Exposed via admin REST API `POST /api/v1/admin/backup/create`.
+      - Dynamic Dual-Broker Runtime Control: Independent `trading.broker.live` and `trading.broker.paper` keys in `runtime_setting` (defaulting to `'KOTAK_NEO'`).
+      - Extended 60-Day Data Retention Window: Extended `retention.candles.days` and `retention.live.signals.days` from 30 to 60 days.
+      - Simulation Capital Seeding: Configured `simulation.initial.capital` = `'50000.00'` in `runtime_setting`.
 
 - **Version 3.0 (Advanced Risk & Research Laboratory):**
   - Extend V2 baseline risk/position management with advanced portfolio controls and risk policies.
@@ -167,8 +174,7 @@ flowchart LR
    - **`premarket-housekeeping`:** Purges data older than retention settings and clears memory caches.
 2. **08:00 AM Pre-Market Data Preparation:**
    - **`premarket-catalog-sync`:** Downloads master catalog (143k scrips), maps 2,747 NSE Cash instruments & NIFTY (`99926000`), authenticates broker session early, and verifies broker tokens directly from DB.
-   - **`premarket-universe-sync` (current behavior):** Reconciles active universe. Checks `eod_data_entry` for the previous trading day; if missing/incomplete for any symbol, demotes `is_tradable = false` while keeping `is_active = true`.
-   - **Planned tradability rule:** Keep new symbols false by default. Set `is_tradable = true` only when EOD is complete and `stock_prices` contains at least the previous 20 official trading days; if the previous trading day EOD is incomplete, set false. This flag represents current data-integrity/export eligibility.
+   - **`premarket-universe-sync` (Automated 20-Day Tradability Promotion):** Reconciles active universe and evaluates data integrity eligibility. Checks `eod_data_entry` for the previous trading day and queries `stock_prices` count for $\le \text{today}$. If previous day EOD is complete AND historical daily bars in `stock_prices` $\ge 20$, automatically promotes the symbol to `is_tradable = true`. If either condition is not met, marks `is_tradable = false`. All benchmark and sector indices (`MarketIndexRegistry`) are strictly protected with `is_tradable = false` to guarantee no orders are routed for index symbols.
    - **`premarket-morning-reference`:** Authoritative computation of CPR, ADR, 15-day resistance, 20-day ADV, and 375m volume baseline curves for previous trading day into `DailyStockContext`.
 3. **08:55 AM Live Start Gate & 09:10 AM Pre-Market Uncrossed Price Lock:**
    - **`premarket-live-start`:** Strictly verifies all 5 prior daily steps are `SUCCESS` for today's date before connecting the WebSocket and starting the `market-hours` stage.
@@ -211,7 +217,8 @@ flowchart LR
 flowchart TD
     A["16:00-17:00 PM: Conditional Quiescence Check<br/>(Runs every 5 min. If idle >= 3 min, disconnect WebSocket)"] --> B["Mark market-hours Workflow SUCCESS"]
     B --> C["17:00, 19:00, 21:00, 23:00 PM: Scheduled Bi-Hourly EOD Reconciliation"]
-    C --> D["Step 1 & 2: Upfront Fetch for Partial Symbols<br/>• Pull 1M Historical Candles & Save Raw to data/raw-eod/YYYY-MM-DD/SYMBOL.json<br/>• Pull Batch Market Quotes & Save to market-quotes.json"]
+    C --> C1["Step 0: Gap-Only 20-Day Historical Backfill (EodHistoricalBackfillService)<br/>• Scans active universe & 28 registered indices<br/>• Identifies missing dates in 20-day window<br/>• Backfills 1D stock_prices, 1M market_candles, marks NO_TRADE_CONFIRMED"]
+    C1 --> D["Step 1 & 2: Upfront Fetch for Partial Symbols<br/>• Pull 1M Historical Candles & Save Raw to data/raw-eod/YYYY-MM-DD/SYMBOL.json<br/>• Pull Batch Market Quotes & Save to market-quotes.json"]
     D --> E["Step 3 Check 1: Primary DB Data vs Market Quote<br/>• Open = 09:08 price<br/>• High = max(Continuous, 09:08)<br/>• Low = min(Continuous, 09:08)<br/>• Close = 15:29 Close, Volume consistent"]
     E -- DB Complete (375 bars) & Matches Quote --> F["Finalize Symbol as RECONCILED (SUCCESS)<br/>• Upsert official Market Quote to stock_prices<br/>• (SmartAPI Historical API does not touch DB)"]
     E -- DB Gaps or Mismatch --> G["Step 3 Check 2: In-Memory Candidate Day Construction<br/>(Combine DB Candles + Raw Historical Candles)"]
@@ -224,9 +231,27 @@ flowchart TD
     K --> L
     L -- All Complete (0 Partial) --> M["Resolve EOD Alert & Mark eod-reconciliation SUCCESS"]
     L -- Partial > 0 on Final Run --> N["Dispatch HIGH-Priority Alert & Mark eod-reconciliation FAILED"]
-    M --> O["23:45 PM Session Teardown: Invalidate Broker Tokens"]
+    M --> M1["Automated Post-Market Database Backup (DatabaseBackupService)<br/>• pg_dump -Fc to backups/mithron_prod_YYYY-MM-DD.dump<br/>• Purge dumps beyond 10-file rolling retention<br/>• Mark postmarket-database-backup SUCCESS"]
+    M1 --> O["23:45 PM Session Teardown: Invalidate Broker Tokens"]
     O --> P["Mark daily-cycle-complete SUCCESS"]
 ```
+
+### Gap-Only 20-Day Historical Backfill (`EodHistoricalBackfillService`)
+- **Trigger:** Executes automatically at the start of every EOD reconciliation cycle (17:00, 19:00, 21:00, 23:00) and before on-demand reconciliations.
+- **Scope:** All active symbols in `stock_universe` + all 28 registered indices in `MarketIndexRegistry` (`NIFTY 50`, `NIFTY BANK`, sector & thematic indices).
+- **Gap-Only Idempotency:** Determines the last 20 official trading days via `TradingCalendar`. Inspects existing dates in `stock_prices` for that symbol/index. If any dates are missing:
+  1. Calls Angel One `fetchHistoricalBars(symbol, token, from, to, INTERVAL_ONE_DAY)` and upserts missing daily bars into `stock_prices`.
+  2. For missing equity dates, calls `fetchHistoricalOneMinuteCandles(symbol, token, date)` and persists 1M bars into `market_candles`.
+  3. Fills low-volume / untraded minutes as `NO_TRADE_CONFIRMED` in `live_minute_resolution`.
+  4. Records `eod_data_entry` status as `RECONCILED` for each backfilled date.
+  5. Triggers `VolumeBaselineService` calculation so downstream volume baselines (`volume_time_window_baseline`) are instantly ready.
+
+### Automated Post-Market PostgreSQL Database Backup (`DatabaseBackupService`)
+- **Trigger:** Executes upon successful completion of the daily EOD reconciliation (all active symbols successfully reconciled/repaired).
+- **Workflow State:** Tracked via `POSTMARKET_DATABASE_BACKUP` (`postmarket-database-backup`) in `workflow_status`.
+- **Command:** Invokes native `pg_dump -Fc` (PostgreSQL custom compressed format) producing `mithron_prod_YYYY-MM-DD.dump`. On Windows, auto-locates `C:\Program Files\PostgreSQL\17\bin\pg_dump.exe`.
+- **Retention:** Enforces a strict 10-file rolling retention policy (`backup.retention.files=10`), automatically deleting older `.dump` files to conserve disk space.
+- **REST Trigger:** Can be triggered manually on-demand via `POST /api/v1/admin/backup/create`.
 
 ---
 
@@ -934,6 +959,14 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - Zero-DB NIFTY Filter: `MasterMarketFilterService` reads NIFTY 5M candles directly from `StockContextCache` in memory in $< 1\,\mu\text{s}$, completely eliminating N+1 database queries during sweeps.
     - 7 Real-World Live Broker Realities Documented: Forensic operational guidelines covering Order IDs vs Position IDs, Order Modification Race Conditions, Execution Latency & Price Slippage, Partial Fills, Broker RMS Pre-Trade Validation, Network Timeouts & Idempotency, and Broker Session Token Expiry.
     - Verified State: **476 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
+  - [x] **V2.4.9: Production Hardening, 20-Day Gap-Only EOD Backfill, Automated Tradability Promotion, Dual-Broker Settings & Post-Market Automated Database Backup** `[COMPLETED & VERIFIED]`
+    - Gap-Only 20-Day Historical Backfill (`EodHistoricalBackfillService`): Scans active `stock_universe` equities and all 28 registered market indices (`MarketIndexRegistry.getAllRegisteredIndices()`). Inspects the last 20 official trading days in `stock_prices`. Idempotently queries only missing dates. Backfills missing daily bars to `stock_prices`, 1M candles to `market_candles`, resolves missing minutes with `NO_TRADE_CONFIRMED`, and records `eod_data_entry` as `RECONCILED`.
+    - Automated `isTradable` Promotion Gate: Step 4 (`premarket-universe-sync`) of `PreMarketWorkflowService` automatically promotes active stocks to `isTradable = true` when previous-day EOD is complete and historical daily bars in `stock_prices` $\ge 20$. Strictly protects all sector and benchmark indices as `isTradable = false`.
+    - Automated Post-Market PostgreSQL Database Backup (`DatabaseBackupService`): Executes compressed binary dumps (`pg_dump -Fc`) to `DB_BACKUP_DIR` (`backups/mithron_prod_YYYY-MM-DD.dump`) upon successful completion of the daily EOD reconciliation workflow. Tracked via workflow stage `POSTMARKET_DATABASE_BACKUP` (`postmarket-database-backup`). Automatically purges older dumps beyond 10-file rolling retention. Exposed via admin REST API `POST /api/v1/admin/backup/create`.
+    - Dynamic Dual-Broker Runtime Control: Independent `trading.broker.live` and `trading.broker.paper` keys in `runtime_setting` (defaulting to `'KOTAK_NEO'`).
+    - Extended 60-Day Data Retention Window: Extended `retention.candles.days` and `retention.live.signals.days` from 30 to 60 days.
+    - Baseline Simulation Capital Seeding: Configured `simulation.initial.capital` = `'50000.00'` in `runtime_setting`.
+    - Verified State: **481 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
 - [x] **Version 2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor)** `[COMPLETED & EMPIRICALLY VALIDATED]`
 - [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`
 - [ ] **V4.0: Professional Web UI & Trader Dashboard** `[PLANNED]`

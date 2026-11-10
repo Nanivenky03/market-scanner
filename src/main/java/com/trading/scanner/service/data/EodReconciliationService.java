@@ -17,6 +17,7 @@ import com.trading.scanner.repository.LiveMinuteResolutionRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
+import com.trading.scanner.service.backup.DatabaseBackupService;
 import com.trading.scanner.service.engine.DailyDataStatusService;
 import com.trading.scanner.service.provider.ProviderException;
 import com.trading.scanner.service.provider.angelone.AngelOneMarketDataProvider;
@@ -40,6 +41,7 @@ import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -79,6 +81,27 @@ public class EodReconciliationService {
         private final AngelOneSessionService angelOneSessionService;
         private final AngelOneWebSocketService angelOneWebSocketService;
         private final StockPriceRepository stockPriceRepository;
+
+        @Autowired(required = false)
+        private EodHistoricalBackfillService eodHistoricalBackfillService;
+
+        @Autowired(required = false)
+        private DatabaseBackupService databaseBackupService;
+
+        @Autowired(required = false)
+        private com.trading.scanner.service.instrument.MarketIndexRegistry marketIndexRegistry;
+
+        public void setEodHistoricalBackfillService(EodHistoricalBackfillService service) {
+                this.eodHistoricalBackfillService = service;
+        }
+
+        public void setDatabaseBackupService(DatabaseBackupService service) {
+                this.databaseBackupService = service;
+        }
+
+        public void setMarketIndexRegistry(com.trading.scanner.service.instrument.MarketIndexRegistry registry) {
+                this.marketIndexRegistry = registry;
+        }
 
         private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -303,14 +326,33 @@ public class EodReconciliationService {
                                 eodWorkflow = workflowStatusService.markRunning(eodWorkflow.getWorkflowId());
                         }
 
+                        // Step 0: Run 20-day historical gap-only backfill for active stocks and indices
+                        if (eodHistoricalBackfillService != null) {
+                                try {
+                                        eodHistoricalBackfillService.backfillHistoricalGaps(targetDate);
+                                } catch (Exception ex) {
+                                        log.warn("Historical gap-only backfill warning for date {}: {}", targetDate, ex.getMessage());
+                                }
+                        }
+
                         Map<String, ReconciliationTarget> targets = new LinkedHashMap<>();
 
-                        // Include benchmark index NIFTY in EOD targets
-                        targets.put(
-                                        "NSE|NIFTY",
-                                        new ReconciliationTarget(
-                                                        "NIFTY",
-                                                        "NSE"));
+                        // Include all registered sectoral and benchmark indices in EOD targets
+                        if (marketIndexRegistry != null) {
+                                for (com.trading.scanner.service.instrument.MarketIndexRegistry.IndexDefinition idx : marketIndexRegistry.getAllRegisteredIndices()) {
+                                        if (idx != null && idx.canonicalSymbol() != null) {
+                                                String sym = idx.canonicalSymbol().trim().toUpperCase(Locale.ROOT);
+                                                targets.put("NSE|" + sym, new ReconciliationTarget(sym, "NSE"));
+                                        }
+                                }
+                        } else {
+                                // Fallback to primary benchmark index NIFTY
+                                targets.put(
+                                                "NSE|NIFTY",
+                                                new ReconciliationTarget(
+                                                                "NIFTY",
+                                                                "NSE"));
+                        }
 
                         for (StockUniverse stock : stockUniverseRepository
                                         .findByIsActiveTrueOrderBySymbolAsc()) {
@@ -469,6 +511,7 @@ public class EodReconciliationService {
                                 if (workflowStatusService != null && eodWorkflow != null) {
                                         workflowStatusService.markSuccess(eodWorkflow.getWorkflowId(), message);
                                         executeDailyCycleComplete(targetDate, eodWorkflow.getWorkflowId());
+                                        executePostmarketDatabaseBackup(targetDate, eodWorkflow.getWorkflowId());
                                 }
                         }
 
@@ -510,6 +553,38 @@ public class EodReconciliationService {
                         log.info("Daily cycle complete stage finalized successfully for date: {}", tradingDate);
                 } catch (Exception ex) {
                         log.error("Failed to complete daily cycle workflow for date {}: {}", tradingDate,
+                                        ex.getMessage(), ex);
+                }
+        }
+
+        private void executePostmarketDatabaseBackup(LocalDate tradingDate, UUID eodWorkflowId) {
+                if (databaseBackupService == null || workflowStatusService == null) {
+                        return;
+                }
+                try {
+                        WorkflowStatus backupWorkflow = workflowStatusService.prepareForDaily(
+                                        WorkflowStatusService.POSTMARKET_DATABASE_BACKUP,
+                                        WorkflowStatusService.EOD_GROUP,
+                                        tradingDate.toString(),
+                                        eodWorkflowId);
+
+                        if (backupWorkflow.getStatus() == WorkflowStatus.Status.SUCCESS) {
+                                log.info("Post-market database backup already completed successfully for date: {}", tradingDate);
+                                return;
+                        }
+
+                        backupWorkflow = workflowStatusService.markRunning(backupWorkflow.getWorkflowId());
+                        DatabaseBackupService.BackupResult result = databaseBackupService.createBackup("POSTMARKET_EOD_SUCCESS_" + tradingDate);
+
+                        if (result.success()) {
+                                workflowStatusService.markSuccess(backupWorkflow.getWorkflowId(), result.message());
+                                log.info("Post-market database backup completed successfully: {}", result.message());
+                        } else {
+                                workflowStatusService.markFailed(backupWorkflow.getWorkflowId(), result.message(), "pg_dump failed");
+                                log.warn("Post-market database backup execution issue: {}", result.message());
+                        }
+                } catch (Exception ex) {
+                        log.error("Failed to execute post-market database backup workflow for date {}: {}", tradingDate,
                                         ex.getMessage(), ex);
                 }
         }

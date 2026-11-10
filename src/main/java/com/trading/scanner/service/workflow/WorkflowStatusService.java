@@ -42,6 +42,7 @@ public class WorkflowStatusService {
     // Daily Market Hours & EOD stages
     public static final String MARKET_HOURS = "market-hours";
     public static final String EOD_RECONCILIATION = "eod-reconciliation";
+    public static final String POSTMARKET_DATABASE_BACKUP = "postmarket-database-backup";
     public static final String DAILY_CYCLE_COMPLETE = "daily-cycle-complete";
 
     private final WorkflowStatusRepository workflowStatusRepository;

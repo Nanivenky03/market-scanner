@@ -3,7 +3,9 @@ package com.trading.scanner.service.runtime;
 import com.trading.scanner.config.RuntimeAutomationProperties;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.RuntimeSetting;
+import com.trading.scanner.risk.model.PortfolioMode;
 import com.trading.scanner.repository.RuntimeSettingRepository;
+import com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,6 +14,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -99,6 +102,14 @@ public class RuntimeSettingService {
         return runtimeSettingRepository.findByNameAndIsActiveTrue(name)
                 .map(RuntimeSetting::getValue)
                 .map(Integer::parseInt)
+                .orElse(fallback);
+    }
+
+    @Transactional(readOnly = true)
+    public double getDouble(String name, double fallback) {
+        return runtimeSettingRepository.findByNameAndIsActiveTrue(name)
+                .map(RuntimeSetting::getValue)
+                .map(Double::parseDouble)
                 .orElse(fallback);
     }
 
@@ -191,6 +202,24 @@ public class RuntimeSettingService {
         return getInt(
                 "alert.parser.failures.threshold",
                 runtimeAutomationProperties.getAlert().getParserFailuresThreshold());
+    }
+
+    @Transactional(readOnly = true)
+    public BrokerModel activeBrokerModel(PortfolioMode mode) {
+        String key = (mode == PortfolioMode.LIVE)
+                ? "trading.broker.live"
+                : "trading.broker.paper";
+        String modelStr = getString(key, "KOTAK_NEO");
+        try {
+            return BrokerModel.valueOf(modelStr.trim().toUpperCase(Locale.ROOT));
+        } catch (Exception ex) {
+            return BrokerModel.KOTAK_NEO;
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public double simulationInitialCapital() {
+        return getDouble("simulation.initial.capital", 50000.00);
     }
 
     @Transactional(readOnly = true)
@@ -301,6 +330,18 @@ public class RuntimeSettingService {
         createdCount += seedIfMissing("schedule.zone",
                 "Asia/Kolkata",
                 "STRING", "Timezone identifier for scheduler triggers");
+
+        createdCount += seedIfMissing("trading.broker.live",
+                "KOTAK_NEO",
+                "STRING", "Active broker model for live real-money execution (KOTAK_NEO, ANGEL_ONE)");
+
+        createdCount += seedIfMissing("trading.broker.paper",
+                "KOTAK_NEO",
+                "STRING", "Active broker model for simulation and paper trading (KOTAK_NEO, ANGEL_ONE)");
+
+        createdCount += seedIfMissing("simulation.initial.capital",
+                "50000.00",
+                "DOUBLE", "Default starting baseline capital for paper trading simulation");
 
         return createdCount;
     }

@@ -51,8 +51,8 @@ class RuntimeSettingServiceTest {
         defaultProperties.setHousekeepingTime("05:30");
         defaultProperties.setWebsocketIdleCloseMinutes(10);
         defaultProperties.setWebsocketCloseRecheckMinutes(10);
-        defaultProperties.setRetentionCandlesDays(30);
-        defaultProperties.setRetentionLiveSignalsDays(30);
+        defaultProperties.setRetentionCandlesDays(60);
+        defaultProperties.setRetentionLiveSignalsDays(60);
 
         liveProperties = new RuntimeAutomationProperties.Live();
         liveProperties.setSubscriptionMode(3);
@@ -116,7 +116,7 @@ class RuntimeSettingServiceTest {
 
         int result = service.retentionCandlesDays();
 
-        assertEquals(30, result);
+        assertEquals(60, result);
     }
 
     @Test
@@ -155,9 +155,14 @@ class RuntimeSettingServiceTest {
         assertEquals(3, service.subscriptionMode());
         assertEquals(10, service.websocketIdleCloseMinutes());
         assertEquals(10, service.websocketCloseRecheckMinutes());
-        assertEquals(30, service.retentionLiveSignalsDays());
+        assertEquals(60, service.retentionLiveSignalsDays());
         assertEquals(10, service.staleTicksMinutes());
         assertEquals(10, service.parserFailuresThreshold());
+        assertEquals(com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel.KOTAK_NEO,
+                service.activeBrokerModel(com.trading.scanner.risk.model.PortfolioMode.LIVE));
+        assertEquals(com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel.KOTAK_NEO,
+                service.activeBrokerModel(com.trading.scanner.risk.model.PortfolioMode.PAPER));
+        assertEquals(50000.0, service.simulationInitialCapital(), 0.001);
     }
 
     @Test
@@ -230,8 +235,8 @@ class RuntimeSettingServiceTest {
 
         int seeded = service.ensureRequiredSettingsExist();
 
-        assertEquals(18, seeded);
-        verify(repository, times(18)).save(any(RuntimeSetting.class));
+        assertEquals(21, seeded);
+        verify(repository, times(21)).save(any(RuntimeSetting.class));
     }
 
     @Test

@@ -17,6 +17,8 @@ public interface StockPriceRepository extends JpaRepository<StockPrice, Integer>
 
         List<StockPrice> findBySymbolAndDateLessThanEqualOrderByDateAsc(String symbol, LocalDate date);
 
+        long countBySymbolAndDateLessThanEqual(String symbol, LocalDate date);
+
         List<StockPrice> findByDate(LocalDate date);
 
         List<StockPrice> findBySymbolAndDateBetweenOrderByDateAsc(

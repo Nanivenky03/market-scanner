@@ -41,8 +41,8 @@ public class RuntimeAutomationProperties {
         private String marketCloseTime = "15:30";
         private int websocketIdleCloseMinutes = 10;
         private int websocketCloseRecheckMinutes = 10;
-        private int retentionCandlesDays = 30;
-        private int retentionLiveSignalsDays = 30;
+        private int retentionCandlesDays = 60;
+        private int retentionLiveSignalsDays = 60;
     }
 
     @Data

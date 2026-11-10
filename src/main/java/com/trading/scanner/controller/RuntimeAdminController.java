@@ -49,6 +49,13 @@ public class RuntimeAdminController {
     private final EodReconciliationService eodReconciliationService;
     private final com.trading.scanner.service.runtime.DayWorkflowRestartService dayWorkflowRestartService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.trading.scanner.service.backup.DatabaseBackupService databaseBackupService;
+
+    public void setDatabaseBackupService(com.trading.scanner.service.backup.DatabaseBackupService service) {
+        this.databaseBackupService = service;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     public RuntimeAdminController(
             RuntimeAutomationService runtimeAutomationService,
@@ -302,6 +309,17 @@ public class RuntimeAdminController {
     public ResponseEntity<EodReconciliationService.ReconciliationBatchResult> triggerEodReconciliation(
             @Parameter(description = "Trading date in yyyy-MM-dd format (defaults to previous/current trading day)", example = "2026-09-25") @RequestParam(required = false) LocalDate date) {
         return ResponseEntity.ok(eodReconciliationService.reconcileTradingDay(date));
+    }
+
+    @Operation(summary = "Trigger immediate automated database backup using pg_dump")
+    @PostMapping("/backup/create")
+    public ResponseEntity<com.trading.scanner.service.backup.DatabaseBackupService.BackupResult> triggerDatabaseBackup() {
+        if (databaseBackupService == null) {
+            return ResponseEntity.badRequest().body(
+                    new com.trading.scanner.service.backup.DatabaseBackupService.BackupResult(
+                            false, null, 0, 0, 0, "DatabaseBackupService is not available"));
+        }
+        return ResponseEntity.ok(databaseBackupService.createBackup("ADMIN_API_TRIGGER"));
     }
 
     @Operation(summary = "Restart today's entire workflow from scratch",

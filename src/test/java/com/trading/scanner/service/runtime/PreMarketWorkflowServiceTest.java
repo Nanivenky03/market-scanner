@@ -9,12 +9,14 @@ import com.trading.scanner.model.InstrumentMaster;
 import com.trading.scanner.model.StockUniverse;
 import com.trading.scanner.model.WorkflowStatus;
 import com.trading.scanner.repository.InstrumentMasterRepository;
+import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.StockUniverseRepository;
 import com.trading.scanner.service.data.EodDataEntryService;
 import com.trading.scanner.service.engine.VolumeBaselineService;
 import com.trading.scanner.service.instrument.AngelOneInstrumentCatalogSyncService;
 import com.trading.scanner.service.instrument.InstrumentMasterSyncService;
 import com.trading.scanner.service.instrument.InstrumentTokenSyncService;
+import com.trading.scanner.service.instrument.MarketIndexRegistry;
 import com.trading.scanner.service.provider.angelone.AngelOneSessionService;
 import com.trading.scanner.service.workflow.WorkflowStatusService;
 import org.junit.jupiter.api.BeforeEach;
@@ -95,6 +97,12 @@ class PreMarketWorkflowServiceTest {
         @Mock
         private com.trading.scanner.service.data.EodReconciliationService eodReconciliationService;
 
+        @Mock
+        private StockPriceRepository stockPriceRepository;
+
+        @Mock
+        private MarketIndexRegistry marketIndexRegistry;
+
         private PreMarketWorkflowService service;
 
         private final LocalDate today = LocalDate.of(2026, 9, 21);
@@ -122,6 +130,8 @@ class PreMarketWorkflowServiceTest {
                                 angelOneProperties,
                                 timeProvider,
                                 eodReconciliationService);
+                service.setStockPriceRepository(stockPriceRepository);
+                service.setMarketIndexRegistry(marketIndexRegistry);
 
                 lenient().when(timeProvider.today()).thenReturn(today);
                 lenient().when(timeProvider.nowDateTime()).thenReturn(now);
@@ -408,6 +418,7 @@ class PreMarketWorkflowServiceTest {
                 // EOD completeness: TCS complete, INFY missing/incomplete
                 when(eodDataEntryService.isSuccessful("TCS", "NSE", prevDay)).thenReturn(true);
                 when(eodDataEntryService.isSuccessful("INFY", "NSE", prevDay)).thenReturn(false);
+                when(stockPriceRepository.countBySymbolAndDateLessThanEqual(anyString(), any())).thenReturn(20L);
 
                 // Morning reference mock
                 when(volumeBaselineService.preCalculateForCompletedTradingDay(prevDay))
@@ -434,6 +445,97 @@ class PreMarketWorkflowServiceTest {
                 verify(stockUniverseRepository).save(infy);
                 verify(stockUniverseRepository).save(delisted);
                 verify(volumeBaselineService).preCalculateForCompletedTradingDay(prevDay);
+        }
+
+        @Test
+        void runPreMarketDataPipeline_autoPromotesEligibleStockAndProtectsIndices() {
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+                when(tradingCalendar.previousTradingDay(today)).thenReturn(prevDay);
+                when(workflowStatusService.isSuccessfulActiveDailyWorkflow(
+                                WorkflowStatusService.TRADING_DAY_INIT,
+                                WorkflowStatusService.PREMARKET_GROUP,
+                                today.toString())).thenReturn(true);
+                when(workflowStatusService.isSuccessfulActiveDailyWorkflow(
+                                WorkflowStatusService.PREMARKET_HOUSEKEEPING,
+                                WorkflowStatusService.PREMARKET_GROUP,
+                                today.toString())).thenReturn(true);
+
+                UUID catId = UUID.randomUUID();
+                when(workflowStatusService.prepareForDaily(
+                                eq(WorkflowStatusService.PREMARKET_CATALOG_SYNC),
+                                eq(WorkflowStatusService.PREMARKET_GROUP),
+                                eq(today.toString()),
+                                any())).thenReturn(workflow(catId, WorkflowStatusService.PREMARKET_CATALOG_SYNC,
+                                                WorkflowStatus.Status.READY));
+                when(workflowStatusService.markRunning(any(UUID.class)))
+                                .thenAnswer(inv -> workflow(inv.getArgument(0), "stage",
+                                                WorkflowStatus.Status.RUNNING));
+                when(workflowStatusService.markSuccess(any(UUID.class), anyString()))
+                                .thenAnswer(inv -> workflow(inv.getArgument(0), "stage",
+                                                WorkflowStatus.Status.SUCCESS));
+
+                UUID uniId = UUID.randomUUID();
+                when(workflowStatusService.prepareForDaily(
+                                eq(WorkflowStatusService.PREMARKET_UNIVERSE_SYNC),
+                                eq(WorkflowStatusService.PREMARKET_GROUP),
+                                eq(today.toString()),
+                                eq(catId))).thenReturn(workflow(uniId, WorkflowStatusService.PREMARKET_UNIVERSE_SYNC,
+                                                WorkflowStatus.Status.READY));
+
+                UUID refId = UUID.randomUUID();
+                when(workflowStatusService.prepareForDaily(
+                                eq(WorkflowStatusService.PREMARKET_MORNING_REFERENCE),
+                                eq(WorkflowStatusService.PREMARKET_GROUP),
+                                eq(today.toString()),
+                                eq(uniId))).thenReturn(workflow(refId, WorkflowStatusService.PREMARKET_MORNING_REFERENCE,
+                                                WorkflowStatus.Status.READY));
+
+                when(angelOneProperties.enabled()).thenReturn(true);
+                when(catalogSyncService.syncNseCatalog())
+                                .thenReturn(new AngelOneInstrumentCatalogSyncService.CatalogSyncResult(
+                                                500, 500, 20, 0, 0, true, "Success"));
+                when(instrumentTokenSyncService.syncActiveInstruments())
+                                .thenReturn(new InstrumentTokenSyncService.TokenSyncResult(50, 50, 50, 0, List.of(), "Mapped"));
+
+                StockUniverse titan = StockUniverse.builder().symbol("TITAN").exchange(Exchange.NSE).isActive(true)
+                                .isTradable(false).build();
+                StockUniverse nifty = StockUniverse.builder().symbol("NIFTY").exchange(Exchange.NSE).isActive(true)
+                                .isTradable(false).build();
+                StockUniverse newCo = StockUniverse.builder().symbol("NEWCO").exchange(Exchange.NSE).isActive(true)
+                                .isTradable(false).build();
+
+                when(stockUniverseRepository.findAll()).thenReturn(List.of(titan, nifty, newCo));
+
+                InstrumentMaster titanMaster = InstrumentMaster.builder().symbol("TITAN").exchange("NSE").isActive(true).build();
+                InstrumentMaster niftyMaster = InstrumentMaster.builder().symbol("NIFTY").exchange("NSE").isActive(true).build();
+                InstrumentMaster newCoMaster = InstrumentMaster.builder().symbol("NEWCO").exchange("NSE").isActive(true).build();
+
+                when(instrumentMasterRepository.findBySymbolAndExchange("TITAN", "NSE")).thenReturn(Optional.of(titanMaster));
+                when(instrumentMasterRepository.findBySymbolAndExchange("NIFTY", "NSE")).thenReturn(Optional.of(niftyMaster));
+                when(instrumentMasterRepository.findBySymbolAndExchange("NEWCO", "NSE")).thenReturn(Optional.of(newCoMaster));
+
+                when(eodDataEntryService.isSuccessful("TITAN", "NSE", prevDay)).thenReturn(true);
+                when(eodDataEntryService.isSuccessful("NIFTY", "NSE", prevDay)).thenReturn(true);
+                when(eodDataEntryService.isSuccessful("NEWCO", "NSE", prevDay)).thenReturn(true);
+
+                when(marketIndexRegistry.isRegisteredIndex("NIFTY")).thenReturn(true);
+                when(marketIndexRegistry.isRegisteredIndex("TITAN")).thenReturn(false);
+                when(marketIndexRegistry.isRegisteredIndex("NEWCO")).thenReturn(false);
+
+                when(stockPriceRepository.countBySymbolAndDateLessThanEqual("TITAN", prevDay)).thenReturn(25L);
+                when(stockPriceRepository.countBySymbolAndDateLessThanEqual("NIFTY", prevDay)).thenReturn(25L);
+                when(stockPriceRepository.countBySymbolAndDateLessThanEqual("NEWCO", prevDay)).thenReturn(5L);
+
+                when(volumeBaselineService.preCalculateForCompletedTradingDay(prevDay))
+                                .thenReturn(new VolumeBaselineService.PreCalculationResult(prevDay, today, 10, 10, 10, 0, "Calculated"));
+
+                PreMarketWorkflowService.WorkflowResult result = service.runPreMarketDataPipeline();
+                assertEquals("COMPLETE", result.status());
+
+                assertTrue(titan.getIsTradable());
+                verify(stockUniverseRepository).save(titan);
+                assertFalse(nifty.getIsTradable());
+                assertFalse(newCo.getIsTradable());
         }
 
         @Test

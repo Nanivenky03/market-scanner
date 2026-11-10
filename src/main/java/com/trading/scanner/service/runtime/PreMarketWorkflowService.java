@@ -49,6 +49,20 @@ public class PreMarketWorkflowService {
     private final TimeProvider timeProvider;
     private final com.trading.scanner.service.data.EodReconciliationService eodReconciliationService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.trading.scanner.service.instrument.MarketIndexRegistry marketIndexRegistry;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.trading.scanner.repository.StockPriceRepository stockPriceRepository;
+
+    public void setMarketIndexRegistry(com.trading.scanner.service.instrument.MarketIndexRegistry registry) {
+        this.marketIndexRegistry = registry;
+    }
+
+    public void setStockPriceRepository(com.trading.scanner.repository.StockPriceRepository repository) {
+        this.stockPriceRepository = repository;
+    }
+
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.risk.RiskEngine> riskEngineProvider;
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.position.PositionManagerService> positionManagerServiceProvider;
     private final org.springframework.beans.factory.ObjectProvider<com.trading.scanner.service.provider.angelone.AngelOneMarketDataProvider> angelOneMarketDataProvider;
@@ -289,6 +303,7 @@ public class PreMarketWorkflowService {
 
                         List<StockUniverse> universe = stockUniverseRepository.findAll();
                         List<String> untradableSymbols = new ArrayList<>();
+                        List<String> promotedSymbols = new ArrayList<>();
                         int activeCount = 0;
                         int tradableCount = 0;
 
@@ -308,28 +323,42 @@ public class PreMarketWorkflowService {
                             if (Boolean.TRUE.equals(stock.getIsActive())) {
                                 activeCount++;
 
-                                // EOD Completeness Check for previous trading day
-                                boolean eodComplete = eodDataEntryService.isSuccessful(stock.getSymbol(), exchange,
-                                        prevDay);
-                                if (!eodComplete) {
+                                boolean isIndex = marketIndexRegistry != null && marketIndexRegistry.isRegisteredIndex(stock.getSymbol());
+                                boolean hasValidMaster = Boolean.TRUE.equals(inst.getIsActive());
+                                boolean eodComplete = eodDataEntryService.isSuccessful(stock.getSymbol(), exchange, prevDay);
+                                long historyBars = stockPriceRepository != null
+                                        ? stockPriceRepository.countBySymbolAndDateLessThanEqual(stock.getSymbol(), prevDay)
+                                        : 20L;
+                                boolean has20DaysHistory = historyBars >= 20;
+
+                                if (!isIndex && hasValidMaster && eodComplete && has20DaysHistory) {
+                                    if (!Boolean.TRUE.equals(stock.getIsTradable())) {
+                                        stock.setIsTradable(true);
+                                        stockUniverseRepository.save(stock);
+                                        promotedSymbols.add(stock.getSymbol());
+                                    }
+                                    tradableCount++;
+                                } else {
                                     if (Boolean.TRUE.equals(stock.getIsTradable())) {
                                         stock.setIsTradable(false);
                                         stockUniverseRepository.save(stock);
                                         untradableSymbols.add(stock.getSymbol());
                                     }
-                                } else if (Boolean.TRUE.equals(stock.getIsTradable())) {
-                                    tradableCount++;
                                 }
                             }
                         }
 
+                        if (!promotedSymbols.isEmpty()) {
+                            log.info("Promoted {} symbols to isTradable=true (EOD verified + >=20 days history): {}",
+                                    promotedSymbols.size(), String.join(", ", promotedSymbols));
+                        }
                         if (!untradableSymbols.isEmpty()) {
-                            log.warn("Demoted {} symbols to isTradable=false due to incomplete EOD data for {}: {}",
+                            log.warn("Demoted {} symbols to isTradable=false due to incomplete EOD data or <20 days history for {}: {}",
                                     untradableSymbols.size(), prevDay, String.join(", ", untradableSymbols));
                         }
 
                         return "Universe reconciled. active=" + activeCount + ", tradable=" + tradableCount
-                                + ", eodDemoted=" + untradableSymbols.size();
+                                + ", promoted=" + promotedSymbols.size() + ", demoted=" + untradableSymbols.size();
                     });
 
             // Step 5: premarket-morning-reference (Chained to premarket-universe-sync)
