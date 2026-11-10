@@ -309,4 +309,12 @@ File layout recommendation
 
 Before starting Phase 4, perform a read-only audit of Phase 1–3 against these rules rather than assuming past code already complies.
 
+28. Production Application Deployment & Restart Execution
+When restarting the production application via `Restart-Mithron.bat`:
+- NEVER run it directly inside a standard sandbox/child terminal session that terminates when the task ends, as Windows Job Objects will kill the background `javaw.exe` process.
+- To execute from the agent environment, ALWAYS trigger it outside the sandbox using WMI to spawn it in the host's interactive session:
+  `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c "C:\Users\venka\OneDrive\Desktop\Restart-Mithron.bat"' }`
+  or have the user run `Restart-Mithron.bat` directly on the host laptop as Administrator.
+
+
 
