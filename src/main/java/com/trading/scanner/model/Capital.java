@@ -6,6 +6,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
 @Entity
 @Table(name = "capital")
 @Data
@@ -53,4 +55,20 @@ public class Capital {
 
     @Column(name = "updated_at", nullable = false)
     private String updatedAt;
+
+    @PrePersist
+    protected void onCreate() {
+        String now = LocalDateTime.now().toString();
+        if (createdAt == null || createdAt.isBlank()) {
+            createdAt = now;
+        }
+        if (updatedAt == null || updatedAt.isBlank()) {
+            updatedAt = now;
+        }
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now().toString();
+    }
 }

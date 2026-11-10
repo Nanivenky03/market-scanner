@@ -237,6 +237,7 @@ public class SimulationManagementService {
         if (simulationCapitalRepository != null) {
             LocalDate today = timeProvider.today();
             String todayPrefix = today.toString();
+            String nowStr = LocalDateTime.now().toString();
             SimulationCapital cap = simulationCapitalRepository.findByTradingDate(todayPrefix).orElseGet(() ->
                     SimulationCapital.builder()
                             .tradingDate(todayPrefix)
@@ -246,13 +247,15 @@ public class SimulationManagementService {
                             .statutoryCharges(0.0)
                             .statutoryTaxes(0.0)
                             .netPnl(0.0)
+                            .createdAt(nowStr)
+                            .updatedAt(nowStr)
                             .build()
             );
             cap.setOpeningCapital(amount);
             double net = cap.getNetPnl() != null ? cap.getNetPnl() : 0.0;
             cap.setAvailableCapital(amount + net);
             cap.setClosingCapital(amount + net);
-            cap.setUpdatedAt(LocalDateTime.now().toString());
+            cap.setUpdatedAt(nowStr);
             simulationCapitalRepository.save(cap);
         }
 
@@ -333,6 +336,7 @@ public class SimulationManagementService {
                 Optional<SimulationCapital> prev = simulationCapitalRepository.findTopByTradingDateLessThanOrderByTradingDateDesc(todayPrefix);
                 double morningCap = prev.map(p -> p.getClosingCapital() != null ? p.getClosingCapital()
                         : (p.getOpeningCapital() + (p.getNetPnl() != null ? p.getNetPnl() : 0.0))).orElse(baseline);
+                String nowStr = LocalDateTime.now().toString();
                 SimulationCapital newRec = SimulationCapital.builder()
                         .tradingDate(todayPrefix)
                         .portfolioMode("PAPER")
@@ -344,6 +348,8 @@ public class SimulationManagementService {
                         .statutoryCharges(0.0)
                         .statutoryTaxes(0.0)
                         .netPnl(0.0)
+                        .createdAt(nowStr)
+                        .updatedAt(nowStr)
                         .build();
                 return simulationCapitalRepository.save(newRec);
             });
@@ -391,6 +397,7 @@ public class SimulationManagementService {
                 Optional<SimulationCapital> prev = simulationCapitalRepository.findTopByTradingDateLessThanOrderByTradingDateDesc(todayPrefix);
                 morningCapital = prev.map(p -> p.getClosingCapital() != null ? p.getClosingCapital()
                         : (p.getOpeningCapital() + (p.getNetPnl() != null ? p.getNetPnl() : 0.0))).orElse(baseline);
+                String nowStr = LocalDateTime.now().toString();
                 SimulationCapital newRec = SimulationCapital.builder()
                         .tradingDate(todayPrefix)
                         .portfolioMode("PAPER")
@@ -402,6 +409,8 @@ public class SimulationManagementService {
                         .statutoryCharges(0.0)
                         .statutoryTaxes(0.0)
                         .netPnl(0.0)
+                        .createdAt(nowStr)
+                        .updatedAt(nowStr)
                         .build();
                 simulationCapitalRepository.save(newRec);
             } else {
@@ -435,6 +444,7 @@ public class SimulationManagementService {
 
             double baseline = getBaselineCapital();
             if (simulationCapitalRepository != null) {
+                String nowStr = LocalDateTime.now().toString();
                 SimulationCapital fresh = SimulationCapital.builder()
                         .tradingDate(todayPrefix)
                         .portfolioMode("PAPER")
@@ -446,6 +456,8 @@ public class SimulationManagementService {
                         .statutoryCharges(0.0)
                         .statutoryTaxes(0.0)
                         .netPnl(0.0)
+                        .createdAt(nowStr)
+                        .updatedAt(nowStr)
                         .build();
                 simulationCapitalRepository.save(fresh);
             }
