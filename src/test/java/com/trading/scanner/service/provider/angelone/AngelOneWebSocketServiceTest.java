@@ -172,4 +172,30 @@ class AngelOneWebSocketServiceTest {
         angelOneWebSocketService.stopHeartbeat();
         org.junit.jupiter.api.Assertions.assertFalse(angelOneWebSocketService.isHeartbeatActive());
     }
+
+    @Test
+    void onOpen_shouldSetConnectedAndStartHeartbeatWithoutDeadlock() {
+        java.net.http.WebSocket mockWs = mock(java.net.http.WebSocket.class);
+        when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 11, 11, 9, 15));
+
+        AngelOneWebSocketService.SocketListener listener = angelOneWebSocketService.createSocketListener();
+        listener.onOpen(mockWs);
+
+        org.junit.jupiter.api.Assertions.assertTrue(angelOneWebSocketService.status().connected());
+        org.junit.jupiter.api.Assertions.assertTrue(angelOneWebSocketService.isHeartbeatActive());
+        verify(mockWs, times(1)).request(1);
+    }
+
+    @Test
+    void disconnect_shouldAbortWebsocketIfCloseThrows() {
+        java.net.http.WebSocket mockWs = mock(java.net.http.WebSocket.class);
+        when(mockWs.sendClose(anyInt(), anyString()))
+                .thenReturn(java.util.concurrent.CompletableFuture.failedFuture(new RuntimeException("Network down")));
+        angelOneWebSocketService.setWebSocketForTesting(mockWs, true);
+
+        AngelOneWebSocketService.Status status = angelOneWebSocketService.disconnect();
+
+        org.junit.jupiter.api.Assertions.assertFalse(status.connected());
+        verify(mockWs, times(1)).abort();
+    }
 }

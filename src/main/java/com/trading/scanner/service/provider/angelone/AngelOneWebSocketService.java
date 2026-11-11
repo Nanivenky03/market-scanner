@@ -61,6 +61,7 @@ public class AngelOneWebSocketService {
     private volatile long parsedTicksReceived;
     private volatile long parserFailures;
 
+    private final Object heartbeatLock = new Object();
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "angel-ws-heartbeat");
         thread.setDaemon(true);
@@ -75,36 +76,75 @@ public class AngelOneWebSocketService {
             return status();
         }
 
+        if (webSocket != null) {
+            try {
+                webSocket.abort();
+            } catch (Exception ex) {
+                log.warn("Error aborting lingering websocket before reconnect: {}", ex.getMessage());
+            } finally {
+                webSocket = null;
+            }
+        }
+
+        CompletableFuture<WebSocket> future = null;
         try {
             connecting = true;
             lastError = null;
 
             AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService.createSessionTokens();
 
-            webSocket = httpClient.newWebSocketBuilder()
+            future = httpClient.newWebSocketBuilder()
                     .connectTimeout(Duration.ofSeconds(20))
                     .header("Authorization", "Bearer " + sessionTokens.jwtToken())
                     .header("x-api-key", properties.apiKey())
                     .header("x-client-code", properties.clientId())
                     .header("x-feed-token", sessionTokens.feedToken())
-                    .buildAsync(URI.create(properties.websocketUrl()), new SocketListener())
-                    .join();
+                    .buildAsync(URI.create(properties.websocketUrl()), new SocketListener());
+
+            webSocket = future.get(20, TimeUnit.SECONDS);
 
             return status();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            handleConnectFailure(future, ex);
+            throw new ProviderException("Thread interrupted while connecting Angel One websocket", ex);
         } catch (Exception ex) {
-            connecting = false;
-            connected = false;
-            lastError = ex.getMessage();
+            handleConnectFailure(future, ex);
             throw new ProviderException("Failed to connect Angel One websocket", ex);
         }
+    }
+
+    private void handleConnectFailure(CompletableFuture<WebSocket> future, Exception ex) {
+        connecting = false;
+        connected = false;
+        stopHeartbeat();
+        if (future != null && !future.isDone()) {
+            future.cancel(true);
+        }
+        if (webSocket != null) {
+            try {
+                webSocket.abort();
+            } catch (Exception e) {
+                // ignore
+            }
+            webSocket = null;
+        }
+        lastError = ex.getMessage();
     }
 
     public synchronized Status disconnect() {
         try {
             stopHeartbeat();
             if (webSocket != null) {
-                webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "client_disconnect").join();
-                webSocket = null;
+                try {
+                    webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "client_disconnect")
+                            .get(5, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    log.warn("Graceful close timed out or failed, aborting websocket: {}", e.getMessage());
+                    webSocket.abort();
+                } finally {
+                    webSocket = null;
+                }
             }
         } catch (Exception ex) {
             lastError = ex.getMessage();
@@ -123,9 +163,13 @@ public class AngelOneWebSocketService {
         ensureConnected();
 
         try {
-            webSocket.sendText(payload, true).join();
+            webSocket.sendText(payload, true).get(10, TimeUnit.SECONDS);
             messagesSent++;
             return status();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            lastError = ex.getMessage();
+            throw new ProviderException("Interrupted while sending websocket payload", ex);
         } catch (Exception ex) {
             lastError = ex.getMessage();
             throw new ProviderException("Failed to send websocket payload", ex);
@@ -153,11 +197,15 @@ public class AngelOneWebSocketService {
             payload.put("action", 1);
             payload.put("params", params);
 
-            webSocket.sendText(objectMapper.writeValueAsString(payload), true).join();
+            webSocket.sendText(objectMapper.writeValueAsString(payload), true).get(10, TimeUnit.SECONDS);
             messagesSent++;
             subscriptionsSent += tokenRefs.size();
 
             return status();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            lastError = ex.getMessage();
+            throw new ProviderException("Interrupted while subscribing websocket tokens", ex);
         } catch (Exception ex) {
             lastError = ex.getMessage();
             throw new ProviderException("Failed to subscribe websocket tokens", ex);
@@ -185,10 +233,14 @@ public class AngelOneWebSocketService {
             payload.put("action", 0);
             payload.put("params", params);
 
-            webSocket.sendText(objectMapper.writeValueAsString(payload), true).join();
+            webSocket.sendText(objectMapper.writeValueAsString(payload), true).get(10, TimeUnit.SECONDS);
             messagesSent++;
 
             return status();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            lastError = ex.getMessage();
+            throw new ProviderException("Interrupted while unsubscribing websocket tokens", ex);
         } catch (Exception ex) {
             lastError = ex.getMessage();
             throw new ProviderException("Failed to unsubscribe websocket tokens", ex);
@@ -264,18 +316,26 @@ public class AngelOneWebSocketService {
         }
     }
 
-    synchronized void startHeartbeat() {
-        stopHeartbeat();
-        heartbeatFuture = heartbeatScheduler.scheduleAtFixedRate(
-                this::sendHeartbeatPing,
-                25,
-                25,
-                TimeUnit.SECONDS
-        );
-        log.info("Started Angel One websocket heartbeat scheduler (25s interval)");
+    void startHeartbeat() {
+        synchronized (heartbeatLock) {
+            stopHeartbeatLocked();
+            heartbeatFuture = heartbeatScheduler.scheduleAtFixedRate(
+                    this::sendHeartbeatPing,
+                    25,
+                    25,
+                    TimeUnit.SECONDS
+            );
+            log.info("Started Angel One websocket heartbeat scheduler (25s interval)");
+        }
     }
 
-    synchronized void stopHeartbeat() {
+    void stopHeartbeat() {
+        synchronized (heartbeatLock) {
+            stopHeartbeatLocked();
+        }
+    }
+
+    private void stopHeartbeatLocked() {
         if (heartbeatFuture != null) {
             heartbeatFuture.cancel(true);
             heartbeatFuture = null;
@@ -284,13 +344,15 @@ public class AngelOneWebSocketService {
     }
 
     boolean isHeartbeatActive() {
-        return heartbeatFuture != null && !heartbeatFuture.isDone();
+        synchronized (heartbeatLock) {
+            return heartbeatFuture != null && !heartbeatFuture.isDone();
+        }
     }
 
     void sendHeartbeatPing() {
         try {
             WebSocket ws = this.webSocket;
-            if (connected && ws != null) {
+            if (connected && ws != null && !ws.isOutputClosed() && !ws.isInputClosed()) {
                 ws.sendText("ping", true).whenComplete((res, err) -> {
                     if (err != null) {
                         log.warn("Failed to send Angel One websocket heartbeat ping: {}", err.getMessage());
