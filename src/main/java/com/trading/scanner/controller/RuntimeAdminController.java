@@ -52,8 +52,15 @@ public class RuntimeAdminController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.trading.scanner.service.backup.DatabaseBackupService databaseBackupService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.trading.scanner.service.runtime.ExternalHeartbeatWatchdogService externalHeartbeatWatchdogService;
+
     public void setDatabaseBackupService(com.trading.scanner.service.backup.DatabaseBackupService service) {
         this.databaseBackupService = service;
+    }
+
+    public void setExternalHeartbeatWatchdogService(com.trading.scanner.service.runtime.ExternalHeartbeatWatchdogService service) {
+        this.externalHeartbeatWatchdogService = service;
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -328,5 +335,28 @@ public class RuntimeAdminController {
     public ResponseEntity<com.trading.scanner.service.runtime.DayWorkflowRestartService.DayRestartResult> restartTodayWorkflow(
             @Parameter(description = "Trading date (strictly must be today)", example = "2026-10-12") @RequestParam(required = false) LocalDate date) {
         return ResponseEntity.ok(dayWorkflowRestartService.restartTodayWorkflow(date));
+    }
+
+    @Operation(summary = "Get external watchdog heartbeat status")
+    @GetMapping("/heartbeat/status")
+    public ResponseEntity<com.trading.scanner.service.runtime.ExternalHeartbeatWatchdogService.Status> heartbeatStatus() {
+        if (externalHeartbeatWatchdogService == null) {
+            return ResponseEntity.ok(new com.trading.scanner.service.runtime.ExternalHeartbeatWatchdogService.Status(
+                    false, null, 0, 0, null, null, "Heartbeat service not loaded"));
+        }
+        return ResponseEntity.ok(externalHeartbeatWatchdogService.status());
+    }
+
+    @Operation(summary = "Manually trigger external heartbeat ping to Healthchecks.io")
+    @PostMapping("/heartbeat/ping")
+    public ResponseEntity<Map<String, Object>> triggerHeartbeatPing() {
+        if (externalHeartbeatWatchdogService == null) {
+            return ResponseEntity.ok(Map.of("success", false, "message", "Heartbeat service not loaded"));
+        }
+        boolean success = externalHeartbeatWatchdogService.sendPing(java.time.LocalDateTime.now());
+        return ResponseEntity.ok(Map.of(
+                "success", success,
+                "status", externalHeartbeatWatchdogService.status()
+        ));
     }
 }

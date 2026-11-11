@@ -58,5 +58,7 @@ data/market_scanner.db*
 .env
 *.env
 .env.local
+environment.properties
+config/environment.properties
 application-local.properties
 application-secrets.properties
