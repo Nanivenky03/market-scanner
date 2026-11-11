@@ -355,6 +355,7 @@ public class MarketScheduler implements SchedulingConfigurer {
         }
 
         try {
+            runtimeAutomationService.markMarketHoursCompletedIfApplicable(today);
             EodReconciliationService.ReconciliationBatchResult result = eodReconciliationService
                     .reconcileTradingDay(today);
 

@@ -6,6 +6,7 @@ import com.trading.scanner.service.data.BackfillQueueService;
 import com.trading.scanner.service.data.EodReconciliationService;
 import com.trading.scanner.service.provider.angelone.LiveMarketSnapshotService;
 import com.trading.scanner.service.workflow.WorkflowStatusService;
+import com.trading.scanner.model.WorkflowStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -157,6 +158,23 @@ public class StartupRecoveryService {
             // yet complete
             if (now.toLocalTime().isAfter(LocalTime.of(17, 0)) && eodReconciliationService != null) {
                 try {
+                    if (workflowStatusService != null) {
+                        try {
+                            WorkflowStatus marketHours = workflowStatusService.findOrCreateDailyWorkflow(
+                                    WorkflowStatusService.MARKET_HOURS,
+                                    WorkflowStatusService.MARKET_HOURS_GROUP,
+                                    today.toString(),
+                                    null);
+                            if (marketHours != null && marketHours.getStatus() != WorkflowStatus.Status.SUCCESS) {
+                                workflowStatusService.markSuccess(
+                                        marketHours.getWorkflowId(),
+                                        "Market hours finalized upon post-market startup recovery");
+                                log.info("Market hours workflow stage marked SUCCESS upon startup recovery for date: {}", today);
+                            }
+                        } catch (Exception ex) {
+                            log.warn("Failed to finalize market-hours stage during startup recovery: {}", ex.getMessage());
+                        }
+                    }
                     boolean eodSuccess = workflowStatusService.isSuccessfulActiveDailyWorkflow(
                             WorkflowStatusService.EOD_RECONCILIATION,
                             WorkflowStatusService.EOD_GROUP,

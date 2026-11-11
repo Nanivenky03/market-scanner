@@ -208,6 +208,14 @@ public class RuntimeAutomationService {
 
                 nextWebsocketCloseCheckAt = null;
 
+                LocalDateTime now = timeProvider.nowDateTime();
+                LocalTime disconnectCheckTime = runtimeSettingService != null
+                                ? runtimeSettingService.websocketDisconnectTime()
+                                : LocalTime.of(15, 30);
+                if (disconnectCheckTime != null && !now.toLocalTime().isBefore(disconnectCheckTime)) {
+                        markMarketHoursCompletedIfApplicable(now.toLocalDate());
+                }
+
                 return new RuntimeActionResult(
                                 "FLUSH_AND_DISCONNECT",
                                 websocketStatus.connected(),
@@ -817,21 +825,16 @@ public void onApplicationReady() {
                         }
 
                         UUID dependsOnId = null;
-                        WorkflowStatus premarketLive = null;
                         try {
-                                premarketLive = workflowStatusService.findOrCreateDailyWorkflow(
+                                WorkflowStatus premarketLive = workflowStatusService.findOrCreateDailyWorkflow(
                                                 WorkflowStatusService.PREMARKET_LIVE_START,
                                                 WorkflowStatusService.PREMARKET_GROUP,
                                                 today.toString(),
                                                 null);
-                                if (premarketLive != null) {
+                                if (premarketLive != null && premarketLive.getStatus() == WorkflowStatus.Status.SUCCESS) {
                                         dependsOnId = premarketLive.getWorkflowId();
                                 }
                         } catch (Exception ignored) {
-                        }
-
-                        if (premarketLive == null || premarketLive.getStatus() != WorkflowStatus.Status.SUCCESS) {
-                                return;
                         }
 
                         WorkflowStatus marketHoursWorkflow = workflowStatusService.prepareForDaily(
@@ -849,7 +852,7 @@ public void onApplicationReady() {
                 }
         }
 
-        private void markMarketHoursCompletedIfApplicable(LocalDate date) {
+        public void markMarketHoursCompletedIfApplicable(LocalDate date) {
                 if (workflowStatusService == null || date == null) {
                         return;
                 }
