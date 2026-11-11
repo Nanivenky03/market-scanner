@@ -17,6 +17,11 @@ public interface VolumeTimeWindowBaselineRepository extends JpaRepository<Volume
             LocalDate tradingDate,
             Integer sessionMinute);
 
+    List<VolumeTimeWindowBaseline> findBySymbolAndExchangeAndTradingDate(
+            String symbol,
+            String exchange,
+            LocalDate tradingDate);
+
     List<VolumeTimeWindowBaseline> findByTradingDateAndSessionMinuteOrderBySymbolAsc(
             LocalDate tradingDate,
             Integer sessionMinute);

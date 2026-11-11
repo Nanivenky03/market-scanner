@@ -15,6 +15,8 @@ import com.trading.scanner.repository.MarketCandleRepository;
 import com.trading.scanner.repository.StockPriceRepository;
 import com.trading.scanner.repository.VolumeDailyBaselineRepository;
 import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +58,9 @@ public class VolumeBaselineService {
 
         private final TradingCalendar tradingCalendar;
         private final TimeProvider timeProvider;
+
+        @PersistenceContext
+        private EntityManager entityManager;
 
         @Value("${runtime.volume.precalc.auto-run:true}")
         private boolean autoRun;
@@ -144,6 +149,11 @@ public class VolumeBaselineService {
                                         computedAt);
 
                         processedSymbols++;
+
+                        if (entityManager != null) {
+                                entityManager.flush();
+                                entityManager.clear();
+                        }
                 }
 
                 PreCalculationResult result = new PreCalculationResult(
@@ -439,6 +449,22 @@ public class VolumeBaselineService {
                                         .add(cumulative);
                 }
 
+                // Batch fetch all existing baseline records for this (symbol, exchange, effectiveTradingDate) in ONE query
+                List<VolumeTimeWindowBaseline> existingList = volumeTimeWindowBaselineRepository
+                                .findBySymbolAndExchangeAndTradingDate(
+                                                symbol,
+                                                exchange,
+                                                effectiveTradingDate);
+
+                Map<Integer, VolumeTimeWindowBaseline> existingByMinute = new HashMap<>();
+                if (existingList != null) {
+                        for (VolumeTimeWindowBaseline b : existingList) {
+                                if (b.getSessionMinute() != null) {
+                                        existingByMinute.put(b.getSessionMinute(), b);
+                                }
+                        }
+                }
+
                 List<VolumeTimeWindowBaseline> rowsToSave = new ArrayList<>();
 
                 for (int minute = 0; minute < MARKET_SESSION_MINUTES; minute++) {
@@ -456,20 +482,15 @@ public class VolumeBaselineService {
                                         (double) aggregate.total
                                                         / aggregate.count);
 
-                        VolumeTimeWindowBaseline row = volumeTimeWindowBaselineRepository
-                                        .findBySymbolAndExchangeAndTradingDateAndSessionMinute(
-                                                        symbol,
-                                                        exchange,
-                                                        effectiveTradingDate,
-                                                        baselineSessionMinute)
-                                        .orElseGet(() -> VolumeTimeWindowBaseline.builder()
-                                                        .symbol(symbol)
-                                                        .exchange(exchange)
-                                                        .tradingDate(
-                                                                        effectiveTradingDate)
-                                                        .sessionMinute(
-                                                                        baselineSessionMinute)
-                                                        .build());
+                        VolumeTimeWindowBaseline row = existingByMinute.get(baselineSessionMinute);
+                        if (row == null) {
+                                row = VolumeTimeWindowBaseline.builder()
+                                                .symbol(symbol)
+                                                .exchange(exchange)
+                                                .tradingDate(effectiveTradingDate)
+                                                .sessionMinute(baselineSessionMinute)
+                                                .build();
+                        }
 
                         row.setAvgCumulativeVolume20(
                                         averageCumulativeVolume);

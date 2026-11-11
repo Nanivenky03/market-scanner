@@ -136,9 +136,9 @@ class VolumeBaselineServiceTest {
                                 completedDate.plusDays(1).atStartOfDay().minusNanos(1)))
                                 .thenReturn(fullHistoricalCandles(historyDates));
 
-                when(volumeTimeWindowBaselineRepository.findBySymbolAndExchangeAndTradingDateAndSessionMinute(
-                                eq("ONGC"), eq("NSE"), eq(effectiveDate), anyInt()))
-                                .thenReturn(Optional.empty());
+                when(volumeTimeWindowBaselineRepository.findBySymbolAndExchangeAndTradingDate(
+                                eq("ONGC"), eq("NSE"), eq(effectiveDate)))
+                                .thenReturn(List.of());
 
                 VolumeBaselineService.PreCalculationResult result = service
                                 .preCalculateForCompletedTradingDay(completedDate);
