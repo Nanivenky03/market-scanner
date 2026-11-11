@@ -730,9 +730,11 @@ public void onApplicationReady() {
                         return;
                 }
 
-                LocalDateTime lastMessageTime = status.lastMessageReceivedAt();
+                LocalDateTime lastDataTime = status.lastMarketDataReceivedAt() != null
+                                ? status.lastMarketDataReceivedAt()
+                                : status.lastMessageReceivedAt();
 
-                if (lastMessageTime == null) {
+                if (lastDataTime == null) {
 
                         try {
 
@@ -756,21 +758,30 @@ public void onApplicationReady() {
                 }
 
                 long idleForMinutes = Duration.between(
-                                lastMessageTime,
+                                lastDataTime,
                                 now)
                                 .toMinutes();
 
+                LocalTime hardCutoffTime = LocalTime.of(16, 30);
+                boolean pastHardCutoff = !now.toLocalTime().isBefore(hardCutoffTime);
+
                 if (idleForMinutes >= runtimeSettingService
-                                .websocketIdleCloseMinutes()) {
+                                .websocketIdleCloseMinutes() || pastHardCutoff) {
 
                         try {
 
                                 RuntimeActionResult result = flushAndDisconnect();
 
-                                log.info(
-                                                "Websocket disconnected after {} idle minutes: {}",
-                                                idleForMinutes,
-                                                result);
+                                if (pastHardCutoff && idleForMinutes < runtimeSettingService.websocketIdleCloseMinutes()) {
+                                        log.info(
+                                                        "Websocket disconnected via hard 16:30 cutoff rule: {}",
+                                                        result);
+                                } else {
+                                        log.info(
+                                                        "Websocket disconnected after {} idle market data minutes: {}",
+                                                        idleForMinutes,
+                                                        result);
+                                }
 
                                 markMarketHoursCompletedIfApplicable(now.toLocalDate());
 
@@ -789,7 +800,7 @@ public void onApplicationReady() {
                                                         .websocketCloseRecheckMinutes());
 
                         log.info(
-                                        "Websocket still active after close-check time. idleMinutes={}, nextCheckAt={}",
+                                        "Websocket still active after close-check time. idleMarketDataMinutes={}, nextCheckAt={}",
                                         idleForMinutes,
                                         nextWebsocketCloseCheckAt);
                 }

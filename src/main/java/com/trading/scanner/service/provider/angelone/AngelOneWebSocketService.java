@@ -51,6 +51,7 @@ public class AngelOneWebSocketService {
     private volatile LocalDateTime lastConnectedAt;
     private volatile LocalDateTime lastDisconnectedAt;
     private volatile LocalDateTime lastMessageReceivedAt;
+    private volatile LocalDateTime lastMarketDataReceivedAt;
     private volatile String lastError;
     private volatile String lastTextMessagePreview;
     private volatile String lastBinaryMessagePreview;
@@ -154,6 +155,7 @@ public class AngelOneWebSocketService {
             connecting = false;
             lastDisconnectedAt = timeProvider.nowDateTime();
             lastMessageReceivedAt = null;
+            lastMarketDataReceivedAt = null;
         }
 
         return status();
@@ -254,6 +256,7 @@ public class AngelOneWebSocketService {
                 lastConnectedAt,
                 lastDisconnectedAt,
                 lastMessageReceivedAt,
+                lastMarketDataReceivedAt,
                 lastError,
                 lastTextMessagePreview,
                 lastBinaryMessagePreview,
@@ -394,6 +397,7 @@ public class AngelOneWebSocketService {
             connecting = false;
             lastConnectedAt = timeProvider.nowDateTime();
             lastMessageReceivedAt = lastConnectedAt;
+            lastMarketDataReceivedAt = lastConnectedAt;
             lastError = null;
             log.info("Angel One websocket connected");
 
@@ -414,6 +418,7 @@ public class AngelOneWebSocketService {
                 return CompletableFuture.completedFuture(null);
             }
 
+            lastMarketDataReceivedAt = timeProvider.nowDateTime();
             lastTextMessagePreview = text == null ? null : abbreviate(text, 500);
             frameCaptureService.captureText(text);
 
@@ -427,7 +432,9 @@ public class AngelOneWebSocketService {
         @Override
         public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
             messagesReceived++;
-            lastMessageReceivedAt = timeProvider.nowDateTime();
+            LocalDateTime now = timeProvider.nowDateTime();
+            lastMessageReceivedAt = now;
+            lastMarketDataReceivedAt = now;
 
             byte[] bytes = new byte[data.remaining()];
             data.get(bytes);
@@ -516,6 +523,7 @@ public class AngelOneWebSocketService {
             LocalDateTime lastConnectedAt,
             LocalDateTime lastDisconnectedAt,
             LocalDateTime lastMessageReceivedAt,
+            LocalDateTime lastMarketDataReceivedAt,
             String lastError,
             String lastTextMessagePreview,
             String lastBinaryMessagePreview,
@@ -525,5 +533,27 @@ public class AngelOneWebSocketService {
             long subscriptionsSent,
             long parsedTicksReceived,
             long parserFailures) {
+
+        public Status(
+                boolean connected,
+                boolean connecting,
+                LocalDateTime lastConnectedAt,
+                LocalDateTime lastDisconnectedAt,
+                LocalDateTime lastMessageReceivedAt,
+                String lastError,
+                String lastTextMessagePreview,
+                String lastBinaryMessagePreview,
+                Integer lastBinarySize,
+                long messagesReceived,
+                long messagesSent,
+                long subscriptionsSent,
+                long parsedTicksReceived,
+                long parserFailures) {
+            this(connected, connecting, lastConnectedAt, lastDisconnectedAt,
+                    lastMessageReceivedAt, lastMessageReceivedAt, lastError,
+                    lastTextMessagePreview, lastBinaryMessagePreview, lastBinarySize,
+                    messagesReceived, messagesSent, subscriptionsSent,
+                    parsedTicksReceived, parserFailures);
+        }
     }
 }

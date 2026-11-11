@@ -236,6 +236,25 @@ class MarketSchedulerTest {
         }
 
         @Test
+        void scheduledEodReconciliation_whenWebsocketOpen_shouldForceDisconnectAndRun() {
+                LocalDate today = LocalDate.of(2026, 8, 27);
+                when(timeProvider.today()).thenReturn(today);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+                when(runtimeAutomationService.runtimeStatus())
+                                .thenReturn(runtimeStatus(true, false))
+                                .thenReturn(runtimeStatus(false, false));
+
+                when(eodReconciliationService.reconcileTradingDay(today))
+                                .thenReturn(new EodReconciliationService.ReconciliationBatchResult(
+                                                today, 2, 1, 1, 0, "completed"));
+
+                marketScheduler.scheduledEodReconciliation();
+
+                verify(runtimeAutomationService, times(1)).flushAndDisconnect();
+                verify(eodReconciliationService, times(1)).reconcileTradingDay(today);
+        }
+
+        @Test
         void scheduledEodReconciliation_shouldRunWhenWebsocketIsClosed() {
                 LocalDate today = LocalDate.of(2026, 8, 27);
                 when(timeProvider.today()).thenReturn(today);

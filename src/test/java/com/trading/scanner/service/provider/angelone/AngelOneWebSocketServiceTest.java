@@ -138,7 +138,7 @@ class AngelOneWebSocketServiceTest {
         org.junit.jupiter.api.Assertions.assertEquals(LocalDateTime.of(2026, 10, 8, 16, 0), status.lastDisconnectedAt());
     }
     @Test
-    void onText_withPong_shouldNotCallTickParser_andUpdateRequest() {
+    void onText_withPong_shouldNotCallTickParser_andNotUpdateMarketDataTime() {
         java.net.http.WebSocket mockWs = mock(java.net.http.WebSocket.class);
         when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 11, 2, 10, 0));
 
@@ -148,6 +148,21 @@ class AngelOneWebSocketServiceTest {
         verify(mockWs, times(1)).request(1);
         verify(angelOneTickParserService, never()).tryParseText(any());
         assertEquals(LocalDateTime.of(2026, 11, 2, 10, 0), angelOneWebSocketService.status().lastMessageReceivedAt());
+        org.junit.jupiter.api.Assertions.assertNull(angelOneWebSocketService.status().lastMarketDataReceivedAt());
+    }
+
+    @Test
+    void onBinary_shouldUpdateBothLastMessageReceivedAtAndLastMarketDataReceivedAt() {
+        java.net.http.WebSocket mockWs = mock(java.net.http.WebSocket.class);
+        when(timeProvider.nowDateTime()).thenReturn(LocalDateTime.of(2026, 11, 2, 10, 5));
+
+        AngelOneWebSocketService.SocketListener listener = angelOneWebSocketService.createSocketListener();
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(new byte[]{0x01, 0x02});
+        listener.onBinary(mockWs, buffer, true);
+
+        verify(mockWs, times(1)).request(1);
+        assertEquals(LocalDateTime.of(2026, 11, 2, 10, 5), angelOneWebSocketService.status().lastMessageReceivedAt());
+        assertEquals(LocalDateTime.of(2026, 11, 2, 10, 5), angelOneWebSocketService.status().lastMarketDataReceivedAt());
     }
 
     @Test

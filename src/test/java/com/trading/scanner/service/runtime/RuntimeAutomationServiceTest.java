@@ -579,6 +579,84 @@ class RuntimeAutomationServiceTest {
     }
 
     @Test
+    void scheduledConditionalFlushAndDisconnect_whenMarketDataQuiescent_shouldDisconnectEvenIfHeartbeatPongRecent() {
+        LocalDateTime now = LocalDateTime.of(2026, 11, 11, 16, 15);
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(true);
+        when(runtimeSettingService.websocketDisconnectTime()).thenReturn(LocalTime.of(15, 30));
+        when(runtimeSettingService.websocketIdleCloseMinutes()).thenReturn(10);
+
+        AngelOneWebSocketService.Status statusWithPongsOnly = new AngelOneWebSocketService.Status(
+                true,
+                false,
+                now.minusHours(7),
+                null,
+                now.minusMinutes(1), // keepalive pong at 16:14
+                now.minusMinutes(40), // last tick was at 15:35
+                null,
+                "pong",
+                null,
+                null,
+                1000L,
+                100L,
+                10L,
+                500L,
+                0L);
+
+        when(angelOneWebSocketService.status()).thenReturn(statusWithPongsOnly);
+        doReturn(new RuntimeAutomationService.RuntimeActionResult(
+                "FLUSH_AND_DISCONNECT",
+                false,
+                0,
+                0,
+                "Websocket disconnected"))
+                .when(runtimeAutomationService).flushAndDisconnect();
+
+        runtimeAutomationService.scheduledConditionalFlushAndDisconnect();
+
+        verify(runtimeAutomationService, times(1)).flushAndDisconnect();
+    }
+
+    @Test
+    void scheduledConditionalFlushAndDisconnect_whenPast1630_shouldUnconditionallyDisconnectEvenIfMarketDataRecent() {
+        LocalDateTime now = LocalDateTime.of(2026, 11, 11, 16, 31);
+        when(timeProvider.nowDateTime()).thenReturn(now);
+        when(runtimeReadinessService.isTradingDay(now.toLocalDate())).thenReturn(true);
+        when(runtimeSettingService.websocketDisconnectTime()).thenReturn(LocalTime.of(15, 30));
+        when(runtimeSettingService.websocketIdleCloseMinutes()).thenReturn(10);
+
+        AngelOneWebSocketService.Status activeStatus = new AngelOneWebSocketService.Status(
+                true,
+                false,
+                now.minusHours(7),
+                null,
+                now.minusMinutes(1),
+                now.minusMinutes(2), // only 2 minutes idle, normally wouldn't disconnect with 10 min threshold
+                null,
+                null,
+                null,
+                null,
+                1000L,
+                100L,
+                10L,
+                500L,
+                0L);
+
+        when(angelOneWebSocketService.status()).thenReturn(activeStatus);
+        doReturn(new RuntimeAutomationService.RuntimeActionResult(
+                "FLUSH_AND_DISCONNECT",
+                false,
+                0,
+                0,
+                "Websocket disconnected"))
+                .when(runtimeAutomationService).flushAndDisconnect();
+
+        runtimeAutomationService.scheduledConditionalFlushAndDisconnect();
+
+        verify(runtimeAutomationService, times(1)).flushAndDisconnect();
+    }
+
+    @Test
     void scheduledBrokerSessionClear_shouldSkipOnNonTradingDay() {
         LocalDateTime now = LocalDateTime.of(
                 2026,

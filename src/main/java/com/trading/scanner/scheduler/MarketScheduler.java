@@ -326,6 +326,16 @@ public class MarketScheduler implements SchedulingConfigurer {
 
         RuntimeAutomationService.RuntimeStatus status = runtimeAutomationService.runtimeStatus();
 
+        if (status.websocketConnected() || status.websocketConnecting()) {
+            log.warn("EOD reconciliation found websocket still open at {}. Attempting forced disconnect...", timeProvider.nowDateTime());
+            try {
+                runtimeAutomationService.flushAndDisconnect();
+                status = runtimeAutomationService.runtimeStatus();
+            } catch (Exception ex) {
+                log.error("Failed to disconnect websocket before EOD reconciliation: {}", ex.getMessage());
+            }
+        }
+
         if (status.websocketConnected()
                 || status.websocketConnecting()) {
 
