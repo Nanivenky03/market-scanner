@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-11-10  
-Status: **Version 2.4.9 Complete & Production-Hardened** (20-Day Gap-Only EOD Backfill for Equities & Registered Indices, Automated 20-Day Tradability Promotion with Index Protection, Automated Post-Market PostgreSQL Database Backup with Rolling Retention, Dynamic Dual-Broker Runtime Control, 60-Day Data Retention, Baseline Capital Seeding — 481 unit & integration tests passing).
+Last audited: 2026-11-12  
+Status: **Version 2.5.6 Production-Hardened** (Multi-Timeframe TWAP & Day Open In-Memory Baseline for Zero-Volume Indices, Resilient EOD Backfill Sanitization with As-Is Persistence, V3.0 Minimalist Autonomous Trading Console UI — 489 unit & integration tests passing).
 
 ---
 
@@ -285,16 +285,16 @@ Version 2.0 Answers:
 "What is happening now, and which predefined setups qualify?"
 
 Version 3.0 Answers:
-"What failed in historical simulation, why did it fail, and did the versioned rules address the cause?"
+"How is my autonomous trading machine performing right now, and what is its capital & risk state?" (Minimalist Trader UI & Console)
 
 Version 4.0 Answers:
-"How can I clearly visualize, inspect, and monitor setups and historical performance?"
+"What failed in historical simulation, why did it fail, and did the versioned rules address the cause?" (Advanced Risk & Research Laboratory)
 
 Version 5.0 Answers:
-"How do I submit, modify, cancel, and manage live orders safely with strict risk guardrails?"
+"How do I submit, modify, cancel, and manage live orders safely with strict risk guardrails?" (Production Execution Engine)
 
 Version 6.0 Answers:
-"Does live execution with small real capital match our simulated evidence?"
+"Does live execution with small real capital match our simulated evidence?" (Controlled Real-Money Stage)
 ```
 
 The human remains in the loop. Mithron's job is to make every decision **systematic, evidence-based, disciplined, and reproducible**.

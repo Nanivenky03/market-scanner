@@ -185,25 +185,30 @@ public class EodHistoricalBackfillService {
             for (DailyBarDto bar : bars) {
                 if (bar == null || bar.tradingDate() == null) continue;
 
-                StockPrice sp = stockPriceRepository.findBySymbolAndDate(target.symbol(), bar.tradingDate())
-                        .orElseGet(() -> StockPrice.builder()
-                                .symbol(target.symbol())
-                                .date(bar.tradingDate())
-                                .build());
+                try {
+                    StockPrice sp = stockPriceRepository.findBySymbolAndDate(target.symbol(), bar.tradingDate())
+                            .orElseGet(() -> StockPrice.builder()
+                                    .symbol(target.symbol())
+                                    .date(bar.tradingDate())
+                                    .build());
 
-                if (bar.open() != null && bar.open() > 0.0) sp.setOpenPrice(bar.open());
-                if (bar.high() != null && bar.high() > 0.0) sp.setHighPrice(bar.high());
-                if (bar.low() != null && bar.low() > 0.0) sp.setLowPrice(bar.low());
-                if (bar.close() != null && bar.close() > 0.0) {
-                    sp.setClosePrice(bar.close());
-                    sp.setAdjClose(bar.adjustedClose() != null && bar.adjustedClose() > 0.0 ? bar.adjustedClose() : bar.close());
-                }
-                if (bar.volume() != null && bar.volume() >= 0L) {
-                    sp.setVolume((int) Math.min((long) Integer.MAX_VALUE, bar.volume()));
-                }
+                    if (bar.open() != null && bar.open() > 0.0) sp.setOpenPrice(bar.open());
+                    if (bar.high() != null && bar.high() > 0.0) sp.setHighPrice(bar.high());
+                    if (bar.low() != null && bar.low() > 0.0) sp.setLowPrice(bar.low());
+                    if (bar.close() != null && bar.close() > 0.0) {
+                        sp.setClosePrice(bar.close());
+                        sp.setAdjClose(bar.adjustedClose() != null && bar.adjustedClose() > 0.0 ? bar.adjustedClose() : bar.close());
+                    }
+                    if (bar.volume() != null && bar.volume() >= 0L) {
+                        sp.setVolume((int) Math.min((long) Integer.MAX_VALUE, bar.volume()));
+                    }
 
-                stockPriceRepository.save(sp);
-                count++;
+                    stockPriceRepository.save(sp);
+                    count++;
+                } catch (Exception ex) {
+                    log.warn("[BACKFILL_BAR_SKIPPED] Failed saving daily bar for target={} date={}: {}",
+                            target.symbol(), bar.tradingDate(), ex.getMessage());
+                }
             }
             return count;
         } catch (Exception ex) {

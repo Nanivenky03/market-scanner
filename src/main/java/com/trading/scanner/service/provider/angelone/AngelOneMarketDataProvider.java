@@ -182,7 +182,7 @@ public class AngelOneMarketDataProvider
                                         LocalDate tradingDate = LocalDate.parse(
                                                         timestamp.substring(0, 10));
 
-                                        validateOhlcv(
+                                        double[] sanitized = sanitizeAndValidateOhlcv(
                                                         open,
                                                         high,
                                                         low,
@@ -195,11 +195,11 @@ public class AngelOneMarketDataProvider
                                                         new DailyBarDto(
                                                                         normalizedSymbol,
                                                                         tradingDate,
-                                                                        open,
-                                                                        high,
-                                                                        low,
-                                                                        close,
-                                                                        close,
+                                                                        sanitized[0],
+                                                                        sanitized[1],
+                                                                        sanitized[2],
+                                                                        sanitized[3],
+                                                                        sanitized[3],
                                                                         volume,
                                                                         "ANGEL_ONE"));
 
@@ -330,7 +330,7 @@ public class AngelOneMarketDataProvider
                                                                 "Candle timestamp is outside requested date range");
                                         }
 
-                                        validateOhlcv(
+                                        double[] sanitized = sanitizeAndValidateOhlcv(
                                                         open,
                                                         high,
                                                         low,
@@ -355,10 +355,10 @@ public class AngelOneMarketDataProvider
                                                                         .timeframe(
                                                                                         CandleTimeframe.ONE_MINUTE)
                                                                         .candleTime(candleTime)
-                                                                        .openPrice(open)
-                                                                        .highPrice(high)
-                                                                        .lowPrice(low)
-                                                                        .closePrice(close)
+                                                                        .openPrice(sanitized[0])
+                                                                        .highPrice(sanitized[1])
+                                                                        .lowPrice(sanitized[2])
+                                                                        .closePrice(sanitized[3])
                                                                         .volume(volume)
                                                                         .openInterest(openInterest)
                                                                         .source("ANGEL_ONE")
@@ -453,7 +453,7 @@ public class AngelOneMarketDataProvider
                 }
         }
 
-        private void validateOhlcv(
+        private double[] sanitizeAndValidateOhlcv(
                         Double open,
                         Double high,
                         Double low,
@@ -466,21 +466,23 @@ public class AngelOneMarketDataProvider
                                 || !isFinite(high)
                                 || !isFinite(low)
                                 || !isFinite(close)
+                                || open <= 0.0
+                                || high <= 0.0
+                                || low <= 0.0
+                                || close <= 0.0
                                 || volume < 0L) {
                         throw malformedRow(
                                         operation,
                                         rowIndex,
-                                        "Non-finite OHLC value or negative volume");
+                                        "Non-finite, non-positive OHLC value or negative volume");
                 }
 
-                if (high < low
-                                || high < Math.max(open, close)
-                                || low > Math.min(open, close)) {
-                        throw malformedRow(
-                                        operation,
-                                        rowIndex,
-                                        "OHLC values are internally inconsistent");
-                }
+                // Graceful sanitization: Handle post-market exchange settlement recalculations,
+                // tick discrepancies, and floating-point rounding for indices and equities.
+                double sanitizedHigh = Math.max(high, Math.max(open, close));
+                double sanitizedLow = Math.min(low, Math.min(open, close));
+
+                return new double[] { open, sanitizedHigh, sanitizedLow, close };
         }
 
         private ProviderException malformedRow(

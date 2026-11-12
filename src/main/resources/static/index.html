@@ -1,0 +1,1298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Mithron · Autonomous Trading Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ---------------- COLOR THEMES ---------------- */
+    /* Theme 1: Midnight Sapphire (Default - Modern Luxury Fintech) */
+    :root, body[data-theme="sapphire"] {
+      --bg-base: #0a0e17;
+      --bg-gradient: radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.08) 0px, transparent 50%),
+                     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.08) 0px, transparent 50%),
+                     radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.04) 0px, transparent 50%);
+      --card-bg: rgba(16, 23, 38, 0.72);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --card-hover: rgba(255, 255, 255, 0.03);
+      --header-bg: rgba(10, 14, 23, 0.85);
+      --drawer-bg: #0d1322;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent-green: #10b981;
+      --accent-green-glow: rgba(16, 185, 129, 0.28);
+      --accent-red: #f43f5e;
+      --accent-red-glow: rgba(244, 63, 94, 0.28);
+      --accent-cyan: #38bdf8;
+      --accent-amber: #f59e0b;
+      --tag-bg: rgba(255, 255, 255, 0.06);
+      --table-header-bg: rgba(15, 23, 42, 0.65);
+      --card-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+      --pill-green-bg: rgba(16, 185, 129, 0.12);
+      --pill-red-bg: rgba(244, 63, 94, 0.12);
+    }
+
+    /* Theme 2: Nordic Forest (Cool & Refreshing Pine/Teal) */
+    body[data-theme="forest"] {
+      --bg-base: #061412;
+      --bg-gradient: radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.12) 0px, transparent 50%),
+                     radial-gradient(at 100% 0%, rgba(6, 182, 212, 0.1) 0px, transparent 50%),
+                     radial-gradient(at 50% 100%, rgba(20, 184, 166, 0.06) 0px, transparent 50%);
+      --card-bg: rgba(12, 32, 28, 0.72);
+      --card-border: rgba(45, 212, 191, 0.18);
+      --card-hover: rgba(255, 255, 255, 0.03);
+      --header-bg: rgba(6, 20, 18, 0.85);
+      --drawer-bg: #091c18;
+      --text-main: #f0fdf4;
+      --text-muted: #99f6e4;
+      --text-dim: #5eead4;
+      --accent-green: #00f59b;
+      --accent-green-glow: rgba(0, 245, 155, 0.35);
+      --accent-red: #fb7185;
+      --accent-red-glow: rgba(251, 113, 133, 0.3);
+      --accent-cyan: #2dd4bf;
+      --accent-amber: #f59e0b;
+      --tag-bg: rgba(45, 212, 191, 0.08);
+      --table-header-bg: rgba(10, 26, 24, 0.7);
+      --card-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(45, 212, 191, 0.12) inset;
+      --pill-green-bg: rgba(0, 245, 155, 0.14);
+      --pill-red-bg: rgba(251, 113, 133, 0.14);
+    }
+
+    /* Theme 3: Executive Titanium (Warm Posh Dark Charcoal) */
+    body[data-theme="titanium"] {
+      --bg-base: #111317;
+      --bg-gradient: radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.07) 0px, transparent 50%),
+                     radial-gradient(at 100% 0%, rgba(217, 119, 6, 0.05) 0px, transparent 50%);
+      --card-bg: rgba(24, 27, 34, 0.78);
+      --card-border: rgba(255, 255, 255, 0.09);
+      --card-hover: rgba(255, 255, 255, 0.03);
+      --header-bg: rgba(17, 19, 23, 0.85);
+      --drawer-bg: #16181f;
+      --text-main: #fcfcfc;
+      --text-muted: #a8a29e;
+      --text-dim: #78716c;
+      --accent-green: #34d399;
+      --accent-green-glow: rgba(52, 211, 153, 0.28);
+      --accent-red: #f87171;
+      --accent-red-glow: rgba(248, 113, 113, 0.28);
+      --accent-cyan: #fbbf24;
+      --accent-amber: #f59e0b;
+      --tag-bg: rgba(255, 255, 255, 0.06);
+      --table-header-bg: rgba(20, 23, 29, 0.7);
+      --card-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+      --pill-green-bg: rgba(52, 211, 153, 0.12);
+      --pill-red-bg: rgba(248, 113, 113, 0.12);
+    }
+
+    /* Theme 4: Porcelain Clean (Refreshing Daylight Luxury) */
+    body[data-theme="porcelain"] {
+      --bg-base: #f4f6fa;
+      --bg-gradient: radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.08) 0px, transparent 50%),
+                     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.06) 0px, transparent 50%);
+      --card-bg: rgba(255, 255, 255, 0.94);
+      --card-border: rgba(226, 232, 240, 0.95);
+      --card-hover: rgba(248, 250, 252, 0.9);
+      --header-bg: rgba(255, 255, 255, 0.88);
+      --drawer-bg: #ffffff;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --text-dim: #94a3b8;
+      --accent-green: #059669;
+      --accent-green-glow: rgba(5, 150, 105, 0.2);
+      --accent-red: #e11d48;
+      --accent-red-glow: rgba(225, 29, 72, 0.2);
+      --accent-cyan: #0284c7;
+      --accent-amber: #d97706;
+      --tag-bg: rgba(241, 245, 249, 0.9);
+      --table-header-bg: rgba(248, 250, 252, 0.95);
+      --card-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(226, 232, 240, 0.8) inset;
+      --pill-green-bg: rgba(5, 150, 105, 0.1);
+      --pill-red-bg: rgba(225, 29, 72, 0.1);
+    }
+
+    /* ---------------- GLOBAL STYLES ---------------- */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      background-image: var(--bg-gradient);
+      background-attachment: fixed;
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      transition: background-color 0.25s ease, color 0.25s ease;
+    }
+
+    /* ---------------- HEADER BAR ---------------- */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 22px;
+      border-bottom: 1px solid var(--card-border);
+      background: var(--header-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      transition: background-color 0.25s ease, border-color 0.25s ease;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .menu-btn {
+      background: none;
+      border: none;
+      color: var(--text-main);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 6px;
+      border-radius: 6px;
+      transition: background 0.15s;
+    }
+    .menu-btn:hover {
+      background: var(--card-hover);
+    }
+    .menu-btn span {
+      display: block;
+      width: 16px;
+      height: 2px;
+      background: var(--text-main);
+      border-radius: 2px;
+    }
+
+    .brand-name {
+      font-size: 0.92rem;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .brand-version {
+      font-size: 0.6rem;
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--tag-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 1px 5px;
+      border-radius: 4px;
+      letter-spacing: 0;
+      font-weight: 600;
+    }
+
+    /* Mode Switcher: SIMULATION vs LIVE */
+    .header-center {
+      display: flex;
+      align-items: center;
+    }
+    .mode-toggle {
+      display: flex;
+      background: var(--tag-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 7px;
+      padding: 2px;
+    }
+    .mode-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      padding: 4px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .mode-btn.active.sim {
+      background: var(--card-bg);
+      color: var(--accent-cyan);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      border: 1px solid var(--card-border);
+    }
+    .mode-btn.active.live {
+      background: rgba(239, 68, 68, 0.18);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      box-shadow: 0 2px 6px rgba(239, 68, 68, 0.2);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+
+    /* Quick Theme Switcher Pill in Header */
+    .theme-quick-btn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--tag-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 16px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .theme-quick-btn:hover {
+      background: var(--card-hover);
+      color: var(--text-main);
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.68rem;
+      padding: 3px 8px;
+      border-radius: 16px;
+      background: var(--tag-bg);
+      border: 1px solid var(--card-border);
+      font-weight: 600;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      box-shadow: 0 0 6px var(--accent-green);
+      animation: pulse 2.5s infinite;
+    }
+    .status-dot.closed {
+      background: var(--text-dim);
+      box-shadow: none;
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.9); }
+    }
+
+    /* ---------------- DEMO BANNER ---------------- */
+    .banner-notification {
+      display: none;
+      background: rgba(99, 102, 241, 0.15);
+      border-bottom: 1px solid rgba(99, 102, 241, 0.3);
+      color: #a5b4fc;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      padding: 5px 12px;
+      text-align: center;
+      letter-spacing: 0.4px;
+    }
+    .banner-notification.active {
+      display: block;
+    }
+
+    /* ---------------- MAIN CONTAINER ---------------- */
+    main {
+      flex: 1;
+      max-width: 940px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 18px 20px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    /* ---------------- HERO P&L ---------------- */
+    .hero-section {
+      text-align: center;
+      padding: 4px 0 2px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .hero-pnl {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 2.2rem;
+      font-weight: 800;
+      letter-spacing: -1px;
+      line-height: 1;
+      color: var(--accent-green);
+      text-shadow: 0 0 24px var(--accent-green-glow);
+      transition: color 0.25s, text-shadow 0.25s;
+    }
+    .hero-pnl.negative {
+      color: var(--accent-red);
+      text-shadow: 0 0 24px var(--accent-red-glow);
+    }
+    .hero-pnl.zero {
+      color: var(--text-main);
+      text-shadow: none;
+    }
+    .hero-sub-pill {
+      margin-top: 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--tag-bg);
+      border: 1px solid var(--card-border);
+      padding: 3px 12px;
+      border-radius: 9999px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      letter-spacing: 0.2px;
+    }
+    .hero-sub-pill .dot-sep {
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: var(--text-dim);
+    }
+
+    /* ---------------- CAPITAL STRIP ---------------- */
+    .capital-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      box-shadow: var(--card-shadow);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      overflow: hidden;
+      transition: background-color 0.25s, border-color 0.25s, box-shadow 0.25s;
+    }
+    .capital-cell {
+      padding: 13px 20px;
+      border-right: 1px solid var(--card-border);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .capital-cell:last-child {
+      border-right: none;
+    }
+    .cell-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+    .cell-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.18rem;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.3px;
+    }
+
+    /* ---------------- TABLES / CARDS ---------------- */
+    .section-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .section-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      letter-spacing: 1.3px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      font-weight: 700;
+      padding-left: 2px;
+    }
+
+    .table-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      box-shadow: var(--card-shadow);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      overflow: hidden;
+      transition: background-color 0.25s, border-color 0.25s, box-shadow 0.25s;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    th {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      padding: 7px 14px;
+      font-weight: 600;
+      background: var(--table-header-bg);
+      border-bottom: 1px solid var(--card-border);
+    }
+    th.text-right, td.text-right {
+      text-align: right;
+    }
+
+    td {
+      padding: 8px 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: var(--text-main);
+      border-bottom: 1px solid var(--card-border);
+      transition: background 0.15s;
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    tr:hover td {
+      background: var(--card-hover);
+    }
+
+    .symbol-name {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: 0.2px;
+    }
+
+    /* Badges for PnL in Table */
+    .pnl-badge {
+      display: inline-block;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+    }
+    .pnl-badge.green {
+      color: var(--accent-green);
+      background: var(--pill-green-bg);
+    }
+    .pnl-badge.red {
+      color: var(--accent-red);
+      background: var(--pill-red-bg);
+    }
+
+    .empty-state {
+      padding: 14px 14px;
+      text-align: center;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+    }
+
+    /* Table Footer Summary Strip */
+    .table-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      border-top: 1px solid var(--card-border);
+      background: var(--table-header-bg);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .footer-stat {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .footer-stat span.value {
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .footer-stat span.value.val-green {
+      color: var(--accent-green);
+    }
+    .footer-stat span.value.val-red {
+      color: var(--accent-red);
+    }
+
+    /* ---------------- SLIDE-OUT DRAWER ---------------- */
+    .drawer-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(6px);
+      z-index: 200;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+    }
+    .drawer-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 280px;
+      height: 100vh;
+      background: var(--drawer-bg);
+      border-right: 1px solid var(--card-border);
+      box-shadow: 10px 0 40px rgba(0, 0, 0, 0.5);
+      z-index: 201;
+      transform: translateX(-100%);
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.25s;
+      display: flex;
+      flex-direction: column;
+      padding: 18px 16px;
+      overflow-y: auto;
+    }
+    .drawer.open {
+      transform: translateX(0);
+    }
+
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--card-border);
+      margin-bottom: 14px;
+    }
+    .drawer-title {
+      font-size: 0.82rem;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      color: var(--text-main);
+    }
+    .drawer-close {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.3rem;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px;
+    }
+
+    /* Theme Picker Section in Drawer */
+    .drawer-section-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .theme-picker-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 18px;
+    }
+    .theme-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      background: var(--tag-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .theme-chip:hover {
+      background: var(--card-hover);
+      color: var(--text-main);
+    }
+    .theme-chip.active {
+      border-color: var(--accent-cyan);
+      color: var(--text-main);
+      background: var(--card-bg);
+      box-shadow: 0 0 0 1px var(--accent-cyan);
+    }
+    .theme-chip .chip-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 1;
+      margin-bottom: 16px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: 6px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.76rem;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .nav-item:hover, .nav-item.active {
+      background: var(--card-bg);
+      color: var(--text-main);
+      border-left: 3px solid var(--accent-green);
+    }
+    .nav-item .tag {
+      margin-left: auto;
+      font-size: 0.6rem;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--tag-bg);
+      color: var(--text-dim);
+    }
+
+    .drawer-footer {
+      padding-top: 14px;
+      border-top: 1px solid var(--card-border);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .drawer-btn {
+      background: var(--tag-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.15s;
+      font-weight: 600;
+    }
+    .drawer-btn:hover {
+      background: var(--card-hover);
+      color: var(--text-main);
+    }
+
+    /* ---------------- MOBILE RESPONSIVE ---------------- */
+    @media (max-width: 720px) {
+      header {
+        padding: 12px 16px;
+      }
+      .brand-version, .header-right span.clock, .theme-quick-btn {
+        display: none;
+      }
+      main {
+        padding: 24px 14px 40px;
+        gap: 24px;
+      }
+      .hero-pnl {
+        font-size: 3rem;
+      }
+      .capital-grid {
+        grid-template-columns: 1fr;
+      }
+      .capital-cell {
+        border-right: none;
+        border-bottom: 1px solid var(--card-border);
+        padding: 16px 18px;
+      }
+      .capital-cell:last-child {
+        border-bottom: none;
+      }
+      .cell-val {
+        font-size: 1.3rem;
+      }
+      .table-card {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      table {
+        min-width: 540px;
+      }
+      th, td {
+        padding: 12px 14px;
+        font-size: 0.8rem;
+      }
+      .table-footer {
+        font-size: 0.68rem;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- BANNER NOTIFICATION (DEMO / NOTICE) -->
+  <div id="demoBanner" class="banner-notification">
+    ✨ PREVIEWING SCREENSHOT REFERENCE MOCK DATA · Open drawer &rarr; click "Switch to Live Telemetry" to return to database
+  </div>
+
+  <!-- HEADER BAR -->
+  <header>
+    <div class="header-left">
+      <button class="menu-btn" onclick="toggleDrawer()" aria-label="Open Navigation">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <div class="brand-name">
+        MITHRON
+        <span class="brand-version">v2.5.5</span>
+      </div>
+    </div>
+
+    <!-- Live / Simulation Mode Toggle -->
+    <div class="header-center">
+      <div class="mode-toggle">
+        <button id="btnSimMode" class="mode-btn active sim" onclick="setMode('PAPER')">SIMULATION</button>
+        <button id="btnLiveMode" class="mode-btn" onclick="setMode('LIVE')">LIVE</button>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <!-- Quick Cycle Theme Button -->
+      <button class="theme-quick-btn" onclick="cycleNextTheme()" title="Click to cycle themes">
+        <span>🎨</span>
+        <span id="quickThemeName">Sapphire</span>
+      </button>
+
+      <div class="status-badge">
+        <span id="statusDot" class="status-dot"></span>
+        <span id="statusText">ONLINE</span>
+      </div>
+      <span class="clock" id="istClock">--:--:-- IST</span>
+    </div>
+  </header>
+
+  <!-- NAVIGATION DRAWER -->
+  <div class="drawer-overlay" id="drawerOverlay" onclick="toggleDrawer()"></div>
+  <aside class="drawer" id="drawer">
+    <div class="drawer-header">
+      <span class="drawer-title">MITHRON CONSOLE</span>
+      <button class="drawer-close" onclick="toggleDrawer()">&times;</button>
+    </div>
+
+    <!-- Theme Palette Selector -->
+    <div class="drawer-section-title">COLOR PALETTE</div>
+    <div class="theme-picker-grid">
+      <button class="theme-chip active" id="chip-sapphire" onclick="applyTheme('sapphire')">
+        <span class="chip-dot" style="background: #38bdf8;"></span> Sapphire
+      </button>
+      <button class="theme-chip" id="chip-forest" onclick="applyTheme('forest')">
+        <span class="chip-dot" style="background: #00f59b;"></span> Forest
+      </button>
+      <button class="theme-chip" id="chip-titanium" onclick="applyTheme('titanium')">
+        <span class="chip-dot" style="background: #f59e0b;"></span> Titanium
+      </button>
+      <button class="theme-chip" id="chip-porcelain" onclick="applyTheme('porcelain')">
+        <span class="chip-dot" style="background: #0284c7;"></span> Porcelain
+      </button>
+    </div>
+
+    <div class="drawer-section-title">NAVIGATION</div>
+    <nav class="nav-list">
+      <a href="#" class="nav-item active">
+        <span>📊</span> Executive Overview
+      </a>
+      <a href="#" class="nav-item" onclick="alert('Strategy Quality Gates & Signal Stream coming in V3.1')">
+        <span>🎯</span> Strategy Signals
+        <span class="tag">V3.1</span>
+      </a>
+      <a href="#" class="nav-item" onclick="alert('Engine Operations & Broker Diagnostics coming in V3.2')">
+        <span>⚙️</span> Engine Operations
+        <span class="tag">V3.2</span>
+      </a>
+      <a href="#" class="nav-item" onclick="alert('Historical Performance & Multi-day Replay coming in V3.3')">
+        <span>📈</span> Historical Analytics
+        <span class="tag">V3.3</span>
+      </a>
+    </nav>
+
+    <div class="drawer-footer">
+      <button class="drawer-btn" id="btnDemoToggle" onclick="toggleDemoData()">Preview Screenshot Demo Data</button>
+      <button class="drawer-btn" onclick="resetTodaySimulation()">Reset Today's P&L</button>
+      <button class="drawer-btn" onclick="triggerManualPing()">Ping Health Watchdog</button>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main>
+
+    <!-- 1. HERO P&L -->
+    <section class="hero-section">
+      <div id="heroPnl" class="hero-pnl zero">₹0.0</div>
+      <div class="hero-sub-pill">
+        <span id="heroTrades">0 trades</span>
+        <span class="dot-sep"></span>
+        <span id="heroWinRate">0% win rate</span>
+      </div>
+    </section>
+
+    <!-- 2. CAPITAL STRIP -->
+    <section class="capital-grid">
+      <div class="capital-cell">
+        <div class="cell-label">OPENING</div>
+        <div id="capOpening" class="cell-val">₹0.00</div>
+      </div>
+      <div class="capital-cell">
+        <div class="cell-label">IN USE</div>
+        <div id="capInUse" class="cell-val">₹0.00</div>
+      </div>
+      <div class="capital-cell">
+        <div class="cell-label">AVAILABLE</div>
+        <div id="capAvailable" class="cell-val">₹0.00</div>
+      </div>
+    </section>
+
+    <!-- 3. OPEN POSITIONS -->
+    <section class="section-block">
+      <div class="section-title">OPEN POSITIONS</div>
+      <div class="table-card">
+        <table>
+          <thead>
+            <tr>
+              <th>SYMBOL</th>
+              <th class="text-right">ENTRY</th>
+              <th class="text-right">CURRENT</th>
+              <th class="text-right">QTY</th>
+              <th class="text-right">STOP LOSS</th>
+              <th class="text-right">TARGET</th>
+              <th class="text-right">UNREALISED P&L</th>
+            </tr>
+          </thead>
+          <tbody id="openPositionsBody">
+            <tr>
+              <td colspan="7" class="empty-state">No open positions · Scanner active</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 4. TODAY'S TRADES -->
+    <section class="section-block">
+      <div class="section-title">TODAY'S TRADES</div>
+      <div class="table-card">
+        <table>
+          <thead>
+            <tr>
+              <th>SYMBOL</th>
+              <th class="text-right">ENTRY</th>
+              <th class="text-right">EXIT</th>
+              <th class="text-right">QTY</th>
+              <th class="text-right">NET P&L</th>
+            </tr>
+          </thead>
+          <tbody id="todayTradesBody">
+            <tr>
+              <td colspan="5" class="empty-state">No trades executed today</td>
+            </tr>
+          </tbody>
+        </table>
+        <!-- Card Footer Summary -->
+        <div class="table-footer">
+          <div class="footer-stat">TOTAL TRADES: <span id="ftTotalTrades" class="value">0</span></div>
+          <div class="footer-stat">WIN RATE: <span id="ftWinRate" class="value">0%</span></div>
+          <div class="footer-stat">GROSS P&L: <span id="ftGrossPnl" class="value">₹0.0</span></div>
+          <div class="footer-stat">CHARGES: <span id="ftCharges" class="value">₹0.0</span></div>
+          <div class="footer-stat">NET P&L: <span id="ftNetPnl" class="value">₹0.0</span></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    let activeMode = 'PAPER'; // 'PAPER' or 'LIVE'
+    let isDemoMode = false;
+    let pollInterval = null;
+    const THEMES = ['sapphire', 'forest', 'titanium', 'porcelain'];
+    const THEME_NAMES = {
+      sapphire: 'Sapphire',
+      forest: 'Forest',
+      titanium: 'Titanium',
+      porcelain: 'Porcelain'
+    };
+
+    // ---------------- THEME SYSTEM ----------------
+    function applyTheme(themeKey) {
+      if (!THEMES.includes(themeKey)) themeKey = 'sapphire';
+      document.body.setAttribute('data-theme', themeKey);
+      localStorage.setItem('mithron_theme', themeKey);
+
+      // Update chips in drawer
+      document.querySelectorAll('.theme-chip').forEach(c => c.classList.remove('active'));
+      const activeChip = document.getElementById('chip-' + themeKey);
+      if (activeChip) activeChip.classList.add('active');
+
+      // Update quick button
+      const quickName = document.getElementById('quickThemeName');
+      if (quickName) quickName.textContent = THEME_NAMES[themeKey] || 'Theme';
+    }
+
+    function cycleNextTheme() {
+      const current = document.body.getAttribute('data-theme') || 'sapphire';
+      const currentIndex = THEMES.indexOf(current);
+      const nextIndex = (currentIndex + 1) % THEMES.length;
+      applyTheme(THEMES[nextIndex]);
+    }
+
+    // Initialize saved theme
+    const savedTheme = localStorage.getItem('mithron_theme') || 'sapphire';
+    applyTheme(savedTheme);
+
+    // ---------------- DEMO DATA (Screenshot Match) ----------------
+    const SCREENSHOT_DEMO = {
+      pnl: 925.5,
+      tradesCount: 5,
+      winRate: 60,
+      opening: 200000,
+      inUse: 58000,
+      available: 142000,
+      openPositions: [
+        { symbol: 'RELIANCE', entryPrice: 2841.5, currentLtp: 2868.0, currentQuantity: 10, stopLoss: 2815.0, target1Price: 2897.0, unrealizedPnl: 265.0 }
+      ],
+      closedTrades: [
+        { symbol: 'NIFTY24DECFUT', entryPrice: 24310.0, exitPrice: 24368.5, quantity: 1, netPnl: 585.0 },
+        { symbol: 'INFY', entryPrice: 1782.3, exitPrice: 1761.0, quantity: 5, netPnl: -106.5 },
+        { symbol: 'HDFCBANK', entryPrice: 1623.0, exitPrice: 1651.5, quantity: 8, netPnl: 228.0 },
+        { symbol: 'TCS', entryPrice: 4102.0, exitPrice: 4088.5, quantity: 3, netPnl: -40.5 },
+        { symbol: 'SBIN', entryPrice: 812.4, exitPrice: 829.7, quantity: 15, netPnl: 259.5 }
+      ],
+      grossPnl: 925.5,
+      charges: 300.0,
+      netPnl: 625.5
+    };
+
+    // Format numbers to Indian Rupee currency standard
+    function formatINR(val, showSign = false) {
+      if (val === null || val === undefined || isNaN(val)) return '₹0.0';
+      const absVal = Math.abs(val);
+      const formatted = new Intl.NumberFormat('en-IN', {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 2
+      }).format(absVal);
+      
+      if (val > 0) return (showSign ? '+₹' : '₹') + formatted;
+      if (val < 0) return '-₹' + formatted;
+      return '₹' + formatted;
+    }
+
+    // Toggle navigation drawer
+    function toggleDrawer() {
+      document.getElementById('drawer').classList.toggle('open');
+      document.getElementById('drawerOverlay').classList.toggle('open');
+    }
+
+    // Toggle between Screenshot Mock Data & Real Database Telemetry
+    function toggleDemoData() {
+      isDemoMode = !isDemoMode;
+      const banner = document.getElementById('demoBanner');
+      const btn = document.getElementById('btnDemoToggle');
+      if (isDemoMode) {
+        banner.classList.add('active');
+        btn.textContent = 'Switch to Live Telemetry';
+        renderDemoData();
+      } else {
+        banner.classList.remove('active');
+        btn.textContent = 'Preview Screenshot Demo Data';
+        fetchData();
+      }
+      toggleDrawer();
+    }
+
+    // Mode Toggle (SIMULATION vs LIVE)
+    function setMode(mode) {
+      activeMode = mode;
+      const simBtn = document.getElementById('btnSimMode');
+      const liveBtn = document.getElementById('btnLiveMode');
+      
+      if (mode === 'PAPER') {
+        simBtn.className = 'mode-btn active sim';
+        liveBtn.className = 'mode-btn';
+      } else {
+        simBtn.className = 'mode-btn';
+        liveBtn.className = 'mode-btn active live';
+      }
+      
+      if (!isDemoMode) {
+        fetchData();
+      }
+    }
+
+    // Update real-time clock
+    function updateClock() {
+      const now = new Date();
+      const options = { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
+      document.getElementById('istClock').textContent = now.toLocaleTimeString('en-IN', options) + ' IST';
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Render Demo Data (Pixel-perfect match to screenshot)
+    function renderDemoData() {
+      const d = SCREENSHOT_DEMO;
+      const heroEl = document.getElementById('heroPnl');
+      heroEl.textContent = formatINR(d.pnl, true);
+      heroEl.className = 'hero-pnl';
+
+      document.getElementById('heroTrades').textContent = `${d.tradesCount} trades`;
+      document.getElementById('heroWinRate').textContent = `${d.winRate}% win rate`;
+
+      document.getElementById('capOpening').textContent = formatINR(d.opening);
+      document.getElementById('capInUse').textContent = formatINR(d.inUse);
+      document.getElementById('capAvailable').textContent = formatINR(d.available);
+
+      // Open positions
+      document.getElementById('openPositionsBody').innerHTML = d.openPositions.map(p => `
+        <tr>
+          <td class="symbol-name">${p.symbol}</td>
+          <td class="text-right">${formatINR(p.entryPrice)}</td>
+          <td class="text-right">${formatINR(p.currentLtp)}</td>
+          <td class="text-right">${p.currentQuantity}</td>
+          <td class="text-right">${formatINR(p.stopLoss)}</td>
+          <td class="text-right">${formatINR(p.target1Price)}</td>
+          <td class="text-right">
+            <span class="pnl-badge green">${formatINR(p.unrealizedPnl, true)}</span>
+          </td>
+        </tr>
+      `).join('');
+
+      // Today's trades
+      document.getElementById('todayTradesBody').innerHTML = d.closedTrades.map(t => `
+        <tr>
+          <td class="symbol-name">${t.symbol}</td>
+          <td class="text-right">${formatINR(t.entryPrice)}</td>
+          <td class="text-right">${formatINR(t.exitPrice)}</td>
+          <td class="text-right">${t.quantity}</td>
+          <td class="text-right">
+            <span class="pnl-badge ${t.netPnl >= 0 ? 'green' : 'red'}">${formatINR(t.netPnl, true)}</span>
+          </td>
+        </tr>
+      `).join('');
+
+      // Footer
+      document.getElementById('ftTotalTrades').textContent = d.tradesCount;
+      document.getElementById('ftWinRate').textContent = d.winRate + '%';
+      document.getElementById('ftGrossPnl').textContent = formatINR(d.grossPnl, true);
+      document.getElementById('ftCharges').textContent = '-₹' + d.charges.toFixed(0);
+      document.getElementById('ftNetPnl').textContent = formatINR(d.netPnl, true);
+      document.getElementById('ftNetPnl').className = 'value val-green';
+    }
+
+    // Fetch live dashboard telemetry
+    async function fetchData() {
+      if (isDemoMode) return;
+
+      try {
+        // 1. Fetch Engine Status
+        const statusRes = await fetch('/admin/runtime/status');
+        if (statusRes.ok) {
+          const status = await statusRes.json();
+          const dot = document.getElementById('statusDot');
+          const txt = document.getElementById('statusText');
+          if (status.websocketConnected) {
+            dot.className = 'status-dot';
+            txt.textContent = 'STREAMING';
+          } else {
+            dot.className = 'status-dot closed';
+            txt.textContent = status.lifecycleState || 'ONLINE';
+          }
+        }
+
+        // If LIVE mode selected but live execution not configured yet
+        if (activeMode === 'LIVE') {
+          document.getElementById('heroPnl').textContent = '₹0.0';
+          document.getElementById('heroPnl').className = 'hero-pnl zero';
+          document.getElementById('heroTrades').textContent = '0 trades';
+          document.getElementById('heroWinRate').textContent = 'Live Standby';
+          document.getElementById('capOpening').textContent = '₹0.00';
+          document.getElementById('capInUse').textContent = '₹0.00';
+          document.getElementById('capAvailable').textContent = '₹0.00';
+          document.getElementById('openPositionsBody').innerHTML = '<tr><td colspan="7" class="empty-state">No active live real-money positions</td></tr>';
+          document.getElementById('todayTradesBody').innerHTML = '<tr><td colspan="5" class="empty-state">No real-money trades executed today</td></tr>';
+          document.getElementById('ftTotalTrades').textContent = '0';
+          document.getElementById('ftWinRate').textContent = '0%';
+          document.getElementById('ftGrossPnl').textContent = '₹0.0';
+          document.getElementById('ftCharges').textContent = '₹0.0';
+          document.getElementById('ftNetPnl').textContent = '₹0.0';
+          return;
+        }
+
+        // 2. Fetch Active Open Positions
+        let positions = [];
+        const posRes = await fetch('/api/v1/simulation/positions/open');
+        const posBody = document.getElementById('openPositionsBody');
+        if (posRes.ok) {
+          positions = await posRes.json();
+          if (positions && positions.length > 0) {
+            posBody.innerHTML = positions.map(p => `
+              <tr>
+                <td class="symbol-name">${p.symbol}</td>
+                <td class="text-right">${formatINR(p.entryPrice)}</td>
+                <td class="text-right">${formatINR(p.currentLtp || p.currentPrice)}</td>
+                <td class="text-right">${p.currentQuantity || p.quantity}</td>
+                <td class="text-right">${formatINR(p.stopLoss)}</td>
+                <td class="text-right">${p.target1Price ? formatINR(p.target1Price) : '--'}</td>
+                <td class="text-right">
+                  <span class="pnl-badge ${p.unrealizedPnl >= 0 ? 'green' : 'red'}">${formatINR(p.unrealizedPnl, true)}</span>
+                </td>
+              </tr>
+            `).join('');
+          } else {
+            posBody.innerHTML = '<tr><td colspan="7" class="empty-state">No open positions · Scanner active</td></tr>';
+          }
+        }
+
+        // Calculate margin deployed in active open positions
+        let inUse = 0;
+        if (positions && positions.length > 0) {
+          inUse = positions.reduce((acc, p) => acc + ((p.entryPrice || 0) * (p.currentQuantity || p.quantity || 0)), 0);
+        }
+
+        // 3. Fetch Capital
+        const capRes = await fetch('/api/v1/simulation/capital');
+        if (capRes.ok) {
+          const cap = await capRes.json();
+          const opening = cap.startingCapitalToday || cap.baselineCapital || 200000;
+          const current = cap.currentCompoundedCapital || opening;
+          const available = Math.max(0, current - inUse);
+
+          document.getElementById('capOpening').textContent = formatINR(opening);
+          document.getElementById('capInUse').textContent = formatINR(inUse);
+          document.getElementById('capAvailable').textContent = formatINR(available);
+        }
+
+        // 4. Fetch Closed Trades Today
+        const tradesRes = await fetch('/api/v1/simulation/trades/today');
+        const tradesBody = document.getElementById('todayTradesBody');
+        if (tradesRes.ok) {
+          const trades = await tradesRes.json();
+          let totalTrades = trades.length;
+          let winTrades = 0;
+          let grossPnl = 0;
+          let totalCharges = 0;
+          let netPnl = 0;
+
+          if (trades && trades.length > 0) {
+            tradesBody.innerHTML = trades.map(t => {
+              const tradeNet = t.netPnl !== undefined ? t.netPnl : ((t.grossPnl || 0) - (t.statutoryCharges || 0));
+              if (tradeNet > 0) winTrades++;
+              grossPnl += (t.grossPnl || 0);
+              totalCharges += (t.statutoryCharges || 0);
+              netPnl += tradeNet;
+
+              return `
+                <tr>
+                  <td class="symbol-name">${t.symbol}</td>
+                  <td class="text-right">${formatINR(t.entryPrice)}</td>
+                  <td class="text-right">${t.exitPrice ? formatINR(t.exitPrice) : '--'}</td>
+                  <td class="text-right">${t.quantity}</td>
+                  <td class="text-right">
+                    <span class="pnl-badge ${tradeNet >= 0 ? 'green' : 'red'}">${formatINR(tradeNet, true)}</span>
+                  </td>
+                </tr>
+              `;
+            }).join('');
+          } else {
+            tradesBody.innerHTML = '<tr><td colspan="5" class="empty-state">No trades executed today</td></tr>';
+          }
+
+          const winRate = totalTrades > 0 ? Math.round((winTrades / totalTrades) * 100) : 0;
+
+          // Hero P&L Display
+          const heroEl = document.getElementById('heroPnl');
+          heroEl.textContent = formatINR(netPnl, true);
+          heroEl.className = 'hero-pnl ' + (netPnl > 0 ? '' : (netPnl < 0 ? 'negative' : 'zero'));
+
+          document.getElementById('heroTrades').textContent = `${totalTrades} trades`;
+          document.getElementById('heroWinRate').textContent = `${winRate}% win rate`;
+
+          document.getElementById('ftTotalTrades').textContent = totalTrades;
+          document.getElementById('ftWinRate').textContent = winRate + '%';
+          document.getElementById('ftGrossPnl').textContent = formatINR(grossPnl, true);
+          document.getElementById('ftCharges').textContent = '-₹' + totalCharges.toFixed(1);
+          document.getElementById('ftNetPnl').textContent = formatINR(netPnl, true);
+          document.getElementById('ftNetPnl').className = 'value ' + (netPnl > 0 ? 'val-green' : (netPnl < 0 ? 'val-red' : ''));
+        }
+
+      } catch (err) {
+        console.warn('Dashboard fetch issue:', err);
+      }
+    }
+
+    // Quick Action: Reset Today's Simulation
+    async function resetTodaySimulation() {
+      if (!confirm("Reset today's simulation balance back to morning starting capital?")) return;
+      try {
+        const res = await fetch('/api/v1/simulation/reset?scope=TODAY', { method: 'POST' });
+        if (res.ok) {
+          alert('Today simulation reset successfully');
+          fetchData();
+        }
+      } catch (e) {
+        alert('Failed to reset: ' + e);
+      }
+    }
+
+    // Quick Action: Manual Heartbeat Ping
+    async function triggerManualPing() {
+      try {
+        const res = await fetch('/admin/runtime/heartbeat/ping', { method: 'POST' });
+        if (res.ok) alert('Heartbeat ping sent successfully!');
+      } catch (e) {
+        alert('Ping failed: ' + e);
+      }
+    }
+
+    // Initial load and start 2.5s polling loop
+    fetchData();
+    pollInterval = setInterval(fetchData, 2500);
+
+    // Pause polling when browser tab is inactive to save battery and network
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        if (pollInterval) clearInterval(pollInterval);
+      } else {
+        fetchData();
+        pollInterval = setInterval(fetchData, 2500);
+      }
+    });
+  </script>
+</body>
+</html>

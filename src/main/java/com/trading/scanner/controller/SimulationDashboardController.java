@@ -51,6 +51,12 @@ public class SimulationDashboardController {
         return ResponseEntity.ok(simulationManagementService.getOpenPositionsToday());
     }
 
+    @GetMapping("/trades/today")
+    @Operation(summary = "Get closed trades executed today with entry, exit, quantity, gross and net PnL")
+    public ResponseEntity<List<SimulationManagementService.ClosedTradeResponse>> getTodayClosedTrades() {
+        return ResponseEntity.ok(simulationManagementService.getTodayClosedTrades());
+    }
+
     @GetMapping("/orders")
     @Operation(summary = "Get simulated orders ledger for a date or date range")
     public ResponseEntity<List<SimulationManagementService.SimulationOrderResponse>> getOrders(

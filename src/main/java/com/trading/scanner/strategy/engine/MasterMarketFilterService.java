@@ -13,18 +13,25 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.util.List;
+import java.util.*;
 
 /**
- * Evaluates objective NIFTY 5-minute candle close and VWAP facts.
+ * Evaluates objective NIFTY candle close, VWAP, and TWAP facts across multiple timeframes.
  *
  * Rules:
  * - Pre-09:20 AM: dataValid = false (session opening reference formation).
  * - Post-01:00 PM: dataValid = false (intraday fresh entry cutoff reached).
  * - When valid:
- *   - NIFTY 5M Close > NIFTY VWAP -> regime = BULLISH, niftyAboveVwap = true
- *   - NIFTY 5M Close < NIFTY VWAP -> regime = BEARISH, niftyAboveVwap = false
- *   - NIFTY 5M Close == NIFTY VWAP -> regime = NEUTRAL
+ *   - Volume-Weighted / Time-Weighted Baseline:
+ *     If VWAP is present (> 0), uses VWAP. For spot indices where volume is 0, falls back to
+ *     Session TWAP: sum((High + Low + Close)/3) / N.
+ *   - Regime Alignment:
+ *     - Close > Baseline && Close >= Day Open -> regime = BULLISH, niftyAboveVwap = true
+ *     - Close < Baseline && Close < Day Open  -> regime = BEARISH, niftyAboveVwap = false
+ *     - Otherwise                             -> regime = NEUTRAL, niftyAboveVwap = (Close > Baseline)
+ * - Multi-Timeframe Support:
+ *   Evaluates 1M, 5M, and 15M baselines in memory, allowing strategies to subscribe to their
+ *   preferred timeframe via marketState.forTimeframe(timeframe).
  */
 @Service
 @Slf4j
@@ -57,6 +64,10 @@ public class MasterMarketFilterService {
     }
 
     public MarketState evaluateCurrentState(LocalDate tradingDate) {
+        return evaluateCurrentState(tradingDate, CandleTimeframe.FIVE_MINUTE);
+    }
+
+    public MarketState evaluateCurrentState(LocalDate tradingDate, CandleTimeframe primaryTimeframe) {
         LocalDateTime now = timeProvider.nowDateTime();
         LocalTime currentTime = now.toLocalTime();
 
@@ -88,30 +99,62 @@ public class MasterMarketFilterService {
             );
         }
 
-        List<MarketCandle> nifty5mCandles = null;
+        CandleTimeframe targetPrimary = primaryTimeframe != null ? primaryTimeframe : CandleTimeframe.FIVE_MINUTE;
+
+        MarketState primaryState = evaluateTimeframeState(tradingDate, now, targetPrimary);
+        if (primaryState == null) {
+            return new MarketState(
+                    tradingDate,
+                    now,
+                    null,
+                    null,
+                    null,
+                    false,
+                    MarketState.MarketRegime.UNKNOWN,
+                    false,
+                    "No finalized NIFTY candles found for today"
+            );
+        }
+
+        Map<CandleTimeframe, MarketState> timeframeStates = new EnumMap<>(CandleTimeframe.class);
+        timeframeStates.put(targetPrimary, primaryState);
+
         if (stockContextCache != null) {
-            List<MarketCandle> cached = stockContextCache.getCandles(NIFTY_SYMBOL, NIFTY_EXCHANGE, CandleTimeframe.FIVE_MINUTE);
-            if (cached.isEmpty()) {
-                cached = stockContextCache.getCandles("NIFTY 50", NIFTY_EXCHANGE, CandleTimeframe.FIVE_MINUTE);
-            }
-            if (!cached.isEmpty()) {
-                nifty5mCandles = cached;
+            for (CandleTimeframe tf : List.of(CandleTimeframe.ONE_MINUTE, CandleTimeframe.FIVE_MINUTE, CandleTimeframe.FIFTEEN_MINUTE)) {
+                if (tf != targetPrimary) {
+                    try {
+                        MarketState subState = evaluateTimeframeState(tradingDate, now, tf);
+                        if (subState != null) {
+                            timeframeStates.put(tf, subState);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
             }
         }
 
-        if (nifty5mCandles == null) {
-            LocalDateTime sessionStart = tradingDate.atTime(LocalTime.of(9, 15));
-            nifty5mCandles = marketCandleRepository
-                    .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
-                            NIFTY_SYMBOL,
-                            NIFTY_EXCHANGE,
-                            CandleTimeframe.FIVE_MINUTE,
-                            sessionStart,
-                            now
-                    );
-        }
+        return new MarketState(
+                primaryState.tradingDate(),
+                primaryState.evaluatedAt(),
+                primaryState.niftyClose(),
+                primaryState.niftyVwap(),
+                primaryState.vwapDistancePct(),
+                primaryState.niftyAboveVwap(),
+                primaryState.regime(),
+                primaryState.dataValid(),
+                primaryState.reason(),
+                primaryState.dayOpen(),
+                timeframeStates
+        );
+    }
 
-        if (nifty5mCandles.isEmpty()) {
+    private MarketState evaluateTimeframeState(LocalDate tradingDate, LocalDateTime now, CandleTimeframe timeframe) {
+        List<MarketCandle> candles = loadCandles(tradingDate, now, timeframe);
+        String tfLabel = timeframe == CandleTimeframe.FIVE_MINUTE ? "5-minute"
+                : (timeframe == CandleTimeframe.ONE_MINUTE ? "1-minute"
+                : (timeframe == CandleTimeframe.FIFTEEN_MINUTE ? "15-minute" : timeframe.name()));
+
+        if (candles == null || candles.isEmpty()) {
             return new MarketState(
                     tradingDate,
                     now,
@@ -121,67 +164,126 @@ public class MasterMarketFilterService {
                     false,
                     MarketState.MarketRegime.UNKNOWN,
                     false,
-                    "No finalized 5-minute NIFTY candles found for today"
+                    String.format("No finalized %s NIFTY candles found for today", tfLabel)
             );
         }
 
-        MarketCandle latest5m = nifty5mCandles.get(nifty5mCandles.size() - 1);
+        MarketCandle latest = candles.get(candles.size() - 1);
+        int maxAllowedMinutes = switch (timeframe) {
+            case ONE_MINUTE -> 5;
+            case FIVE_MINUTE -> 10;
+            case FIFTEEN_MINUTE -> 25;
+            default -> 15;
+        };
 
-        if (latest5m.getCandleTime() == null || java.time.Duration.between(latest5m.getCandleTime(), now).toMinutes() > 10) {
-            long minutesOld = latest5m.getCandleTime() != null
-                    ? java.time.Duration.between(latest5m.getCandleTime(), now).toMinutes()
+        if (latest.getCandleTime() == null || java.time.Duration.between(latest.getCandleTime(), now).toMinutes() > maxAllowedMinutes) {
+            long minutesOld = latest.getCandleTime() != null
+                    ? java.time.Duration.between(latest.getCandleTime(), now).toMinutes()
                     : -1;
-            log.warn("[MACRO_DATA_STALE] Latest NIFTY 5M candle is {} minutes old. Market state invalidated.", minutesOld);
+            log.warn("[MACRO_DATA_STALE] Latest NIFTY {} candle is {} minutes old. Market state invalidated.", timeframe, minutesOld);
             return new MarketState(
                     tradingDate,
                     now,
-                    latest5m.getClosePrice(),
-                    latest5m.getVwap(),
+                    latest.getClosePrice(),
+                    latest.getVwap(),
                     null,
                     false,
                     MarketState.MarketRegime.UNKNOWN,
                     false,
-                    String.format("NIFTY macro candle data is STALE (%d min old, max allowed 10 min)", minutesOld)
+                    String.format("NIFTY macro %s candle data is STALE (%d min old, max allowed %d min)",
+                            timeframe, minutesOld, maxAllowedMinutes)
             );
         }
 
-        Double close = latest5m.getClosePrice();
-        Double vwap = latest5m.getVwap();
+        Double close = latest.getClosePrice();
+        Double vwap = latest.getVwap();
+        Double dayOpen = candles.get(0).getOpenPrice();
 
-        if (close == null || vwap == null || vwap <= 0.0) {
+        // Baseline: use VWAP if valid (>0), otherwise fall back to session TWAP
+        Double baseline = (vwap != null && vwap > 0.0) ? vwap : calculateTwap(candles);
+
+        if (close == null || baseline == null || baseline <= 0.0) {
             return new MarketState(
                     tradingDate,
                     now,
                     close,
-                    vwap,
+                    baseline,
                     null,
                     false,
                     MarketState.MarketRegime.UNKNOWN,
                     false,
-                    "Invalid or uncalculated NIFTY 5M VWAP"
+                    String.format("Invalid or uncalculated NIFTY %s baseline", timeframe)
             );
         }
 
-        double distancePct = ((close - vwap) / vwap) * 100.0;
-        boolean aboveVwap = close > vwap;
-        MarketState.MarketRegime regime = aboveVwap
-                ? MarketState.MarketRegime.BULLISH
-                : (close < vwap ? MarketState.MarketRegime.BEARISH : MarketState.MarketRegime.NEUTRAL);
+        double distancePct = ((close - baseline) / baseline) * 100.0;
+        boolean aboveBaseline = close > baseline;
+        boolean aboveDayOpen = (dayOpen != null) ? close >= dayOpen : true;
 
-        String reason = aboveVwap
-                ? String.format("NIFTY above VWAP (+%.2f%%, BULLISH)", distancePct)
-                : String.format("NIFTY below VWAP (%.2f%%, BEARISH)", distancePct);
+        boolean bullish = aboveBaseline && aboveDayOpen;
+        boolean bearish = !aboveBaseline && (dayOpen != null ? close < dayOpen : true);
+
+        MarketState.MarketRegime regime = bullish
+                ? MarketState.MarketRegime.BULLISH
+                : (bearish ? MarketState.MarketRegime.BEARISH : MarketState.MarketRegime.NEUTRAL);
+
+        String baselineType = (vwap != null && vwap > 0.0) ? "VWAP" : "TWAP";
+        String reason = bullish
+                ? String.format("NIFTY above %s (+%.2f%%, BULLISH, DayOpen: %.1f)", baselineType, distancePct, dayOpen != null ? dayOpen : 0.0)
+                : (bearish
+                    ? String.format("NIFTY below %s (%.2f%%, BEARISH, DayOpen: %.1f)", baselineType, distancePct, dayOpen != null ? dayOpen : 0.0)
+                    : String.format("NIFTY Neutral (%.2f%% vs %s, DayOpen: %.1f)", distancePct, baselineType, dayOpen != null ? dayOpen : 0.0));
 
         return new MarketState(
                 tradingDate,
                 now,
                 close,
-                vwap,
+                baseline,
                 distancePct,
-                aboveVwap,
+                aboveBaseline,
                 regime,
                 true,
-                reason
+                reason,
+                dayOpen,
+                Collections.emptyMap()
         );
+    }
+
+    private List<MarketCandle> loadCandles(LocalDate tradingDate, LocalDateTime now, CandleTimeframe timeframe) {
+        if (stockContextCache != null) {
+            List<MarketCandle> cached = stockContextCache.getCandles(NIFTY_SYMBOL, NIFTY_EXCHANGE, timeframe);
+            if (cached != null && cached.isEmpty()) {
+                cached = stockContextCache.getCandles("NIFTY 50", NIFTY_EXCHANGE, timeframe);
+            }
+            if (cached != null && !cached.isEmpty()) {
+                return cached;
+            }
+            return Collections.emptyList();
+        }
+
+        LocalDateTime sessionStart = tradingDate.atTime(LocalTime.of(9, 15));
+        return marketCandleRepository
+                .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                        NIFTY_SYMBOL,
+                        NIFTY_EXCHANGE,
+                        timeframe,
+                        sessionStart,
+                        now
+                );
+    }
+
+    public static Double calculateTwap(List<MarketCandle> candles) {
+        if (candles == null || candles.isEmpty()) {
+            return null;
+        }
+        double sum = 0.0;
+        int count = 0;
+        for (MarketCandle c : candles) {
+            if (c != null && c.getHighPrice() != null && c.getLowPrice() != null && c.getClosePrice() != null) {
+                sum += (c.getHighPrice() + c.getLowPrice() + c.getClosePrice()) / 3.0;
+                count++;
+            }
+        }
+        return count > 0 ? (sum / count) : null;
     }
 }

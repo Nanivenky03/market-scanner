@@ -282,10 +282,15 @@ public class StockContextCache {
                         latestSectorCandle = !sec5m.isEmpty() ? sec5m.get(sec5m.size() - 1)
                                 : (!sec1m.isEmpty() ? sec1m.get(sec1m.size() - 1) : null);
 
-                        if (latestSectorCandle != null && latestSectorCandle.getClosePrice() != null
-                                && latestSectorCandle.getVwap() != null && latestSectorCandle.getVwap() > 0.0) {
-                            sectorVwapDistance = ((latestSectorCandle.getClosePrice() - latestSectorCandle.getVwap())
-                                    / latestSectorCandle.getVwap()) * 100.0;
+                        if (latestSectorCandle != null && latestSectorCandle.getClosePrice() != null) {
+                            Double vwap = latestSectorCandle.getVwap();
+                            if (vwap == null || vwap <= 0.0) {
+                                List<MarketCandle> candlesForTwap = !sec5m.isEmpty() ? sec5m : sec1m;
+                                vwap = calculateTwap(candlesForTwap);
+                            }
+                            if (vwap != null && vwap > 0.0) {
+                                sectorVwapDistance = ((latestSectorCandle.getClosePrice() - vwap) / vwap) * 100.0;
+                            }
                         }
                     }
                 }
@@ -309,10 +314,15 @@ public class StockContextCache {
             latestNiftyCandle = !n5m.isEmpty() ? n5m.get(n5m.size() - 1)
                     : (!n1m.isEmpty() ? n1m.get(n1m.size() - 1) : null);
 
-            if (latestNiftyCandle != null && latestNiftyCandle.getClosePrice() != null
-                    && latestNiftyCandle.getVwap() != null && latestNiftyCandle.getVwap() > 0.0) {
-                niftyVwapDistance = ((latestNiftyCandle.getClosePrice() - latestNiftyCandle.getVwap())
-                        / latestNiftyCandle.getVwap()) * 100.0;
+            if (latestNiftyCandle != null && latestNiftyCandle.getClosePrice() != null) {
+                Double vwap = latestNiftyCandle.getVwap();
+                if (vwap == null || vwap <= 0.0) {
+                    List<MarketCandle> candlesForTwap = !n5m.isEmpty() ? n5m : n1m;
+                    vwap = calculateTwap(candlesForTwap);
+                }
+                if (vwap != null && vwap > 0.0) {
+                    niftyVwapDistance = ((latestNiftyCandle.getClosePrice() - vwap) / vwap) * 100.0;
+                }
             }
         }
 
@@ -419,5 +429,20 @@ public class StockContextCache {
                 default -> Collections.emptyList();
             };
         }
+    }
+
+    public static Double calculateTwap(List<MarketCandle> candles) {
+        if (candles == null || candles.isEmpty()) {
+            return null;
+        }
+        double sum = 0.0;
+        int count = 0;
+        for (MarketCandle c : candles) {
+            if (c != null && c.getHighPrice() != null && c.getLowPrice() != null && c.getClosePrice() != null) {
+                sum += (c.getHighPrice() + c.getLowPrice() + c.getClosePrice()) / 3.0;
+                count++;
+            }
+        }
+        return count > 0 ? (sum / count) : null;
     }
 }

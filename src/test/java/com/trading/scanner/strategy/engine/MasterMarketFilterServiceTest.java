@@ -164,4 +164,50 @@ class MasterMarketFilterServiceTest {
         assertEquals(25100.0, state.niftyClose());
         verifyNoInteractions(marketCandleRepository);
     }
+
+    @Test
+    void evaluateCurrentState_zeroVolumeIndex_shouldFallbackToTwap() {
+        LocalDateTime time = today.atTime(9, 45);
+        when(timeProvider.nowDateTime()).thenReturn(time);
+
+        MarketCandle c1 = MarketCandle.builder()
+                .symbol("NIFTY")
+                .exchange("NSE")
+                .timeframe(CandleTimeframe.FIVE_MINUTE)
+                .candleTime(today.atTime(9, 20))
+                .openPrice(25000.0)
+                .highPrice(25050.0)
+                .lowPrice(24950.0)
+                .closePrice(25020.0)
+                .volume(0L)
+                .vwap(null)
+                .build();
+
+        MarketCandle c2 = MarketCandle.builder()
+                .symbol("NIFTY")
+                .exchange("NSE")
+                .timeframe(CandleTimeframe.FIVE_MINUTE)
+                .candleTime(today.atTime(9, 40))
+                .openPrice(25020.0)
+                .highPrice(25100.0)
+                .lowPrice(25010.0)
+                .closePrice(25080.0)
+                .volume(0L)
+                .vwap(null)
+                .build();
+
+        when(marketCandleRepository.findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                eq("NIFTY"), eq("NSE"), eq(CandleTimeframe.FIVE_MINUTE), any(), any()))
+                .thenReturn(List.of(c1, c2));
+
+        MarketState state = filterService.evaluateCurrentState(today);
+
+        assertTrue(state.dataValid());
+        assertTrue(state.niftyAboveVwap());
+        assertTrue(state.isBullish());
+        assertEquals(25080.0, state.niftyClose());
+        assertNotNull(state.niftyVwap());
+        assertEquals(25000.0, state.dayOpen());
+        assertTrue(state.reason().contains("TWAP"));
+    }
 }

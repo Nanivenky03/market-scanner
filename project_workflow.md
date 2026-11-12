@@ -35,6 +35,10 @@ This document is the authoritative developer, tester, and architecture guide for
       - Dynamic Dual-Broker Runtime Control: Independent `trading.broker.live` and `trading.broker.paper` keys in `runtime_setting` (defaulting to `'KOTAK_NEO'`).
       - Extended 60-Day Data Retention Window: Extended `retention.candles.days` and `retention.live.signals.days` from 30 to 60 days.
       - Simulation Capital Seeding: Configured `simulation.initial.capital` = `'50000.00'` in `runtime_setting`.
+    * V2.5.6: Multi-Timeframe TWAP & Day Open Macro Engine, Graceful Backfill Sanitization & Minimalist Autonomous Console UI:
+      - Multi-Timeframe In-Memory Baseline Engine: `MasterMarketFilterService` and `StockContextCache` calculate and maintain running Session TWAP (sum(High + Low + Close)/3 / N) and 09:15 Session Day Open for zero-volume spot indices across multiple timeframes (1M, 5M, 15M). Evaluates bullish regime when Close > TWAP and Close >= Day Open, eliminating all null VWAP errors on NIFTY 50 and sector benchmarks. Multi-timeframe strategies subscribe autonomously via marketState.forTimeframe(tf).
+      - Resilient Historical Backfill Sanitization & As-Is Persistence: `AngelOneMarketDataProvider` sanitizes post-closing settlement adjustments and rounding discrepancies on index daily bars (high = max(high, close), low = min(low, close)) instead of throwing batch-crashing fatal exceptions. `EodHistoricalBackfillService` wraps individual daily bar persistence in isolated exception handlers, ensuring valid historical days are permanently saved to stock_prices and eliminating infinite retry loops.
+      - V3.0 Minimalist Autonomous Trading Console UI (`src/main/resources/static/index.html`): High-density autonomous status dashboard served natively by Spring Boot. Live capital monitoring (Opening, In Use, Available), real-time open positions table, today's closed trades ledger with net P&L and broker statutory charges (`GET /api/v1/simulation/trades/today`), 4 custom theme palettes (Sapphire, Forest, Titanium, Porcelain), and responsive mobile drawer.
 
 - **Version 3.0 (Advanced Risk & Research Laboratory):**
   - Extend V2 baseline risk/position management with advanced portfolio controls and risk policies.
@@ -800,15 +804,21 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
 
 ---
 
-### Version 3.0: Advanced Risk & Research Laboratory
+### Version 3.0: Autonomous Trader Console & Web UI (Lightweight, Mobile-First, Live vs Paper Console)
+- **Philosophy:** A reliable autonomous machine status console — open it, verify the system is working and understand performance in 5 seconds, and get out of your way. Zero gambling-like clutter.
+- **Architecture:** Zero-dependency single-file HTML5/CSS3/JavaScript (`src/main/resources/static/index.html`) served directly by Spring Boot inside the JAR.
+- **Dual-Mode Visual Switcher:** Clear header toggle between `SIMULATION / PAPER` and `LIVE TRADING` so paper simulation is never confused with real capital.
+- **Hero P&L Card:** Large, high-contrast, uncluttered net P&L with trade count and win rate.
+- **3-Column Capital Strip:** Opening Capital, Margin In Use, and Available Margin.
+- **Open Positions Table:** Live active positions with Symbol, Entry, Current LTP, Qty, Stop Loss, Target, and Unrealized P&L.
+- **Today's Closed Trades Table:** Symbol, Entry, Exit, Qty, Net P&L, plus footer summary (Total Trades, Win Rate %, Gross P&L, Charges, Net P&L).
+- **Navigation Drawer (☰):** Slide-out sidebar to host modular views (Executive Console, Scanner Quality Gates, Engine Operations, Historical Analytics).
+- **Security & Remote Access:** Built-in PIN/Password gate for secure remote access over Tailscale Funnel.
+
+### Version 4.0: Advanced Risk & Research Laboratory
 - Extend the V2 baseline risk and position manager with advanced portfolio controls and risk policies.
 - Expand point-in-time simulation analytics: win/loss rate, profit factor, max drawdown, MFE/MAE, and expectancy.
-- Improve failure analysis and compare strategy versions over larger historical samples.
-
-### Version 4.0: Professional Web UI & Trader Dashboard
-- Live market state and Nifty 500 universe overview.
-- Strategy setup buckets with "Why is this stock here?" explainability.
-- Interactive backtest explorer, analytics charts, and trade plan visualizer.
+- Improve failure analysis and compare strategy versions over larger historical samples (including ORB and VWAP Pullback strategies).
 
 ### Version 5.0: Production Execution Adapter (SmartAPI)
 - SmartAPI order integration (`placeOrder`, `modifyOrder`, `cancelOrder`).
@@ -970,7 +980,7 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - Baseline Simulation Capital Seeding: Configured `simulation.initial.capital` = `'50000.00'` in `runtime_setting`.
     - Verified State: **481 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
 - [x] **Version 2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor)** `[COMPLETED & EMPIRICALLY VALIDATED]`
-- [ ] **V3.0: Advanced Risk & Research Laboratory** `[PLANNED]`
-- [ ] **V4.0: Professional Web UI & Trader Dashboard** `[PLANNED]`
-- [ ] **V5.0: Trading Engine & Order Execution (SmartAPI)** `[PLANNED]`
+- [ ] **V3.0: Autonomous Trader Console & Web UI (Lightweight, Mobile-First, Live vs Paper Console)** `[IN PROGRESS]`
+- [ ] **V4.0: Advanced Risk & Research Laboratory** `[PLANNED]`
+- [ ] **V5.0: Direct Broker Order Execution Engine (Live SmartAPI / Kotak Neo Gateway)** `[PLANNED]`
 - [ ] **V6.0: Small-Capital Live Trading & Paper/Live Toggle** `[PLANNED]`

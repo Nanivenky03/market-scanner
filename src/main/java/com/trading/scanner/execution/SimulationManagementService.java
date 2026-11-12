@@ -132,6 +132,22 @@ public class SimulationManagementService {
             String restingSlOrderId
     ) {}
 
+    public record ClosedTradeResponse(
+            Integer id,
+            String symbol,
+            String exchange,
+            String positionSide,
+            int quantity,
+            double entryPrice,
+            Double exitPrice,
+            double grossPnl,
+            double statutoryCharges,
+            double netPnl,
+            String entryTime,
+            String exitTime,
+            String exitReason
+    ) {}
+
     public record SimulationOrderResponse(
             Integer id,
             String uniqueOrderId,
@@ -519,6 +535,41 @@ public class SimulationManagementService {
             ));
         }
 
+        return result;
+    }
+
+    /**
+     * Retrieves all closed positions executed today for the dashboard trades ledger.
+     */
+    public List<ClosedTradeResponse> getTodayClosedTrades() {
+        LocalDate today = timeProvider.today();
+        String todayPrefix = today.toString();
+        List<SimulatedPosition> closed = simulatedPositionRepository.findByPositionStatusAndEntryTimeStartingWith("CLOSED", todayPrefix);
+
+        List<ClosedTradeResponse> result = new ArrayList<>();
+        for (SimulatedPosition pos : closed) {
+            double gross = pos.getGrossPnl() != null ? pos.getGrossPnl() : 0.0;
+            double charges = pos.getStatutoryCharges() != null ? pos.getStatutoryCharges() : 0.0;
+            double net = pos.getNetPnl() != null ? pos.getNetPnl() : (gross - charges);
+
+            result.add(new ClosedTradeResponse(
+                    pos.getId(),
+                    pos.getSymbol(),
+                    pos.getExchange(),
+                    pos.getPositionSide(),
+                    pos.getInitialQuantity() != null ? pos.getInitialQuantity() : 0,
+                    pos.getEntryPrice() != null ? pos.getEntryPrice() : 0.0,
+                    pos.getExitPrice(),
+                    gross,
+                    charges,
+                    net,
+                    pos.getEntryTime(),
+                    pos.getExitTime(),
+                    pos.getExitReason()
+            ));
+        }
+
+        result.sort(Comparator.comparing(ClosedTradeResponse::exitTime, Comparator.nullsLast(Comparator.reverseOrder())));
         return result;
     }
 
