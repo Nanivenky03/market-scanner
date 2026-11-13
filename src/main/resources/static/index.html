@@ -6,150 +6,163 @@
   <title>Mithron · Autonomous Trading Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    /* ---------------- COLOR THEMES ---------------- */
-    /* Theme 1: Midnight Sapphire (Default - Modern Luxury Fintech) */
-    :root, body[data-theme="sapphire"] {
-      --bg-base: #0a0e17;
-      --bg-gradient: radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.08) 0px, transparent 50%),
-                     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.08) 0px, transparent 50%),
-                     radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.04) 0px, transparent 50%);
-      --card-bg: rgba(16, 23, 38, 0.72);
-      --card-border: rgba(255, 255, 255, 0.08);
-      --card-hover: rgba(255, 255, 255, 0.03);
-      --header-bg: rgba(10, 14, 23, 0.85);
-      --drawer-bg: #0d1322;
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      --accent-green: #10b981;
-      --accent-green-glow: rgba(16, 185, 129, 0.28);
-      --accent-red: #f43f5e;
-      --accent-red-glow: rgba(244, 63, 94, 0.28);
-      --accent-cyan: #38bdf8;
-      --accent-amber: #f59e0b;
-      --tag-bg: rgba(255, 255, 255, 0.06);
-      --table-header-bg: rgba(15, 23, 42, 0.65);
-      --card-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
-      --pill-green-bg: rgba(16, 185, 129, 0.12);
-      --pill-red-bg: rgba(244, 63, 94, 0.12);
-    }
+    /* ==========================================================================
+       THEME PALETTES: ZERO GLOW / ARCHITECTURAL CANVAS / ELEVATED BLENDED TILES
+       ========================================================================== */
 
-    /* Theme 2: Nordic Forest (Cool & Refreshing Pine/Teal) */
-    body[data-theme="forest"] {
-      --bg-base: #061412;
-      --bg-gradient: radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.12) 0px, transparent 50%),
-                     radial-gradient(at 100% 0%, rgba(6, 182, 212, 0.1) 0px, transparent 50%),
-                     radial-gradient(at 50% 100%, rgba(20, 184, 166, 0.06) 0px, transparent 50%);
-      --card-bg: rgba(12, 32, 28, 0.72);
-      --card-border: rgba(45, 212, 191, 0.18);
-      --card-hover: rgba(255, 255, 255, 0.03);
-      --header-bg: rgba(6, 20, 18, 0.85);
-      --drawer-bg: #091c18;
-      --text-main: #f0fdf4;
-      --text-muted: #99f6e4;
-      --text-dim: #5eead4;
-      --accent-green: #00f59b;
-      --accent-green-glow: rgba(0, 245, 155, 0.35);
-      --accent-red: #fb7185;
-      --accent-red-glow: rgba(251, 113, 133, 0.3);
-      --accent-cyan: #2dd4bf;
-      --accent-amber: #f59e0b;
-      --tag-bg: rgba(45, 212, 191, 0.08);
-      --table-header-bg: rgba(10, 26, 24, 0.7);
-      --card-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(45, 212, 191, 0.12) inset;
-      --pill-green-bg: rgba(0, 245, 155, 0.14);
-      --pill-red-bg: rgba(251, 113, 133, 0.14);
-    }
-
-    /* Theme 3: Executive Titanium (Warm Posh Dark Charcoal) */
-    body[data-theme="titanium"] {
-      --bg-base: #111317;
-      --bg-gradient: radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.07) 0px, transparent 50%),
-                     radial-gradient(at 100% 0%, rgba(217, 119, 6, 0.05) 0px, transparent 50%);
-      --card-bg: rgba(24, 27, 34, 0.78);
-      --card-border: rgba(255, 255, 255, 0.09);
-      --card-hover: rgba(255, 255, 255, 0.03);
-      --header-bg: rgba(17, 19, 23, 0.85);
-      --drawer-bg: #16181f;
-      --text-main: #fcfcfc;
-      --text-muted: #a8a29e;
-      --text-dim: #78716c;
-      --accent-green: #34d399;
-      --accent-green-glow: rgba(52, 211, 153, 0.28);
-      --accent-red: #f87171;
-      --accent-red-glow: rgba(248, 113, 113, 0.28);
-      --accent-cyan: #fbbf24;
-      --accent-amber: #f59e0b;
-      --tag-bg: rgba(255, 255, 255, 0.06);
-      --table-header-bg: rgba(20, 23, 29, 0.7);
-      --card-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
-      --pill-green-bg: rgba(52, 211, 153, 0.12);
-      --pill-red-bg: rgba(248, 113, 113, 0.12);
-    }
-
-    /* Theme 4: Porcelain Clean (Refreshing Daylight Luxury) */
-    body[data-theme="porcelain"] {
-      --bg-base: #f4f6fa;
-      --bg-gradient: radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.08) 0px, transparent 50%),
-                     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.06) 0px, transparent 50%);
-      --card-bg: rgba(255, 255, 255, 0.94);
-      --card-border: rgba(226, 232, 240, 0.95);
-      --card-hover: rgba(248, 250, 252, 0.9);
-      --header-bg: rgba(255, 255, 255, 0.88);
+    /* 1. PORCELAIN STUDIO (DEFAULT DAYTIME LIGHT MODE) */
+    :root, body[data-theme="porcelain"] {
+      --bg-page: #eae5dc;              /* Warm architectural stone canvas */
+      --bg-header: rgba(255, 255, 255, 0.94);
+      --bg-master-tile: #ffffff;      /* Pure elevated white master card */
+      --bg-subcard: #f8f6f0;           /* Subtle recessed background for capital cards */
+      --border-tile: #d6d0c2;          /* Crisp tile border */
+      --border-t-divider: #eae5db;     /* Subconscious hairline T-divider */
+      --border-sub: #ede9e0;           /* Inner hairline */
+      --text-primary: #0f172a;         /* Deep slate/charcoal */
+      --text-secondary: #525f70;       /* Muted slate */
+      --text-subdued: #7e8c9d;         /* Subdued labels */
+      --accent-green: #15803d;         /* Crisp forest green */
+      --accent-red: #dc2626;           /* Crisp crimson */
+      --badge-green-bg: #dcfce7;
+      --badge-green-text: #15803d;
+      --badge-green-border: #bbf7d0;
+      --badge-red-bg: #fee2e2;
+      --badge-red-text: #b91c1c;
+      --badge-red-border: #fecaca;
+      --table-header-bg: #faf9f6;
+      --table-hover-bg: #f8f7f3;
+      --shadow-tile: 0 1px 3px rgba(35, 30, 20, 0.04), 0 14px 32px -8px rgba(35, 30, 20, 0.07);
+      --shadow-floating: 0 4px 6px -1px rgba(35, 30, 20, 0.05), 0 16px 36px -8px rgba(35, 30, 20, 0.12);
       --drawer-bg: #ffffff;
-      --text-main: #0f172a;
-      --text-muted: #64748b;
-      --text-dim: #94a3b8;
-      --accent-green: #059669;
-      --accent-green-glow: rgba(5, 150, 105, 0.2);
-      --accent-red: #e11d48;
-      --accent-red-glow: rgba(225, 29, 72, 0.2);
-      --accent-cyan: #0284c7;
-      --accent-amber: #d97706;
-      --tag-bg: rgba(241, 245, 249, 0.9);
-      --table-header-bg: rgba(248, 250, 252, 0.95);
-      --card-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(226, 232, 240, 0.8) inset;
-      --pill-green-bg: rgba(5, 150, 105, 0.1);
-      --pill-red-bg: rgba(225, 29, 72, 0.1);
+      --tag-bg: #f2eee6;
+      --status-live-bg: #15803d;
     }
 
-    /* ---------------- GLOBAL STYLES ---------------- */
+    /* 2. OBSIDIAN SLATE & MINT (APPLE PRO / LINEAR STYLE DARK MODE) */
+    body[data-theme="obsidian"] {
+      --bg-page: #080c14;              /* Deep obsidian dark night */
+      --bg-header: rgba(17, 23, 36, 0.94);
+      --bg-master-tile: #111724;        /* Elevated dark slate master card */
+      --bg-subcard: #151d2c;           /* Capital recessed cards */
+      --border-tile: #1e283b;          /* Crisp tile border */
+      --border-t-divider: #1c2638;     /* Subconscious hairline T-divider */
+      --border-sub: #1b2434;           /* Inner hairline */
+      --text-primary: #f1f5f9;         /* Ice silver */
+      --text-secondary: #94a3b8;       /* Muted slate */
+      --text-subdued: #64748b;         /* Subdued labels */
+      --accent-green: #10b981;         /* Solid mint green */
+      --accent-red: #f43f5e;           /* Solid coral rose */
+      --badge-green-bg: rgba(16, 185, 129, 0.12);
+      --badge-green-text: #34d399;
+      --badge-green-border: rgba(16, 185, 129, 0.25);
+      --badge-red-bg: rgba(244, 63, 94, 0.12);
+      --badge-red-text: #fb7185;
+      --badge-red-border: rgba(244, 63, 94, 0.25);
+      --table-header-bg: #131a28;
+      --table-hover-bg: rgba(255, 255, 255, 0.025);
+      --shadow-tile: 0 1px 3px rgba(0, 0, 0, 0.5), 0 18px 40px -10px rgba(0, 0, 0, 0.75);
+      --shadow-floating: 0 4px 10px rgba(0, 0, 0, 0.6), 0 20px 45px -10px rgba(0, 0, 0, 0.85);
+      --drawer-bg: #0d121c;
+      --tag-bg: #1a2232;
+      --status-live-bg: #10b981;
+    }
+
+    /* 3. EXECUTIVE TITANIUM */
+    body[data-theme="titanium"] {
+      --bg-page: #101216;
+      --bg-header: rgba(24, 27, 34, 0.94);
+      --bg-master-tile: #181b22;
+      --bg-subcard: #1f232b;
+      --border-tile: #2a303c;
+      --border-t-divider: #262c37;
+      --border-sub: #242934;
+      --text-primary: #f8fafc;
+      --text-secondary: #a1a1aa;
+      --text-subdued: #71717a;
+      --accent-green: #34d399;
+      --accent-red: #f87171;
+      --badge-green-bg: rgba(52, 211, 153, 0.12);
+      --badge-green-text: #34d399;
+      --badge-green-border: rgba(52, 211, 153, 0.25);
+      --badge-red-bg: rgba(248, 113, 113, 0.12);
+      --badge-red-text: #f87171;
+      --badge-red-border: rgba(248, 113, 113, 0.25);
+      --table-header-bg: #1c2028;
+      --table-hover-bg: rgba(255, 255, 255, 0.025);
+      --shadow-tile: 0 1px 3px rgba(0, 0, 0, 0.5), 0 18px 40px -10px rgba(0, 0, 0, 0.75);
+      --shadow-floating: 0 4px 10px rgba(0, 0, 0, 0.6), 0 20px 45px -10px rgba(0, 0, 0, 0.85);
+      --drawer-bg: #13161c;
+      --tag-bg: #242934;
+      --status-live-bg: #34d399;
+    }
+
+    /* ==========================================================================
+       GLOBAL BASE RESETS & ZERO GLOW STRICT ENFORCEMENT
+       ========================================================================== */
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
+      text-shadow: none !important; /* STRICTLY ZERO GLOW */
     }
 
     body {
-      background-color: var(--bg-base);
-      background-image: var(--bg-gradient);
-      background-attachment: fixed;
-      color: var(--text-main);
+      background-color: var(--bg-page);
+      color: var(--text-primary);
       font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
-      overflow-x: hidden;
+      align-items: center;
       -webkit-font-smoothing: antialiased;
-      transition: background-color 0.25s ease, color 0.25s ease;
+      transition: background-color 0.2s ease, color 0.2s ease;
+      overflow-x: hidden;
+      padding-bottom: 24px;
     }
 
-    /* ---------------- HEADER BAR ---------------- */
-    header {
+    /* Custom Slim Scrollbars */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-tile);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-subdued);
+    }
+
+    /* ==========================================================================
+       1. STICKY FLOATING ISLAND HEADER TILE (80% WIDTH, CENTERED, TOP GAP)
+       ========================================================================== */
+    .header-wrapper {
+      position: sticky;
+      top: 14px;
+      z-index: 100;
+      width: 80%;
+      max-width: 1260px;
+      margin: 14px auto 0;
+    }
+
+    .floating-header-tile {
+      background: var(--bg-header);
+      border: 1px solid var(--border-tile);
+      border-radius: 12px;
+      box-shadow: var(--shadow-tile);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      padding: 10px 20px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 22px;
-      border-bottom: 1px solid var(--card-border);
-      background: var(--header-bg);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      transition: background-color 0.25s ease, border-color 0.25s ease;
+      transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
     }
 
     .header-left {
@@ -158,287 +171,326 @@
       gap: 12px;
     }
 
-    .menu-btn {
-      background: none;
-      border: none;
-      color: var(--text-main);
-      cursor: pointer;
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: -0.4px;
+      color: var(--text-primary);
       display: flex;
-      flex-direction: column;
-      gap: 3px;
-      padding: 6px;
-      border-radius: 6px;
-      transition: background 0.15s;
-    }
-    .menu-btn:hover {
-      background: var(--card-hover);
-    }
-    .menu-btn span {
-      display: block;
-      width: 16px;
-      height: 2px;
-      background: var(--text-main);
-      border-radius: 2px;
+      align-items: center;
+      gap: 8px;
     }
 
-    .brand-name {
-      font-size: 0.92rem;
-      font-weight: 800;
-      letter-spacing: 1.5px;
-      color: var(--text-main);
-      display: flex;
+    .status-badge {
+      display: inline-flex;
       align-items: center;
       gap: 6px;
-    }
-    .brand-version {
-      font-size: 0.6rem;
       font-family: 'JetBrains Mono', monospace;
-      background: var(--tag-bg);
-      border: 1px solid var(--card-border);
-      color: var(--text-muted);
-      padding: 1px 5px;
-      border-radius: 4px;
-      letter-spacing: 0;
-      font-weight: 600;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      margin-left: 2px;
     }
 
-    /* Mode Switcher: SIMULATION vs LIVE */
-    .header-center {
-      display: flex;
-      align-items: center;
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--status-live-bg);
+      display: inline-block;
+      flex-shrink: 0;
     }
-    .mode-toggle {
-      display: flex;
-      background: var(--tag-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 7px;
-      padding: 2px;
-    }
-    .mode-btn {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.66rem;
-      font-weight: 700;
-      letter-spacing: 0.4px;
-      padding: 4px 10px;
-      border-radius: 5px;
-      cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .mode-btn.active.sim {
-      background: var(--card-bg);
-      color: var(--accent-cyan);
-      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
-      border: 1px solid var(--card-border);
-    }
-    .mode-btn.active.live {
-      background: rgba(239, 68, 68, 0.18);
-      color: #ef4444;
-      border: 1px solid rgba(239, 68, 68, 0.4);
-      box-shadow: 0 2px 6px rgba(239, 68, 68, 0.2);
+    .status-dot.standby {
+      background: var(--text-subdued);
     }
 
     .header-right {
       display: flex;
       align-items: center;
-      gap: 12px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.72rem;
-      color: var(--text-muted);
+      gap: 10px;
     }
 
-    /* Quick Theme Switcher Pill in Header */
-    .theme-quick-btn {
+    /* Mode Switcher Pill (SIMULATION vs LIVE) */
+    .mode-toggle {
       display: flex;
+      background: var(--tag-bg);
+      border: 1px solid var(--border-sub);
+      border-radius: 6px;
+      padding: 2px;
+    }
+    .mode-btn {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .mode-btn.active.sim {
+      background: var(--bg-master-tile);
+      color: var(--text-primary);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      border: 1px solid var(--border-sub);
+    }
+    .mode-btn.active.live {
+      background: rgba(220, 38, 38, 0.12);
+      color: #dc2626;
+      border: 1px solid rgba(220, 38, 38, 0.3);
+    }
+
+    /* Quick Theme Switcher Button */
+    .theme-btn {
+      display: inline-flex;
       align-items: center;
       gap: 5px;
       background: var(--tag-bg);
-      border: 1px solid var(--card-border);
-      color: var(--text-muted);
+      border: 1px solid var(--border-sub);
+      color: var(--text-secondary);
       font-family: 'Plus Jakarta Sans', sans-serif;
       font-size: 0.68rem;
       font-weight: 600;
-      padding: 3px 8px;
-      border-radius: 16px;
+      padding: 4px 10px;
+      border-radius: 6px;
       cursor: pointer;
-      transition: all 0.15s;
+      transition: all 0.15s ease;
     }
-    .theme-quick-btn:hover {
-      background: var(--card-hover);
-      color: var(--text-main);
+    .theme-btn:hover {
+      background: var(--border-sub);
+      color: var(--text-primary);
     }
 
-    .status-badge {
+    /* Live Clock */
+    .ist-clock {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+      min-width: 82px;
+      text-align: right;
+    }
+
+    /* Hamburger Menu Button */
+    .menu-btn {
+      background: none;
+      border: 1px solid var(--border-sub);
+      color: var(--text-primary);
+      cursor: pointer;
       display: flex;
+      flex-direction: column;
+      justify-content: center;
       align-items: center;
-      gap: 5px;
-      font-size: 0.68rem;
-      padding: 3px 8px;
-      border-radius: 16px;
+      gap: 3px;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      transition: background 0.15s;
+    }
+    .menu-btn:hover {
       background: var(--tag-bg);
-      border: 1px solid var(--card-border);
-      font-weight: 600;
     }
-    .status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--accent-green);
-      box-shadow: 0 0 6px var(--accent-green);
-      animation: pulse 2.5s infinite;
-    }
-    .status-dot.closed {
-      background: var(--text-dim);
-      box-shadow: none;
-      animation: none;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.35; transform: scale(0.9); }
+    .menu-btn span {
+      display: block;
+      width: 14px;
+      height: 1.5px;
+      background: var(--text-primary);
+      border-radius: 1px;
     }
 
     /* ---------------- DEMO BANNER ---------------- */
     .banner-notification {
       display: none;
-      background: rgba(99, 102, 241, 0.15);
-      border-bottom: 1px solid rgba(99, 102, 241, 0.3);
-      color: #a5b4fc;
+      width: 80%;
+      max-width: 1260px;
+      margin: 12px auto 0;
+      background: var(--tag-bg);
+      border: 1px solid var(--border-tile);
+      border-radius: 8px;
+      color: var(--text-secondary);
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.7rem;
-      padding: 5px 12px;
-      text-align: center;
-      letter-spacing: 0.4px;
+      padding: 6px 16px;
+      letter-spacing: 0.3px;
     }
     .banner-notification.active {
-      display: block;
-    }
-
-    /* ---------------- MAIN CONTAINER ---------------- */
-    main {
-      flex: 1;
-      max-width: 940px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 18px 20px 28px;
       display: flex;
-      flex-direction: column;
-      gap: 22px;
-    }
-
-    /* ---------------- HERO P&L ---------------- */
-    .hero-section {
-      text-align: center;
-      padding: 4px 0 2px;
-      display: flex;
-      flex-direction: column;
       align-items: center;
+      justify-content: space-between;
     }
-    .hero-pnl {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 2.2rem;
-      font-weight: 800;
-      letter-spacing: -1px;
-      line-height: 1;
-      color: var(--accent-green);
-      text-shadow: 0 0 24px var(--accent-green-glow);
-      transition: color 0.25s, text-shadow 0.25s;
-    }
-    .hero-pnl.negative {
-      color: var(--accent-red);
-      text-shadow: 0 0 24px var(--accent-red-glow);
-    }
-    .hero-pnl.zero {
-      color: var(--text-main);
-      text-shadow: none;
-    }
-    .hero-sub-pill {
-      margin-top: 8px;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      background: var(--tag-bg);
-      border: 1px solid var(--card-border);
-      padding: 3px 12px;
-      border-radius: 9999px;
-      font-family: 'JetBrains Mono', monospace;
+    .banner-close-btn {
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      cursor: pointer;
       font-size: 0.72rem;
-      color: var(--text-muted);
-      letter-spacing: 0.2px;
-    }
-    .hero-sub-pill .dot-sep {
-      width: 3px;
-      height: 3px;
-      border-radius: 50%;
-      background: var(--text-dim);
+      font-weight: 700;
+      text-decoration: underline;
+      margin-left: 8px;
     }
 
-    /* ---------------- CAPITAL STRIP ---------------- */
-    .capital-grid {
+    /* ==========================================================================
+       2. UNIFIED MIDDLE MASTER TILE (MERGED 3 TILES WITH SUBCONSCIOUS T-SHAPED DIVIDER)
+       ========================================================================== */
+    .master-tile-wrapper {
+      width: 80%;
+      max-width: 1260px;
+      margin: 14px auto 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 80px; /* Space above floating bottom pill */
+    }
+
+    .master-tile-card {
+      background: var(--bg-master-tile);
+      border: 1px solid var(--border-tile);
+      border-radius: 14px;
+      box-shadow: var(--shadow-tile);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex: 1;
+      transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    /* ---------------- TOP SUB-SECTION: HERO & CAPITAL METRICS ---------------- */
+    /* Horizontal Bar of the T-Divider: border-bottom */
+    .t-section-top {
+      padding: 22px 24px 20px;
+      display: grid;
+      grid-template-columns: 1fr 1.35fr;
+      gap: 24px;
+      align-items: start;
+      border-bottom: 1px solid var(--border-t-divider); /* HORIZONTAL BAR OF THE T */
+    }
+
+    /* Hero Metric: Today's P&L */
+    .hero-metric-box {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 4px;
+    }
+
+    .metric-heading {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .hero-pnl-number {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 3rem;
+      font-weight: 800;
+      letter-spacing: -1.5px;
+      line-height: 1.05;
+      color: var(--accent-green);
+      margin: 2px 0 0;
+      transition: color 0.2s ease;
+    }
+    .hero-pnl-number.negative {
+      color: var(--accent-red);
+    }
+    .hero-pnl-number.zero {
+      color: var(--text-primary);
+    }
+
+    /* Capital Metrics */
+    .capital-metrics-box {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .capital-cards-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      box-shadow: var(--card-shadow);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      overflow: hidden;
-      transition: background-color 0.25s, border-color 0.25s, box-shadow 0.25s;
+      gap: 10px;
     }
-    .capital-cell {
-      padding: 13px 20px;
-      border-right: 1px solid var(--card-border);
+
+    .capital-mini-card {
+      background: var(--bg-subcard);
+      border: 1px solid var(--border-sub);
+      border-radius: 8px;
+      padding: 10px 14px;
       display: flex;
       flex-direction: column;
       gap: 4px;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
     }
-    .capital-cell:last-child {
-      border-right: none;
-    }
-    .cell-label {
+
+    .mini-card-label {
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.62rem;
-      letter-spacing: 1.2px;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      font-weight: 600;
-    }
-    .cell-val {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 1.18rem;
       font-weight: 700;
-      color: var(--text-main);
+      letter-spacing: 0.8px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+
+    .mini-card-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text-primary);
       letter-spacing: -0.3px;
     }
 
-    /* ---------------- TABLES / CARDS ---------------- */
-    .section-block {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .section-title {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.65rem;
-      letter-spacing: 1.3px;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      font-weight: 700;
-      padding-left: 2px;
+    /* ---------------- BOTTOM SUB-SECTION: OPEN POSITIONS & TODAY'S TRADES ---------------- */
+    .t-section-bottom {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      flex: 1;
+      min-height: 340px;
     }
 
-    .table-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      box-shadow: var(--card-shadow);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      overflow: hidden;
-      transition: background-color 0.25s, border-color 0.25s, box-shadow 0.25s;
+    /* Left Pane: Open Positions */
+    /* Vertical Bar of the T-Divider: border-right */
+    .t-pane-left {
+      padding: 18px 20px 20px;
+      border-right: 1px solid var(--border-t-divider); /* VERTICAL BAR OF THE T */
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    /* Right Pane: Today's Trades */
+    .t-pane-right {
+      padding: 18px 20px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    .pane-title {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -0.1px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .table-scroll-container {
+      overflow-y: auto;
+      overflow-x: auto;
+      flex: 1;
+      max-height: 380px;
+      border: 1px solid var(--border-sub);
+      border-radius: 8px;
+      background: var(--bg-master-tile);
     }
 
     table {
@@ -447,111 +499,147 @@
       text-align: left;
     }
 
+    thead {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
     th {
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.62rem;
+      font-weight: 700;
       letter-spacing: 0.8px;
       text-transform: uppercase;
-      color: var(--text-dim);
-      padding: 7px 14px;
-      font-weight: 600;
+      color: var(--text-secondary);
+      padding: 8px 12px;
       background: var(--table-header-bg);
-      border-bottom: 1px solid var(--card-border);
+      border-bottom: 1px solid var(--border-sub);
+      white-space: nowrap;
     }
     th.text-right, td.text-right {
       text-align: right;
     }
 
     td {
-      padding: 8px 14px;
+      padding: 9px 12px;
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.78rem;
-      color: var(--text-main);
-      border-bottom: 1px solid var(--card-border);
-      transition: background 0.15s;
+      font-size: 0.77rem;
+      color: var(--text-primary);
+      border-bottom: 1px solid var(--border-sub);
+      transition: background 0.15s ease;
+      white-space: nowrap;
     }
     tr:last-child td {
       border-bottom: none;
     }
     tr:hover td {
-      background: var(--card-hover);
+      background: var(--table-hover-bg);
     }
 
-    .symbol-name {
+    .symbol-cell {
       font-size: 0.8rem;
       font-weight: 700;
-      color: var(--text-main);
+      color: var(--text-primary);
       letter-spacing: 0.2px;
     }
 
-    /* Badges for PnL in Table */
+    /* Clean Badges */
     .pnl-badge {
       display: inline-block;
+      font-family: 'JetBrains Mono', monospace;
       font-weight: 700;
-      padding: 2px 6px;
+      padding: 2px 7px;
       border-radius: 4px;
-      font-size: 0.75rem;
+      font-size: 0.74rem;
+      letter-spacing: -0.2px;
+      border: 1px solid transparent;
     }
     .pnl-badge.green {
-      color: var(--accent-green);
-      background: var(--pill-green-bg);
+      color: var(--badge-green-text);
+      background: var(--badge-green-bg);
+      border-color: var(--badge-green-border);
     }
     .pnl-badge.red {
-      color: var(--accent-red);
-      background: var(--pill-red-bg);
+      color: var(--badge-red-text);
+      background: var(--badge-red-bg);
+      border-color: var(--badge-red-border);
     }
 
     .empty-state {
-      padding: 14px 14px;
+      padding: 24px 14px;
       text-align: center;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.75rem;
     }
 
-    /* Table Footer Summary Strip */
-    .table-footer {
+    /* ==========================================================================
+       3. BOTTOM FLOATING DOCKED SUMMARY PILL (CENTERED, STICKY TO SCREEN BOTTOM)
+       ========================================================================== */
+    .bottom-summary-tile {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 48%;
+      min-width: 540px;
+      max-width: 760px;
+      z-index: 90;
+      background: var(--bg-master-tile);
+      border: 1px solid var(--border-tile);
+      border-radius: 9999px;
+      padding: 8px 24px;
+      box-shadow: var(--shadow-floating);
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      padding: 8px 14px;
-      border-top: 1px solid var(--card-border);
-      background: var(--table-header-bg);
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.7rem;
-      color: var(--text-muted);
+      justify-content: center;
+      gap: 12px;
       flex-wrap: wrap;
-      gap: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.74rem;
+      color: var(--text-secondary);
+      transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
     }
-    .footer-stat {
-      display: flex;
+
+    .bottom-summary-tile .summary-item {
+      display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 4px;
     }
-    .footer-stat span.value {
+
+    .bottom-summary-tile strong {
+      color: var(--text-primary);
       font-weight: 700;
-      color: var(--text-main);
     }
-    .footer-stat span.value.val-green {
+    .bottom-summary-tile strong.val-green {
       color: var(--accent-green);
     }
-    .footer-stat span.value.val-red {
+    .bottom-summary-tile strong.val-red {
       color: var(--accent-red);
     }
 
-    /* ---------------- SLIDE-OUT DRAWER ---------------- */
+    .summary-sep {
+      color: var(--border-sub);
+      user-select: none;
+      font-weight: 300;
+    }
+
+    /* ==========================================================================
+       SLIDE-OUT NAVIGATION DRAWER
+       ========================================================================== */
     .drawer-overlay {
       position: fixed;
       top: 0;
       left: 0;
       width: 100vw;
       height: 100vh;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(6px);
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(4px);
       z-index: 200;
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.25s ease;
+      transition: opacity 0.2s ease;
     }
     .drawer-overlay.open {
       opacity: 1;
@@ -561,18 +649,18 @@
     .drawer {
       position: fixed;
       top: 0;
-      left: 0;
-      width: 280px;
+      right: 0;
+      width: 290px;
       height: 100vh;
       background: var(--drawer-bg);
-      border-right: 1px solid var(--card-border);
-      box-shadow: 10px 0 40px rgba(0, 0, 0, 0.5);
+      border-left: 1px solid var(--border-tile);
+      box-shadow: -10px 0 35px rgba(0, 0, 0, 0.25);
       z-index: 201;
-      transform: translateX(-100%);
-      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.25s;
+      transform: translateX(100%);
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease;
       display: flex;
       flex-direction: column;
-      padding: 18px 16px;
+      padding: 20px 18px;
       overflow-y: auto;
     }
     .drawer.open {
@@ -583,65 +671,65 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding-bottom: 14px;
-      border-bottom: 1px solid var(--card-border);
-      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-sub);
+      margin-bottom: 16px;
     }
     .drawer-title {
-      font-size: 0.82rem;
+      font-size: 0.85rem;
       font-weight: 800;
-      letter-spacing: 1.5px;
-      color: var(--text-main);
+      letter-spacing: 0.5px;
+      color: var(--text-primary);
     }
     .drawer-close {
       background: none;
       border: none;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       font-size: 1.3rem;
       cursor: pointer;
       line-height: 1;
       padding: 2px;
     }
 
-    /* Theme Picker Section in Drawer */
     .drawer-section-title {
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.62rem;
-      letter-spacing: 1.2px;
+      letter-spacing: 1.1px;
       text-transform: uppercase;
-      color: var(--text-dim);
+      color: var(--text-subdued);
       font-weight: 700;
       margin-bottom: 8px;
     }
+
     .theme-picker-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr;
       gap: 6px;
       margin-bottom: 18px;
     }
     .theme-chip {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 7px 10px;
+      gap: 8px;
+      padding: 8px 12px;
       border-radius: 6px;
       background: var(--tag-bg);
-      border: 1px solid var(--card-border);
-      color: var(--text-muted);
-      font-size: 0.72rem;
+      border: 1px solid var(--border-sub);
+      color: var(--text-secondary);
+      font-size: 0.74rem;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.15s;
+      transition: all 0.15s ease;
     }
     .theme-chip:hover {
-      background: var(--card-hover);
-      color: var(--text-main);
+      background: var(--border-sub);
+      color: var(--text-primary);
     }
     .theme-chip.active {
-      border-color: var(--accent-cyan);
-      color: var(--text-main);
-      background: var(--card-bg);
-      box-shadow: 0 0 0 1px var(--accent-cyan);
+      border-color: var(--text-primary);
+      color: var(--text-primary);
+      background: var(--bg-master-tile);
+      font-weight: 700;
     }
     .theme-chip .chip-dot {
       width: 8px;
@@ -649,157 +737,291 @@
       border-radius: 50%;
     }
 
-    .nav-list {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      flex: 1;
-      margin-bottom: 16px;
-    }
-    .nav-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 9px 12px;
-      border-radius: 6px;
-      color: var(--text-muted);
-      text-decoration: none;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.76rem;
-      font-weight: 500;
-      transition: all 0.15s;
-    }
-    .nav-item:hover, .nav-item.active {
-      background: var(--card-bg);
-      color: var(--text-main);
-      border-left: 3px solid var(--accent-green);
-    }
-    .nav-item .tag {
-      margin-left: auto;
-      font-size: 0.6rem;
-      padding: 1px 5px;
-      border-radius: 3px;
-      background: var(--tag-bg);
-      color: var(--text-dim);
-    }
-
     .drawer-footer {
+      margin-top: auto;
       padding-top: 14px;
-      border-top: 1px solid var(--card-border);
+      border-top: 1px solid var(--border-sub);
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
     }
     .drawer-btn {
       background: var(--tag-bg);
-      border: 1px solid var(--card-border);
-      color: var(--text-muted);
+      border: 1px solid var(--border-sub);
+      color: var(--text-secondary);
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.7rem;
+      font-size: 0.72rem;
       padding: 8px 10px;
       border-radius: 6px;
       cursor: pointer;
       text-align: center;
-      transition: all 0.15s;
+      transition: all 0.15s ease;
       font-weight: 600;
     }
     .drawer-btn:hover {
-      background: var(--card-hover);
-      color: var(--text-main);
+      background: var(--border-sub);
+      color: var(--text-primary);
     }
 
-    /* ---------------- MOBILE RESPONSIVE ---------------- */
-    @media (max-width: 720px) {
-      header {
-        padding: 12px 16px;
+    /* ==========================================================================
+       RESPONSIVE ADAPTATIONS
+       ========================================================================== */
+    @media (max-width: 1024px) {
+      .header-wrapper, .master-tile-wrapper, .banner-notification {
+        width: 92%;
       }
-      .brand-version, .header-right span.clock, .theme-quick-btn {
-        display: none;
-      }
-      main {
-        padding: 24px 14px 40px;
-        gap: 24px;
-      }
-      .hero-pnl {
-        font-size: 3rem;
-      }
-      .capital-grid {
+      .t-section-top {
         grid-template-columns: 1fr;
       }
-      .capital-cell {
+      .t-section-bottom {
+        grid-template-columns: 1fr;
+      }
+      .t-pane-left {
         border-right: none;
-        border-bottom: 1px solid var(--card-border);
-        padding: 16px 18px;
+        border-bottom: 1px solid var(--border-t-divider);
       }
-      .capital-cell:last-child {
-        border-bottom: none;
+      .bottom-summary-tile {
+        width: 88%;
+        min-width: unset;
       }
-      .cell-val {
-        font-size: 1.3rem;
+    }
+
+    @media (max-width: 768px) {
+      .header-wrapper {
+        width: 95%;
+        top: 8px;
+        margin-top: 8px;
       }
-      .table-card {
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+      .floating-header-tile {
+        padding: 8px 12px;
       }
-      table {
-        min-width: 540px;
+      .ist-clock {
+        display: none;
       }
-      th, td {
-        padding: 12px 14px;
-        font-size: 0.8rem;
+      .master-tile-wrapper {
+        width: 95%;
+        margin-top: 10px;
+        padding-bottom: 76px;
       }
-      .table-footer {
+      .hero-pnl-number {
+        font-size: 2.4rem;
+      }
+      .capital-cards-grid {
+        gap: 6px;
+      }
+      .capital-mini-card {
+        padding: 8px;
+      }
+      .mini-card-val {
+        font-size: 0.95rem;
+      }
+      .bottom-summary-tile {
+        width: 95%;
         font-size: 0.68rem;
-        gap: 8px;
+        padding: 6px 14px;
+        gap: 6px;
+        bottom: 8px;
       }
     }
   </style>
 </head>
-<body>
+<body data-theme="porcelain">
 
-  <!-- BANNER NOTIFICATION (DEMO / NOTICE) -->
-  <div id="demoBanner" class="banner-notification">
-    ✨ PREVIEWING SCREENSHOT REFERENCE MOCK DATA · Open drawer &rarr; click "Switch to Live Telemetry" to return to database
+  <!-- 1. STICKY FLOATING ISLAND HEADER TILE (80% WIDTH, CENTERED) -->
+  <div class="header-wrapper">
+    <header class="floating-header-tile">
+      <div class="header-left">
+        <div class="brand-title">
+          Mithron
+          <span class="status-badge">
+            <span id="statusDot" class="status-dot"></span>
+            <span id="statusText">LIVE / AUTONOMOUS</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <!-- SIMULATION vs LIVE Mode Switch -->
+        <div class="mode-toggle">
+          <button id="btnSimMode" class="mode-btn active sim" onclick="setMode('PAPER')">SIMULATION</button>
+          <button id="btnLiveMode" class="mode-btn" onclick="setMode('LIVE')">LIVE</button>
+        </div>
+
+        <!-- Theme Switcher Button -->
+        <button class="theme-btn" onclick="toggleTheme()" id="themeBtn" title="Switch Theme">
+          <span id="themeBtnIcon">🌙</span>
+          <span id="themeBtnText">Obsidian</span>
+        </button>
+
+        <!-- Live Clock -->
+        <span class="ist-clock" id="istClock">--:--:-- IST</span>
+
+        <!-- Drawer Menu Button -->
+        <button class="menu-btn" onclick="toggleDrawer()" aria-label="Open Navigation">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+      </div>
+    </header>
   </div>
 
-  <!-- HEADER BAR -->
-  <header>
-    <div class="header-left">
-      <button class="menu-btn" onclick="toggleDrawer()" aria-label="Open Navigation">
-        <span></span>
-        <span></span>
-        <span></span>
-      </button>
-      <div class="brand-name">
-        MITHRON
-        <span class="brand-version">v2.5.5</span>
-      </div>
+  <!-- BANNER NOTIFICATION (DEMO MODE ACTIVE) -->
+  <div id="demoBanner" class="banner-notification">
+    <span>✨ <strong>Screenshot Demo Mode Active</strong> (Matching approved reference tile layout)</span>
+    <button class="banner-close-btn" onclick="toggleDemoData()">Switch to Live Telemetry &rarr;</button>
+  </div>
+
+  <!-- ==========================================================================
+       2. UNIFIED MIDDLE MASTER TILE (MERGED 3 TILES WITH T-SHAPED DIVIDER)
+       ========================================================================== -->
+  <div class="master-tile-wrapper">
+    <div class="master-tile-card">
+
+      <!-- TOP SUB-SECTION: HERO & CAPITAL METRICS -->
+      <!-- (Horizontal bar of the T-shaped divider sits at the bottom of this section) -->
+      <section class="t-section-top">
+        <!-- Left: Hero Metric (Today's P&L) -->
+        <div class="hero-metric-box">
+          <div class="metric-heading">Today's P&amp;L</div>
+          <div id="heroPnl" class="hero-pnl-number">+₹925.5</div>
+        </div>
+
+        <!-- Right: Capital Metrics -->
+        <div class="capital-metrics-box">
+          <div class="metric-heading">Capital Metrics</div>
+          <div class="capital-cards-grid">
+            <div class="capital-mini-card">
+              <div class="mini-card-label">OPENING</div>
+              <div id="capOpening" class="mini-card-val">₹2,00,000</div>
+            </div>
+            <div class="capital-mini-card">
+              <div class="mini-card-label">IN USE</div>
+              <div id="capInUse" class="mini-card-val">₹58,000</div>
+            </div>
+            <div class="capital-mini-card">
+              <div class="mini-card-label">AVAILABLE</div>
+              <div id="capAvailable" class="mini-card-val">₹1,42,000</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- BOTTOM SUB-SECTION: OPEN POSITIONS (LEFT) & TODAY'S TRADES (RIGHT) -->
+      <!-- (Vertical bar of the T-shaped divider separates these two panes) -->
+      <section class="t-section-bottom">
+
+        <!-- LEFT PANE: OPEN POSITIONS -->
+        <div class="t-pane-left">
+          <div class="pane-title">Open Positions</div>
+          <div class="table-scroll-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>SYMBOL</th>
+                  <th class="text-right">ENTRY</th>
+                  <th class="text-right">CURRENT</th>
+                  <th class="text-right">QUANTITY</th>
+                  <th class="text-right">STOPLOSS</th>
+                  <th class="text-right">UNREALISED P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody id="openPositionsBody">
+                <tr>
+                  <td class="symbol-cell">RELIANCE</td>
+                  <td class="text-right">₹2,841.50</td>
+                  <td class="text-right">₹2,868.00</td>
+                  <td class="text-right">10</td>
+                  <td class="text-right">₹2,815.00</td>
+                  <td class="text-right"><span class="pnl-badge green">+₹265.00</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- RIGHT PANE: TODAY'S TRADES SECTION -->
+        <div class="t-pane-right">
+          <div class="pane-title">Today's Trades Section</div>
+          <div class="table-scroll-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>SYMBOL</th>
+                  <th class="text-right">ENTRY</th>
+                  <th class="text-right">EXIT</th>
+                  <th class="text-right">QUANTITY</th>
+                  <th class="text-right">GROSS P&amp;L</th>
+                  <th class="text-right">NET P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody id="todayTradesBody">
+                <tr>
+                  <td class="symbol-cell">NIFTY FUT</td>
+                  <td class="text-right">₹24,310.00</td>
+                  <td class="text-right">₹24,368.50</td>
+                  <td class="text-right">1</td>
+                  <td class="text-right">+₹650.00</td>
+                  <td class="text-right"><span class="pnl-badge green">+₹585.00</span></td>
+                </tr>
+                <tr>
+                  <td class="symbol-cell">INFY</td>
+                  <td class="text-right">₹1,782.30</td>
+                  <td class="text-right">₹1,761.00</td>
+                  <td class="text-right">5</td>
+                  <td class="text-right">-₹86.50</td>
+                  <td class="text-right"><span class="pnl-badge red">-₹106.50</span></td>
+                </tr>
+                <tr>
+                  <td class="symbol-cell">HDFCBANK</td>
+                  <td class="text-right">₹1,623.00</td>
+                  <td class="text-right">₹1,651.50</td>
+                  <td class="text-right">8</td>
+                  <td class="text-right">+₹268.00</td>
+                  <td class="text-right"><span class="pnl-badge green">+₹228.00</span></td>
+                </tr>
+                <tr>
+                  <td class="symbol-cell">TCS</td>
+                  <td class="text-right">₹4,102.00</td>
+                  <td class="text-right">₹4,088.50</td>
+                  <td class="text-right">3</td>
+                  <td class="text-right">-₹20.50</td>
+                  <td class="text-right"><span class="pnl-badge red">-₹40.50</span></td>
+                </tr>
+                <tr>
+                  <td class="symbol-cell">SBIN</td>
+                  <td class="text-right">₹812.40</td>
+                  <td class="text-right">₹829.70</td>
+                  <td class="text-right">15</td>
+                  <td class="text-right">+₹289.50</td>
+                  <td class="text-right"><span class="pnl-badge green">+₹259.50</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
     </div>
+  </div>
 
-    <!-- Live / Simulation Mode Toggle -->
-    <div class="header-center">
-      <div class="mode-toggle">
-        <button id="btnSimMode" class="mode-btn active sim" onclick="setMode('PAPER')">SIMULATION</button>
-        <button id="btnLiveMode" class="mode-btn" onclick="setMode('LIVE')">LIVE</button>
-      </div>
-    </div>
+  <!-- ==========================================================================
+       3. BOTTOM FLOATING DOCKED SUMMARY PILL (CENTERED, STICKY TO SCREEN BOTTOM)
+       ========================================================================== -->
+  <aside class="bottom-summary-tile">
+    <span class="summary-item">Total Trades: <strong id="ftTotalTrades">5</strong></span>
+    <span class="summary-sep">|</span>
+    <span class="summary-item">Win Rate: <strong id="ftWinRate">60%</strong></span>
+    <span class="summary-sep">|</span>
+    <span class="summary-item">Gross: <strong id="ftGrossPnl">+₹925.5</strong></span>
+    <span class="summary-sep">|</span>
+    <span class="summary-item">Charges: <strong id="ftCharges">-₹300</strong></span>
+    <span class="summary-sep">|</span>
+    <span class="summary-item">Net: <strong id="ftNetPnl" class="val-green">+₹625.5</strong></span>
+  </aside>
 
-    <div class="header-right">
-      <!-- Quick Cycle Theme Button -->
-      <button class="theme-quick-btn" onclick="cycleNextTheme()" title="Click to cycle themes">
-        <span>🎨</span>
-        <span id="quickThemeName">Sapphire</span>
-      </button>
-
-      <div class="status-badge">
-        <span id="statusDot" class="status-dot"></span>
-        <span id="statusText">ONLINE</span>
-      </div>
-      <span class="clock" id="istClock">--:--:-- IST</span>
-    </div>
-  </header>
-
-  <!-- NAVIGATION DRAWER -->
+  <!-- SLIDE-OUT DRAWER -->
   <div class="drawer-overlay" id="drawerOverlay" onclick="toggleDrawer()"></div>
   <aside class="drawer" id="drawer">
     <div class="drawer-header">
@@ -807,272 +1029,111 @@
       <button class="drawer-close" onclick="toggleDrawer()">&times;</button>
     </div>
 
-    <!-- Theme Palette Selector -->
-    <div class="drawer-section-title">COLOR PALETTE</div>
+    <div class="drawer-section-title">THEME SELECTION</div>
     <div class="theme-picker-grid">
-      <button class="theme-chip active" id="chip-sapphire" onclick="applyTheme('sapphire')">
-        <span class="chip-dot" style="background: #38bdf8;"></span> Sapphire
+      <button class="theme-chip active" id="chip-porcelain" onclick="applyTheme('porcelain')">
+        <span class="chip-dot" style="background: #15803d;"></span> Porcelain Studio (Light)
       </button>
-      <button class="theme-chip" id="chip-forest" onclick="applyTheme('forest')">
-        <span class="chip-dot" style="background: #00f59b;"></span> Forest
+      <button class="theme-chip" id="chip-obsidian" onclick="applyTheme('obsidian')">
+        <span class="chip-dot" style="background: #10b981;"></span> Obsidian Slate &amp; Mint (Dark)
       </button>
       <button class="theme-chip" id="chip-titanium" onclick="applyTheme('titanium')">
-        <span class="chip-dot" style="background: #f59e0b;"></span> Titanium
-      </button>
-      <button class="theme-chip" id="chip-porcelain" onclick="applyTheme('porcelain')">
-        <span class="chip-dot" style="background: #0284c7;"></span> Porcelain
+        <span class="chip-dot" style="background: #f59e0b;"></span> Executive Titanium
       </button>
     </div>
 
-    <div class="drawer-section-title">NAVIGATION</div>
-    <nav class="nav-list">
-      <a href="#" class="nav-item active">
-        <span>📊</span> Executive Overview
-      </a>
-      <a href="#" class="nav-item" onclick="alert('Strategy Quality Gates & Signal Stream coming in V3.1')">
-        <span>🎯</span> Strategy Signals
-        <span class="tag">V3.1</span>
-      </a>
-      <a href="#" class="nav-item" onclick="alert('Engine Operations & Broker Diagnostics coming in V3.2')">
-        <span>⚙️</span> Engine Operations
-        <span class="tag">V3.2</span>
-      </a>
-      <a href="#" class="nav-item" onclick="alert('Historical Performance & Multi-day Replay coming in V3.3')">
-        <span>📈</span> Historical Analytics
-        <span class="tag">V3.3</span>
-      </a>
-    </nav>
-
     <div class="drawer-footer">
-      <button class="drawer-btn" id="btnDemoToggle" onclick="toggleDemoData()">Preview Screenshot Demo Data</button>
-      <button class="drawer-btn" onclick="resetTodaySimulation()">Reset Today's P&L</button>
+      <button class="drawer-btn" id="btnDemoToggle" onclick="toggleDemoData()">Switch to Live Telemetry</button>
+      <button class="drawer-btn" onclick="resetTodaySimulation()">Reset Today's P&amp;L</button>
       <button class="drawer-btn" onclick="triggerManualPing()">Ping Health Watchdog</button>
     </div>
   </aside>
 
-  <!-- MAIN CONTENT -->
-  <main>
-
-    <!-- 1. HERO P&L -->
-    <section class="hero-section">
-      <div id="heroPnl" class="hero-pnl zero">₹0.0</div>
-      <div class="hero-sub-pill">
-        <span id="heroTrades">0 trades</span>
-        <span class="dot-sep"></span>
-        <span id="heroWinRate">0% win rate</span>
-      </div>
-    </section>
-
-    <!-- 2. CAPITAL STRIP -->
-    <section class="capital-grid">
-      <div class="capital-cell">
-        <div class="cell-label">OPENING</div>
-        <div id="capOpening" class="cell-val">₹0.00</div>
-      </div>
-      <div class="capital-cell">
-        <div class="cell-label">IN USE</div>
-        <div id="capInUse" class="cell-val">₹0.00</div>
-      </div>
-      <div class="capital-cell">
-        <div class="cell-label">AVAILABLE</div>
-        <div id="capAvailable" class="cell-val">₹0.00</div>
-      </div>
-    </section>
-
-    <!-- 3. OPEN POSITIONS -->
-    <section class="section-block">
-      <div class="section-title">OPEN POSITIONS</div>
-      <div class="table-card">
-        <table>
-          <thead>
-            <tr>
-              <th>SYMBOL</th>
-              <th class="text-right">ENTRY</th>
-              <th class="text-right">CURRENT</th>
-              <th class="text-right">QTY</th>
-              <th class="text-right">STOP LOSS</th>
-              <th class="text-right">TARGET</th>
-              <th class="text-right">UNREALISED P&L</th>
-            </tr>
-          </thead>
-          <tbody id="openPositionsBody">
-            <tr>
-              <td colspan="7" class="empty-state">No open positions · Scanner active</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- 4. TODAY'S TRADES -->
-    <section class="section-block">
-      <div class="section-title">TODAY'S TRADES</div>
-      <div class="table-card">
-        <table>
-          <thead>
-            <tr>
-              <th>SYMBOL</th>
-              <th class="text-right">ENTRY</th>
-              <th class="text-right">EXIT</th>
-              <th class="text-right">QTY</th>
-              <th class="text-right">NET P&L</th>
-            </tr>
-          </thead>
-          <tbody id="todayTradesBody">
-            <tr>
-              <td colspan="5" class="empty-state">No trades executed today</td>
-            </tr>
-          </tbody>
-        </table>
-        <!-- Card Footer Summary -->
-        <div class="table-footer">
-          <div class="footer-stat">TOTAL TRADES: <span id="ftTotalTrades" class="value">0</span></div>
-          <div class="footer-stat">WIN RATE: <span id="ftWinRate" class="value">0%</span></div>
-          <div class="footer-stat">GROSS P&L: <span id="ftGrossPnl" class="value">₹0.0</span></div>
-          <div class="footer-stat">CHARGES: <span id="ftCharges" class="value">₹0.0</span></div>
-          <div class="footer-stat">NET P&L: <span id="ftNetPnl" class="value">₹0.0</span></div>
-        </div>
-      </div>
-    </section>
-
-  </main>
-
+  <!-- JAVASCRIPT TELEMETRY ENGINE -->
   <script>
     let activeMode = 'PAPER'; // 'PAPER' or 'LIVE'
     let isDemoMode = false;
     let pollInterval = null;
-    const THEMES = ['sapphire', 'forest', 'titanium', 'porcelain'];
-    const THEME_NAMES = {
-      sapphire: 'Sapphire',
-      forest: 'Forest',
-      titanium: 'Titanium',
-      porcelain: 'Porcelain'
-    };
+
+    const THEMES = ['porcelain', 'obsidian', 'titanium'];
 
     // ---------------- THEME SYSTEM ----------------
     function applyTheme(themeKey) {
-      if (!THEMES.includes(themeKey)) themeKey = 'sapphire';
+      if (!THEMES.includes(themeKey)) themeKey = 'porcelain';
       document.body.setAttribute('data-theme', themeKey);
       localStorage.setItem('mithron_theme', themeKey);
 
-      // Update chips in drawer
+      // Update drawer chips
       document.querySelectorAll('.theme-chip').forEach(c => c.classList.remove('active'));
       const activeChip = document.getElementById('chip-' + themeKey);
       if (activeChip) activeChip.classList.add('active');
 
-      // Update quick button
-      const quickName = document.getElementById('quickThemeName');
-      if (quickName) quickName.textContent = THEME_NAMES[themeKey] || 'Theme';
+      // Update quick toggle button in header
+      const btnIcon = document.getElementById('themeBtnIcon');
+      const btnText = document.getElementById('themeBtnText');
+      if (themeKey === 'porcelain') {
+        if (btnIcon) btnIcon.textContent = '🌙';
+        if (btnText) btnText.textContent = 'Obsidian';
+      } else {
+        if (btnIcon) btnIcon.textContent = '☀️';
+        if (btnText) btnText.textContent = 'Porcelain';
+      }
     }
 
-    function cycleNextTheme() {
-      const current = document.body.getAttribute('data-theme') || 'sapphire';
-      const currentIndex = THEMES.indexOf(current);
-      const nextIndex = (currentIndex + 1) % THEMES.length;
-      applyTheme(THEMES[nextIndex]);
+    function toggleTheme() {
+      const current = document.body.getAttribute('data-theme') || 'porcelain';
+      const next = current === 'porcelain' ? 'obsidian' : 'porcelain';
+      applyTheme(next);
     }
 
-    // Initialize saved theme
-    const savedTheme = localStorage.getItem('mithron_theme') || 'sapphire';
-    applyTheme(savedTheme);
+    // Initialize theme from URL query param or saved localStorage (default: porcelain)
+    const urlParams = new URLSearchParams(window.location.search);
+    const paramTheme = urlParams.get('theme');
+    if (paramTheme && THEMES.includes(paramTheme)) {
+      applyTheme(paramTheme);
+    } else {
+      const savedTheme = localStorage.getItem('mithron_theme') || 'porcelain';
+      applyTheme(savedTheme);
+    }
 
-    // ---------------- DEMO DATA (Screenshot Match) ----------------
-    const SCREENSHOT_DEMO = {
-      pnl: 925.5,
+    // Check if demo query param was provided
+    if (urlParams.get('demo') === 'true') {
+      isDemoMode = true;
+      document.getElementById('demoBanner').classList.add('active');
+      document.getElementById('btnDemoToggle').textContent = 'Switch to Live Telemetry';
+      renderScreenshotDemo();
+    }
+
+    // ---------------- EXACT SCREENSHOT REFERENCE DEMO DATA ----------------
+    const SCREENSHOT_DATA = {
+      heroPnl: 925.5,
       tradesCount: 5,
       winRate: 60,
       opening: 200000,
       inUse: 58000,
       available: 142000,
       openPositions: [
-        { symbol: 'RELIANCE', entryPrice: 2841.5, currentLtp: 2868.0, currentQuantity: 10, stopLoss: 2815.0, target1Price: 2897.0, unrealizedPnl: 265.0 }
+        { symbol: 'RELIANCE', entry: '₹2,841.50', current: '₹2,868.00', qty: 10, stoploss: '₹2,815.00', uPnl: '+₹265.00', badgeType: 'green' }
       ],
       closedTrades: [
-        { symbol: 'NIFTY24DECFUT', entryPrice: 24310.0, exitPrice: 24368.5, quantity: 1, netPnl: 585.0 },
-        { symbol: 'INFY', entryPrice: 1782.3, exitPrice: 1761.0, quantity: 5, netPnl: -106.5 },
-        { symbol: 'HDFCBANK', entryPrice: 1623.0, exitPrice: 1651.5, quantity: 8, netPnl: 228.0 },
-        { symbol: 'TCS', entryPrice: 4102.0, exitPrice: 4088.5, quantity: 3, netPnl: -40.5 },
-        { symbol: 'SBIN', entryPrice: 812.4, exitPrice: 829.7, quantity: 15, netPnl: 259.5 }
+        { symbol: 'NIFTY FUT', entry: '₹24,310.00', exit: '₹24,368.50', qty: 1, grossPnl: '+₹650.00', netPnl: '+₹585.00', badgeType: 'green' },
+        { symbol: 'INFY', entry: '₹1,782.30', exit: '₹1,761.00', qty: 5, grossPnl: '-₹86.50', netPnl: '-₹106.50', badgeType: 'red' },
+        { symbol: 'HDFCBANK', entry: '₹1,623.00', exit: '₹1,651.50', qty: 8, grossPnl: '+₹268.00', netPnl: '+₹228.00', badgeType: 'green' },
+        { symbol: 'TCS', entry: '₹4,102.00', exit: '₹4,088.50', qty: 3, grossPnl: '-₹20.50', netPnl: '-₹40.50', badgeType: 'red' },
+        { symbol: 'SBIN', entry: '₹812.40', exit: '₹829.70', qty: 15, grossPnl: '+₹289.50', netPnl: '+₹259.50', badgeType: 'green' }
       ],
-      grossPnl: 925.5,
-      charges: 300.0,
-      netPnl: 625.5
+      totalTrades: 5,
+      winRateStr: '60%',
+      grossPnl: '+₹925.5',
+      chargesStr: '-₹300',
+      netPnl: '+₹625.5'
     };
 
-    // Format numbers to Indian Rupee currency standard
-    function formatINR(val, showSign = false) {
-      if (val === null || val === undefined || isNaN(val)) return '₹0.0';
-      const absVal = Math.abs(val);
-      const formatted = new Intl.NumberFormat('en-IN', {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 2
-      }).format(absVal);
-      
-      if (val > 0) return (showSign ? '+₹' : '₹') + formatted;
-      if (val < 0) return '-₹' + formatted;
-      return '₹' + formatted;
-    }
-
-    // Toggle navigation drawer
-    function toggleDrawer() {
-      document.getElementById('drawer').classList.toggle('open');
-      document.getElementById('drawerOverlay').classList.toggle('open');
-    }
-
-    // Toggle between Screenshot Mock Data & Real Database Telemetry
-    function toggleDemoData() {
-      isDemoMode = !isDemoMode;
-      const banner = document.getElementById('demoBanner');
-      const btn = document.getElementById('btnDemoToggle');
-      if (isDemoMode) {
-        banner.classList.add('active');
-        btn.textContent = 'Switch to Live Telemetry';
-        renderDemoData();
-      } else {
-        banner.classList.remove('active');
-        btn.textContent = 'Preview Screenshot Demo Data';
-        fetchData();
-      }
-      toggleDrawer();
-    }
-
-    // Mode Toggle (SIMULATION vs LIVE)
-    function setMode(mode) {
-      activeMode = mode;
-      const simBtn = document.getElementById('btnSimMode');
-      const liveBtn = document.getElementById('btnLiveMode');
-      
-      if (mode === 'PAPER') {
-        simBtn.className = 'mode-btn active sim';
-        liveBtn.className = 'mode-btn';
-      } else {
-        simBtn.className = 'mode-btn';
-        liveBtn.className = 'mode-btn active live';
-      }
-      
-      if (!isDemoMode) {
-        fetchData();
-      }
-    }
-
-    // Update real-time clock
-    function updateClock() {
-      const now = new Date();
-      const options = { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
-      document.getElementById('istClock').textContent = now.toLocaleTimeString('en-IN', options) + ' IST';
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
-
-    // Render Demo Data (Pixel-perfect match to screenshot)
-    function renderDemoData() {
-      const d = SCREENSHOT_DEMO;
-      const heroEl = document.getElementById('heroPnl');
-      heroEl.textContent = formatINR(d.pnl, true);
-      heroEl.className = 'hero-pnl';
-
-      document.getElementById('heroTrades').textContent = `${d.tradesCount} trades`;
-      document.getElementById('heroWinRate').textContent = `${d.winRate}% win rate`;
+    function renderScreenshotDemo() {
+      const d = SCREENSHOT_DATA;
+      const hero = document.getElementById('heroPnl');
+      hero.textContent = '+₹' + d.heroPnl;
+      hero.className = 'hero-pnl-number';
 
       document.getElementById('capOpening').textContent = formatINR(d.opening);
       document.getElementById('capInUse').textContent = formatINR(d.inUse);
@@ -1081,41 +1142,107 @@
       // Open positions
       document.getElementById('openPositionsBody').innerHTML = d.openPositions.map(p => `
         <tr>
-          <td class="symbol-name">${p.symbol}</td>
-          <td class="text-right">${formatINR(p.entryPrice)}</td>
-          <td class="text-right">${formatINR(p.currentLtp)}</td>
-          <td class="text-right">${p.currentQuantity}</td>
-          <td class="text-right">${formatINR(p.stopLoss)}</td>
-          <td class="text-right">${formatINR(p.target1Price)}</td>
-          <td class="text-right">
-            <span class="pnl-badge green">${formatINR(p.unrealizedPnl, true)}</span>
-          </td>
+          <td class="symbol-cell">${p.symbol}</td>
+          <td class="text-right">${p.entry}</td>
+          <td class="text-right">${p.current}</td>
+          <td class="text-right">${p.qty}</td>
+          <td class="text-right">${p.stoploss}</td>
+          <td class="text-right"><span class="pnl-badge ${p.badgeType}">${p.uPnl}</span></td>
         </tr>
       `).join('');
 
       // Today's trades
       document.getElementById('todayTradesBody').innerHTML = d.closedTrades.map(t => `
         <tr>
-          <td class="symbol-name">${t.symbol}</td>
-          <td class="text-right">${formatINR(t.entryPrice)}</td>
-          <td class="text-right">${formatINR(t.exitPrice)}</td>
-          <td class="text-right">${t.quantity}</td>
-          <td class="text-right">
-            <span class="pnl-badge ${t.netPnl >= 0 ? 'green' : 'red'}">${formatINR(t.netPnl, true)}</span>
-          </td>
+          <td class="symbol-cell">${t.symbol}</td>
+          <td class="text-right">${t.entry}</td>
+          <td class="text-right">${t.exit}</td>
+          <td class="text-right">${t.qty}</td>
+          <td class="text-right">${t.grossPnl}</td>
+          <td class="text-right"><span class="pnl-badge ${t.badgeType}">${t.netPnl}</span></td>
         </tr>
       `).join('');
 
-      // Footer
-      document.getElementById('ftTotalTrades').textContent = d.tradesCount;
-      document.getElementById('ftWinRate').textContent = d.winRate + '%';
-      document.getElementById('ftGrossPnl').textContent = formatINR(d.grossPnl, true);
-      document.getElementById('ftCharges').textContent = '-₹' + d.charges.toFixed(0);
-      document.getElementById('ftNetPnl').textContent = formatINR(d.netPnl, true);
-      document.getElementById('ftNetPnl').className = 'value val-green';
+      // Bottom Summary
+      document.getElementById('ftTotalTrades').textContent = d.totalTrades;
+      document.getElementById('ftWinRate').textContent = d.winRateStr;
+      document.getElementById('ftGrossPnl').textContent = d.grossPnl;
+      document.getElementById('ftCharges').textContent = d.chargesStr;
+      document.getElementById('ftNetPnl').textContent = d.netPnl;
+      document.getElementById('ftNetPnl').className = 'val-green';
     }
 
-    // Fetch live dashboard telemetry
+    // Format currency to INR
+    function formatINR(val, showSign = false) {
+      if (val === null || val === undefined || isNaN(val)) return '₹0.00';
+      const absVal = Math.abs(val);
+      const formatted = new Intl.NumberFormat('en-IN', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }).format(absVal);
+      
+      if (val > 0) return (showSign ? '+₹' : '₹') + formatted;
+      if (val < 0) return '-₹' + formatted;
+      return '₹' + formatted;
+    }
+
+    // Toggle slide drawer
+    function toggleDrawer() {
+      document.getElementById('drawer').classList.toggle('open');
+      document.getElementById('drawerOverlay').classList.toggle('open');
+    }
+
+    // Toggle Screenshot Demo mode vs Live Database
+    function toggleDemoData() {
+      isDemoMode = !isDemoMode;
+      const banner = document.getElementById('demoBanner');
+      const btn = document.getElementById('btnDemoToggle');
+      if (isDemoMode) {
+        banner.classList.add('active');
+        btn.textContent = 'Switch to Live Telemetry';
+        renderScreenshotDemo();
+      } else {
+        banner.classList.remove('active');
+        btn.textContent = 'Preview Screenshot Demo Data';
+        fetchData();
+      }
+      if (document.getElementById('drawer').classList.contains('open')) {
+        toggleDrawer();
+      }
+    }
+
+    // Mode Toggle (SIMULATION vs LIVE)
+    function setMode(mode) {
+      activeMode = mode;
+      const simBtn = document.getElementById('btnSimMode');
+      const liveBtn = document.getElementById('btnLiveMode');
+      const statusText = document.getElementById('statusText');
+      
+      if (mode === 'PAPER') {
+        simBtn.className = 'mode-btn active sim';
+        liveBtn.className = 'mode-btn';
+        statusText.textContent = 'SIMULATION / AUTONOMOUS';
+      } else {
+        simBtn.className = 'mode-btn';
+        liveBtn.className = 'mode-btn active live';
+        statusText.textContent = 'LIVE / AUTONOMOUS';
+      }
+      
+      if (!isDemoMode) {
+        fetchData();
+      }
+    }
+
+    // Clock
+    function updateClock() {
+      const now = new Date();
+      const options = { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
+      document.getElementById('istClock').textContent = now.toLocaleTimeString('en-IN', options) + ' IST';
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // ---------------- LIVE TELEMETRY FETCHER ----------------
     async function fetchData() {
       if (isDemoMode) return;
 
@@ -1128,30 +1255,11 @@
           const txt = document.getElementById('statusText');
           if (status.websocketConnected) {
             dot.className = 'status-dot';
-            txt.textContent = 'STREAMING';
+            txt.textContent = (activeMode === 'LIVE' ? 'LIVE' : 'SIMULATION') + ' / AUTONOMOUS';
           } else {
-            dot.className = 'status-dot closed';
-            txt.textContent = status.lifecycleState || 'ONLINE';
+            dot.className = 'status-dot standby';
+            txt.textContent = (status.lifecycleState || 'STANDBY') + ' / ' + (activeMode === 'LIVE' ? 'LIVE' : 'SIM');
           }
-        }
-
-        // If LIVE mode selected but live execution not configured yet
-        if (activeMode === 'LIVE') {
-          document.getElementById('heroPnl').textContent = '₹0.0';
-          document.getElementById('heroPnl').className = 'hero-pnl zero';
-          document.getElementById('heroTrades').textContent = '0 trades';
-          document.getElementById('heroWinRate').textContent = 'Live Standby';
-          document.getElementById('capOpening').textContent = '₹0.00';
-          document.getElementById('capInUse').textContent = '₹0.00';
-          document.getElementById('capAvailable').textContent = '₹0.00';
-          document.getElementById('openPositionsBody').innerHTML = '<tr><td colspan="7" class="empty-state">No active live real-money positions</td></tr>';
-          document.getElementById('todayTradesBody').innerHTML = '<tr><td colspan="5" class="empty-state">No real-money trades executed today</td></tr>';
-          document.getElementById('ftTotalTrades').textContent = '0';
-          document.getElementById('ftWinRate').textContent = '0%';
-          document.getElementById('ftGrossPnl').textContent = '₹0.0';
-          document.getElementById('ftCharges').textContent = '₹0.0';
-          document.getElementById('ftNetPnl').textContent = '₹0.0';
-          return;
         }
 
         // 2. Fetch Active Open Positions
@@ -1161,21 +1269,24 @@
         if (posRes.ok) {
           positions = await posRes.json();
           if (positions && positions.length > 0) {
-            posBody.innerHTML = positions.map(p => `
-              <tr>
-                <td class="symbol-name">${p.symbol}</td>
-                <td class="text-right">${formatINR(p.entryPrice)}</td>
-                <td class="text-right">${formatINR(p.currentLtp || p.currentPrice)}</td>
-                <td class="text-right">${p.currentQuantity || p.quantity}</td>
-                <td class="text-right">${formatINR(p.stopLoss)}</td>
-                <td class="text-right">${p.target1Price ? formatINR(p.target1Price) : '--'}</td>
-                <td class="text-right">
-                  <span class="pnl-badge ${p.unrealizedPnl >= 0 ? 'green' : 'red'}">${formatINR(p.unrealizedPnl, true)}</span>
-                </td>
-              </tr>
-            `).join('');
+            posBody.innerHTML = positions.map(p => {
+              const uPnl = p.unrealizedPnl || 0;
+              const pnlClass = uPnl >= 0 ? 'green' : 'red';
+              const pnlText = formatINR(uPnl, true);
+              const qty = p.currentQuantity || p.quantity || 1;
+              return `
+                <tr>
+                  <td class="symbol-cell">${p.symbol}</td>
+                  <td class="text-right">${formatINR(p.entryPrice)}</td>
+                  <td class="text-right">${formatINR(p.currentLtp || p.currentPrice)}</td>
+                  <td class="text-right">${qty}</td>
+                  <td class="text-right">${p.stopLoss ? formatINR(p.stopLoss) : '--'}</td>
+                  <td class="text-right"><span class="pnl-badge ${pnlClass}">${pnlText}</span></td>
+                </tr>
+              `;
+            }).join('');
           } else {
-            posBody.innerHTML = '<tr><td colspan="7" class="empty-state">No open positions · Scanner active</td></tr>';
+            posBody.innerHTML = '<tr><td colspan="6" class="empty-state">No open positions · Scanner active</td></tr>';
           }
         }
 
@@ -1211,54 +1322,56 @@
 
           if (trades && trades.length > 0) {
             tradesBody.innerHTML = trades.map(t => {
-              const tradeNet = t.netPnl !== undefined ? t.netPnl : ((t.grossPnl || 0) - (t.statutoryCharges || 0));
+              const tradeGross = t.grossPnl || 0;
+              const tradeNet = t.netPnl !== undefined ? t.netPnl : (tradeGross - (t.statutoryCharges || 0));
               if (tradeNet > 0) winTrades++;
-              grossPnl += (t.grossPnl || 0);
+              grossPnl += tradeGross;
               totalCharges += (t.statutoryCharges || 0);
               netPnl += tradeNet;
 
+              const pnlClass = tradeNet >= 0 ? 'green' : 'red';
+              const pnlText = formatINR(tradeNet, true);
+              const grossText = formatINR(tradeGross, true);
+
               return `
                 <tr>
-                  <td class="symbol-name">${t.symbol}</td>
+                  <td class="symbol-cell">${t.symbol}</td>
                   <td class="text-right">${formatINR(t.entryPrice)}</td>
                   <td class="text-right">${t.exitPrice ? formatINR(t.exitPrice) : '--'}</td>
-                  <td class="text-right">${t.quantity}</td>
-                  <td class="text-right">
-                    <span class="pnl-badge ${tradeNet >= 0 ? 'green' : 'red'}">${formatINR(tradeNet, true)}</span>
-                  </td>
+                  <td class="text-right">${t.quantity || 1}</td>
+                  <td class="text-right">${grossText}</td>
+                  <td class="text-right"><span class="pnl-badge ${pnlClass}">${pnlText}</span></td>
                 </tr>
               `;
             }).join('');
           } else {
-            tradesBody.innerHTML = '<tr><td colspan="5" class="empty-state">No trades executed today</td></tr>';
+            tradesBody.innerHTML = '<tr><td colspan="6" class="empty-state">No trades executed today</td></tr>';
           }
 
           const winRate = totalTrades > 0 ? Math.round((winTrades / totalTrades) * 100) : 0;
 
-          // Hero P&L Display
+          // Hero Metric: Today's P&L
           const heroEl = document.getElementById('heroPnl');
           heroEl.textContent = formatINR(netPnl, true);
-          heroEl.className = 'hero-pnl ' + (netPnl > 0 ? '' : (netPnl < 0 ? 'negative' : 'zero'));
+          heroEl.className = 'hero-pnl-number ' + (netPnl > 0 ? '' : (netPnl < 0 ? 'negative' : 'zero'));
 
-          document.getElementById('heroTrades').textContent = `${totalTrades} trades`;
-          document.getElementById('heroWinRate').textContent = `${winRate}% win rate`;
-
+          // Bottom summary bar
           document.getElementById('ftTotalTrades').textContent = totalTrades;
           document.getElementById('ftWinRate').textContent = winRate + '%';
           document.getElementById('ftGrossPnl').textContent = formatINR(grossPnl, true);
-          document.getElementById('ftCharges').textContent = '-₹' + totalCharges.toFixed(1);
+          document.getElementById('ftCharges').textContent = '-₹' + totalCharges.toFixed(0);
           document.getElementById('ftNetPnl').textContent = formatINR(netPnl, true);
-          document.getElementById('ftNetPnl').className = 'value ' + (netPnl > 0 ? 'val-green' : (netPnl < 0 ? 'val-red' : ''));
+          document.getElementById('ftNetPnl').className = netPnl > 0 ? 'val-green' : (netPnl < 0 ? 'val-red' : '');
         }
 
       } catch (err) {
-        console.warn('Dashboard fetch issue:', err);
+        console.warn('Dashboard live update issue:', err);
       }
     }
 
-    // Quick Action: Reset Today's Simulation
+    // Reset Simulation
     async function resetTodaySimulation() {
-      if (!confirm("Reset today's simulation balance back to morning starting capital?")) return;
+      if (!confirm("Reset today's simulation balance back to starting capital?")) return;
       try {
         const res = await fetch('/api/v1/simulation/reset?scope=TODAY', { method: 'POST' });
         if (res.ok) {
@@ -1270,7 +1383,7 @@
       }
     }
 
-    // Quick Action: Manual Heartbeat Ping
+    // Ping
     async function triggerManualPing() {
       try {
         const res = await fetch('/admin/runtime/heartbeat/ping', { method: 'POST' });
@@ -1284,7 +1397,7 @@
     fetchData();
     pollInterval = setInterval(fetchData, 2500);
 
-    // Pause polling when browser tab is inactive to save battery and network
+    // Pause polling when browser tab is inactive to save system resources
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         if (pollInterval) clearInterval(pollInterval);

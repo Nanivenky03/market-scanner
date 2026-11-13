@@ -203,6 +203,55 @@ class BackfillQueueServiceTest {
                 verifyNoInteractions(liveMarketCandleService);
         }
 
+        @Test
+        void resolveDefaultPriority_shouldAssignVipPrioritiesToIndices() {
+                assertEquals(BackfillQueueService.PRIORITY_GLOBAL_INDEX, service.resolveDefaultPriority("NIFTY"));
+                assertEquals(BackfillQueueService.PRIORITY_GLOBAL_INDEX, service.resolveDefaultPriority("NIFTY 50"));
+                assertEquals(BackfillQueueService.PRIORITY_SECTOR_INDEX, service.resolveDefaultPriority("NIFTY BANK"));
+                assertEquals(BackfillQueueService.PRIORITY_SECTOR_INDEX, service.resolveDefaultPriority("NIFTY IT"));
+                assertEquals(BackfillQueueService.PRIORITY_SECTOR_INDEX, service.resolveDefaultPriority("MIDCPNIFTY"));
+                assertEquals(BackfillQueueService.PRIORITY_EQUITY_STOCK, service.resolveDefaultPriority("RELIANCE"));
+                assertEquals(BackfillQueueService.PRIORITY_EQUITY_STOCK, service.resolveDefaultPriority("TCS"));
+        }
+
+        @Test
+        void enqueueIntradayGap_shouldPreserveEarlierNextAttemptAtAndAssignVipPriority() {
+                LocalDate date = LocalDate.of(2026, 8, 14);
+                LocalDateTime originalAttempt = date.atTime(10, 20);
+                LocalDateTime now = date.atTime(10, 45);
+                LocalDateTime from = date.atTime(10, 30);
+                LocalDateTime to = date.atTime(10, 40);
+
+                BackfillJob existingJob = BackfillJob.builder()
+                                .id(101)
+                                .symbol("NIFTY")
+                                .exchange("NSE")
+                                .tradingDate(date)
+                                .fromTime(date.atTime(10, 20))
+                                .toTime(date.atTime(10, 25))
+                                .priority(0)
+                                .status(BackfillJobStatus.PENDING)
+                                .attempts(0)
+                                .nextAttemptAt(originalAttempt)
+                                .createdAt(originalAttempt)
+                                .build();
+
+                when(timeProvider.nowDateTime()).thenReturn(now);
+                when(jobRepository.findBySymbolAndExchangeAndTradingDate("NIFTY", "NSE", date))
+                                .thenReturn(Optional.of(existingJob));
+                when(jobRepository.save(any(BackfillJob.class)))
+                                .thenAnswer(invocation -> invocation.getArgument(0));
+
+                service.enqueueIntradayGap("NIFTY", "NSE", date, from, to);
+
+                verify(jobRepository).save(argThat(job -> "NIFTY".equals(job.getSymbol())
+                                && job.getPriority() == BackfillQueueService.PRIORITY_GLOBAL_INDEX
+                                && originalAttempt.equals(job.getNextAttemptAt())
+                                && date.atTime(10, 20).equals(job.getFromTime())
+                                && date.atTime(10, 40).equals(job.getToTime())
+                                && job.getStatus() == BackfillJobStatus.PENDING));
+        }
+
         private void stubJobLookup(BackfillJob job, LocalDateTime now) {
                 when(timeProvider.nowDateTime()).thenReturn(now);
                 when(jobRepository.findByStatusAndLastAttemptAtBefore(

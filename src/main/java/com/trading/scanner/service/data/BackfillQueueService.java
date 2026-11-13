@@ -7,8 +7,9 @@ import com.trading.scanner.model.BackfillJobStatus;
 import com.trading.scanner.model.DataStatus;
 import com.trading.scanner.repository.BackfillJobRepository;
 import com.trading.scanner.service.engine.DailyDataStatusService;
-import lombok.RequiredArgsConstructor;
+import com.trading.scanner.service.instrument.MarketIndexRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
@@ -20,12 +21,16 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class BackfillQueueService {
+
+        public static final int PRIORITY_GLOBAL_INDEX = -100;
+        public static final int PRIORITY_SECTOR_INDEX = -50;
+        public static final int PRIORITY_EQUITY_STOCK = 0;
 
         private static final LocalTime MARKET_OPEN = LocalTime.of(9, 15);
         private static final LocalTime MARKET_CLOSE = LocalTime.of(15, 29);
@@ -36,6 +41,37 @@ public class BackfillQueueService {
         private final LiveMarketCandleService liveMarketCandleService;
         private final TradingCalendar tradingCalendar;
         private final TimeProvider timeProvider;
+        private final MarketIndexRegistry marketIndexRegistry;
+
+        @Autowired
+        public BackfillQueueService(
+                        BackfillJobRepository backfillJobRepository,
+                        IntradayCandleBackfillService backfillService,
+                        DailyDataStatusService dailyDataStatusService,
+                        LiveMarketCandleService liveMarketCandleService,
+                        TradingCalendar tradingCalendar,
+                        TimeProvider timeProvider,
+                        @Autowired(required = false) MarketIndexRegistry marketIndexRegistry) {
+                this.backfillJobRepository = backfillJobRepository;
+                this.backfillService = backfillService;
+                this.dailyDataStatusService = dailyDataStatusService;
+                this.liveMarketCandleService = liveMarketCandleService;
+                this.tradingCalendar = tradingCalendar;
+                this.timeProvider = timeProvider;
+                this.marketIndexRegistry = marketIndexRegistry;
+        }
+
+        /* Compatibility constructor for existing tests */
+        public BackfillQueueService(
+                        BackfillJobRepository backfillJobRepository,
+                        IntradayCandleBackfillService backfillService,
+                        DailyDataStatusService dailyDataStatusService,
+                        LiveMarketCandleService liveMarketCandleService,
+                        TradingCalendar tradingCalendar,
+                        TimeProvider timeProvider) {
+                this(backfillJobRepository, backfillService, dailyDataStatusService,
+                                liveMarketCandleService, tradingCalendar, timeProvider, null);
+        }
 
         @Value("${runtime.backfill.max-attempts:3}")
         private int maxAttempts = 3;
@@ -133,6 +169,24 @@ public class BackfillQueueService {
                                 event.toTime());
         }
 
+        public int resolveDefaultPriority(String symbol) {
+                if (symbol == null) {
+                        return PRIORITY_EQUITY_STOCK;
+                }
+                String upper = symbol.toUpperCase(Locale.ROOT).trim();
+                if ("NIFTY".equals(upper) || "NIFTY 50".equals(upper)) {
+                        return PRIORITY_GLOBAL_INDEX; // -100 VIP
+                }
+                if (marketIndexRegistry != null && marketIndexRegistry.isRegisteredIndex(upper)) {
+                        return PRIORITY_SECTOR_INDEX; // -50
+                }
+                if (upper.startsWith("NIFTY") || "MIDCPNIFTY".equals(upper) || "BANKNIFTY".equals(upper)
+                                || "FINNIFTY".equals(upper)) {
+                        return PRIORITY_SECTOR_INDEX; // -50
+                }
+                return PRIORITY_EQUITY_STOCK; // 0
+        }
+
         @Transactional
         public int enqueueIntradayGap(
                         String symbol,
@@ -140,7 +194,7 @@ public class BackfillQueueService {
                         LocalDate tradingDate,
                         LocalDateTime fromTime,
                         LocalDateTime toTime) {
-                return enqueueIntradayGap(symbol, exchange, tradingDate, fromTime, toTime, 0);
+                return enqueueIntradayGap(symbol, exchange, tradingDate, fromTime, toTime, resolveDefaultPriority(symbol));
         }
 
         @Transactional
@@ -186,6 +240,9 @@ public class BackfillQueueService {
                         return 0;
                 }
 
+                int defaultPriority = resolveDefaultPriority(symbol);
+                int requestPriority = Math.min(priority, defaultPriority);
+
                 BackfillJob job = backfillJobRepository
                                 .findBySymbolAndExchangeAndTradingDate(
                                                 symbol,
@@ -195,7 +252,7 @@ public class BackfillQueueService {
                                                 .symbol(symbol)
                                                 .exchange(exchange)
                                                 .tradingDate(tradingDate)
-                                                .priority(priority)
+                                                .priority(requestPriority)
                                                 .status(BackfillJobStatus.PENDING)
                                                 .attempts(0)
                                                 .createdAt(now)
@@ -214,13 +271,21 @@ public class BackfillQueueService {
                         job.setAttempts(0);
                 }
 
-                int effectivePriority = job.getPriority() != null ? Math.min(job.getPriority(), priority) : priority;
+                int effectivePriority = job.getPriority() != null
+                                ? Math.min(job.getPriority(), requestPriority)
+                                : requestPriority;
+
+                // Preserve earlier scheduled attempt time so pending jobs are NOT demoted behind newly queued symbols
+                LocalDateTime effectiveNextAttemptAt = (job.getNextAttemptAt() != null
+                                && job.getStatus() == BackfillJobStatus.PENDING)
+                                                ? min(job.getNextAttemptAt(), now)
+                                                : now;
 
                 job.setFromTime(mergedFrom);
                 job.setToTime(mergedTo);
                 job.setPriority(effectivePriority);
                 job.setStatus(BackfillJobStatus.PENDING);
-                job.setNextAttemptAt(now);
+                job.setNextAttemptAt(effectiveNextAttemptAt);
                 job.setLeaseUntil(null);
                 job.setLastError(null);
                 job.setUpdatedAt(now);

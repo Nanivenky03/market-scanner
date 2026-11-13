@@ -663,6 +663,21 @@ public class LiveMarketCandleService {
                 }
         }
 
+        private boolean isIndexSymbol(String symbol) {
+                if (symbol == null) {
+                        return false;
+                }
+                String upper = normalize(symbol);
+                if ("NIFTY".equals(upper) || "NIFTY 50".equals(upper)) {
+                        return true;
+                }
+                if (marketIndexRegistry != null && marketIndexRegistry.isRegisteredIndex(upper)) {
+                        return true;
+                }
+                return upper.startsWith("NIFTY") || "MIDCPNIFTY".equals(upper) || "BANKNIFTY".equals(upper)
+                                || "FINNIFTY".equals(upper);
+        }
+
         private void finalizeAndPersist(
                         OpenMinuteCandle candle,
                         boolean blocked) {
@@ -671,7 +686,9 @@ public class LiveMarketCandleService {
                                 candle,
                                 blocked);
 
-                if (blocked) {
+                boolean isIdx = isIndexSymbol(oneMinute != null ? oneMinute.getSymbol() : (candle != null ? candle.symbol() : null));
+
+                if (blocked && !isIdx) {
                         return;
                 }
 
@@ -682,7 +699,6 @@ public class LiveMarketCandleService {
                 }
 
                 if (eventPublisher != null && oneMinute != null) {
-                        boolean isIdx = marketIndexRegistry != null && marketIndexRegistry.isRegisteredIndex(oneMinute.getSymbol());
                         eventPublisher.publishEvent(new CandleFinalizedEvent(
                                         oneMinute.getSymbol(),
                                         oneMinute.getExchange(),
@@ -859,6 +875,12 @@ public class LiveMarketCandleService {
                                 lastCandleTime,
                                 CandleTimeframe.FIFTEEN_MINUTE,
                                 15);
+
+                if (stockContextCache != null && !candles.isEmpty()) {
+                        for (MarketCandle c : candles) {
+                                stockContextCache.onCandleFinalized(c);
+                        }
+                }
         }
 
         private void rebuildDerivedBuckets(
@@ -992,12 +1014,14 @@ public class LiveMarketCandleService {
                                         resolution);
                 }
 
+                boolean isIdx = isIndexSymbol(oneMinute.getSymbol());
+
                 for (LocalDateTime minute = bucket; !minute.isAfter(bucketEnd); minute = minute.plusMinutes(1)) {
 
                         MarketCandle candle = candlesByTime.get(minute);
 
                         if (candle != null) {
-                                if (!isUsable(candle)) {
+                                if (!isIdx && !isUsable(candle)) {
                                         return null;
                                 }
 
@@ -1008,12 +1032,14 @@ public class LiveMarketCandleService {
 
                         if (resolution == null
                                         || resolution.getStatus() != MinuteResolutionStatus.NO_TRADE_CONFIRMED) {
-                                return null;
+                                if (!isIdx) {
+                                        return null;
+                                }
                         }
                 }
 
                 List<MarketCandle> sourceCandles = allCandles.stream()
-                                .filter(this::isUsable)
+                                .filter(c -> isIdx || isUsable(c))
                                 .filter(candle -> !candle.getCandleTime()
                                                 .isBefore(bucket))
                                 .filter(candle -> !candle.getCandleTime()

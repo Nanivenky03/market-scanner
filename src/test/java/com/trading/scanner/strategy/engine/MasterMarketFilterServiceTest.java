@@ -210,4 +210,51 @@ class MasterMarketFilterServiceTest {
         assertEquals(25000.0, state.dayOpen());
         assertTrue(state.reason().contains("TWAP"));
     }
+
+    @Test
+    void evaluateCurrentState_whenPrimary5mStale_shouldFallbackToLive1m() {
+        LocalDateTime time = today.atTime(11, 0);
+        when(timeProvider.nowDateTime()).thenReturn(time);
+
+        // 5M candle is stale (from 10:30, 30 mins old, max allowed 10 mins)
+        MarketCandle stale5m = MarketCandle.builder()
+                .symbol("NIFTY")
+                .exchange("NSE")
+                .timeframe(CandleTimeframe.FIVE_MINUTE)
+                .candleTime(today.atTime(10, 30))
+                .openPrice(25000.0)
+                .highPrice(25050.0)
+                .lowPrice(24990.0)
+                .closePrice(25020.0)
+                .vwap(25010.0)
+                .build();
+
+        // 1M candle is fresh (from 10:59, 1 min old, max allowed 5 mins)
+        MarketCandle fresh1m = MarketCandle.builder()
+                .symbol("NIFTY")
+                .exchange("NSE")
+                .timeframe(CandleTimeframe.ONE_MINUTE)
+                .candleTime(today.atTime(10, 59))
+                .openPrice(25100.0)
+                .highPrice(25120.0)
+                .lowPrice(25095.0)
+                .closePrice(25115.0)
+                .vwap(25050.0)
+                .build();
+
+        when(marketCandleRepository.findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                eq("NIFTY"), eq("NSE"), eq(CandleTimeframe.FIVE_MINUTE), any(), any()))
+                .thenReturn(List.of(stale5m));
+
+        when(marketCandleRepository.findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                eq("NIFTY"), eq("NSE"), eq(CandleTimeframe.ONE_MINUTE), any(), any()))
+                .thenReturn(List.of(fresh1m));
+
+        MarketState state = filterService.evaluateCurrentState(today);
+
+        assertTrue(state.dataValid(), "State should be valid via 1M fallback");
+        assertEquals(25115.0, state.niftyClose());
+        assertEquals(25050.0, state.niftyVwap());
+        assertTrue(state.isBullish());
+    }
 }

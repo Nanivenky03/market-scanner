@@ -102,6 +102,18 @@ public class MasterMarketFilterService {
         CandleTimeframe targetPrimary = primaryTimeframe != null ? primaryTimeframe : CandleTimeframe.FIVE_MINUTE;
 
         MarketState primaryState = evaluateTimeframeState(tradingDate, now, targetPrimary);
+
+        // Macro Fallback: If primary 5M candle is temporarily stale/incomplete awaiting rollup/repair,
+        // but live 1M candles are streaming actively, fall back to 1M to prevent false market shutdown.
+        if ((primaryState == null || !primaryState.dataValid()) && targetPrimary == CandleTimeframe.FIVE_MINUTE) {
+            MarketState fallback1m = evaluateTimeframeState(tradingDate, now, CandleTimeframe.ONE_MINUTE);
+            if (fallback1m != null && fallback1m.dataValid()) {
+                log.info("[MACRO_FALLBACK] Primary 5M candle temporarily awaiting repair/rollup, using live 1M candle (close={}, vwap={}, regime={})",
+                        fallback1m.niftyClose(), fallback1m.niftyVwap(), fallback1m.regime());
+                primaryState = fallback1m;
+            }
+        }
+
         if (primaryState == null) {
             return new MarketState(
                     tradingDate,
