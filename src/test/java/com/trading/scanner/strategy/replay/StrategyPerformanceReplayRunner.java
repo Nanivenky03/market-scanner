@@ -37,6 +37,12 @@ public class StrategyPerformanceReplayRunner {
     public StrategyPerformanceReplayRunner(double initialCapital, LocalTime entryWindowEnd) {
         this.initialCapital = initialCapital;
         this.entryWindowEnd = entryWindowEnd;
+        String brokerProp = System.getProperty("broker", "KOTAK_NEO");
+        if ("ANGEL_ONE".equalsIgnoreCase(brokerProp)) {
+            BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.ANGEL_ONE);
+        } else {
+            BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
+        }
     }
 
     public LocalTime getEntryWindowEnd() {

@@ -22,6 +22,7 @@ import com.trading.scanner.repository.CapitalRepository;
 import com.trading.scanner.repository.SimulationCapitalRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,6 +52,9 @@ public class SimulationManagementService {
     private final TimeProvider timeProvider;
     private final SimulationCapitalRepository simulationCapitalRepository;
     private final CapitalRepository capitalRepository;
+
+    @Value("${app.version:2.5.7}")
+    private String appVersion;
 
     @Autowired
     public SimulationManagementService(
@@ -146,6 +150,17 @@ public class SimulationManagementService {
             String entryTime,
             String exitTime,
             String exitReason
+    ) {}
+
+    public record DailyTradeHistoryResponse(
+            String tradingDate,
+            double openingCapital,
+            double closingCapital,
+            int totalTrades,
+            double grossPnl,
+            double statutoryCharges,
+            double netPnl,
+            List<ClosedTradeResponse> trades
     ) {}
 
     public record SimulationOrderResponse(
@@ -570,6 +585,94 @@ public class SimulationManagementService {
         }
 
         result.sort(Comparator.comparing(ClosedTradeResponse::exitTime, Comparator.nullsLast(Comparator.reverseOrder())));
+        return result;
+    }
+
+    public String getAppVersion() {
+        return appVersion != null ? appVersion : "2.5.7";
+    }
+
+    /**
+     * Retrieves all historical trading sessions grouped by date with daily opening/closing
+     * capital balances, transaction counts, P&L totals, and individual trade executions.
+     */
+    public List<DailyTradeHistoryResponse> getDailyTradeHistory() {
+        List<DailyTradeHistoryResponse> result = new ArrayList<>();
+        List<SimulationCapital> capitalHistory = simulationCapitalRepository != null
+                ? simulationCapitalRepository.findAllByOrderByTradingDateDesc()
+                : Collections.emptyList();
+
+        List<SimulatedPosition> allPositions = simulatedPositionRepository != null
+                ? simulatedPositionRepository.findAllByOrderByEntryTimeDesc()
+                : Collections.emptyList();
+
+        Map<String, List<ClosedTradeResponse>> tradesByDate = new LinkedHashMap<>();
+        for (SimulatedPosition pos : allPositions) {
+            if ("CLOSED".equalsIgnoreCase(pos.getPositionStatus()) && pos.getEntryTime() != null) {
+                String dateStr = pos.getEntryTime().length() >= 10 ? pos.getEntryTime().substring(0, 10) : "";
+                if (!dateStr.isBlank()) {
+                    double gross = pos.getGrossPnl() != null ? pos.getGrossPnl() : 0.0;
+                    double charges = pos.getStatutoryCharges() != null ? pos.getStatutoryCharges() : 0.0;
+                    double net = pos.getNetPnl() != null ? pos.getNetPnl() : (gross - charges);
+
+                    tradesByDate.computeIfAbsent(dateStr, k -> new ArrayList<>()).add(new ClosedTradeResponse(
+                            pos.getId(),
+                            pos.getSymbol(),
+                            pos.getExchange(),
+                            pos.getPositionSide(),
+                            pos.getInitialQuantity() != null ? pos.getInitialQuantity() : 0,
+                            pos.getEntryPrice() != null ? pos.getEntryPrice() : 0.0,
+                            pos.getExitPrice(),
+                            gross,
+                            charges,
+                            net,
+                            pos.getEntryTime(),
+                            pos.getExitTime(),
+                            pos.getExitReason()
+                    ));
+                }
+            }
+        }
+
+        Set<String> processedDates = new HashSet<>();
+        for (SimulationCapital cap : capitalHistory) {
+            String date = cap.getTradingDate();
+            processedDates.add(date);
+            List<ClosedTradeResponse> dayTrades = tradesByDate.getOrDefault(date, Collections.emptyList());
+            result.add(new DailyTradeHistoryResponse(
+                    date,
+                    cap.getOpeningCapital(),
+                    cap.getClosingCapital(),
+                    cap.getTotalTrades(),
+                    cap.getRealizedGrossPnl(),
+                    cap.getStatutoryCharges(),
+                    cap.getNetPnl(),
+                    dayTrades
+            ));
+        }
+
+        for (Map.Entry<String, List<ClosedTradeResponse>> entry : tradesByDate.entrySet()) {
+            String date = entry.getKey();
+            if (!processedDates.contains(date)) {
+                List<ClosedTradeResponse> dayTrades = entry.getValue();
+                double gross = dayTrades.stream().mapToDouble(ClosedTradeResponse::grossPnl).sum();
+                double charges = dayTrades.stream().mapToDouble(ClosedTradeResponse::statutoryCharges).sum();
+                double net = dayTrades.stream().mapToDouble(ClosedTradeResponse::netPnl).sum();
+                double openCap = 50000.0;
+                result.add(new DailyTradeHistoryResponse(
+                        date,
+                        openCap,
+                        openCap + net,
+                        dayTrades.size(),
+                        gross,
+                        charges,
+                        net,
+                        dayTrades
+                ));
+            }
+        }
+
+        result.sort(Comparator.comparing(DailyTradeHistoryResponse::tradingDate, Comparator.reverseOrder()));
         return result;
     }
 

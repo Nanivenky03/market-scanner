@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Diagnostic and Operational REST Controller for Mithron Paper Trading Simulation.
@@ -17,11 +18,23 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/api/v1/simulation")
-@RequiredArgsConstructor
 @Tag(name = "Simulation Engine", description = "Live Paper Trading Simulation & Diagnostic REST APIs")
 public class SimulationDashboardController {
 
     private final SimulationManagementService simulationManagementService;
+    private final org.springframework.core.env.Environment env;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SimulationDashboardController(
+            SimulationManagementService simulationManagementService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) org.springframework.core.env.Environment env) {
+        this.simulationManagementService = simulationManagementService;
+        this.env = env;
+    }
+
+    public SimulationDashboardController(SimulationManagementService simulationManagementService) {
+        this(simulationManagementService, null);
+    }
 
     @GetMapping("/capital")
     @Operation(summary = "Get current simulation capital status, starting balance, and compounded equity")
@@ -92,5 +105,24 @@ public class SimulationDashboardController {
             @Parameter(description = "Target mode: PAPER, LIVE, or DISABLED")
             @RequestParam String mode) {
         return ResponseEntity.ok(simulationManagementService.updateStrategyMode(strategyId, mode));
+    }
+
+    @GetMapping("/history")
+    @Operation(summary = "Get daily trading ledger history grouped by date with capital balances and trade records")
+    public ResponseEntity<List<SimulationManagementService.DailyTradeHistoryResponse>> getHistory() {
+        return ResponseEntity.ok(simulationManagementService.getDailyTradeHistory());
+    }
+
+    @GetMapping("/version")
+    @Operation(summary = "Get current application engine version and environment")
+    public ResponseEntity<Map<String, Object>> getVersion() {
+        String port = env != null ? env.getProperty("server.port", "8090") : "8090";
+        boolean isDev = "8080".equals(port);
+        return ResponseEntity.ok(Map.of(
+            "version", simulationManagementService.getAppVersion(),
+            "port", port,
+            "isDev", isDev,
+            "environment", isDev ? "DEV" : "PROD"
+        ));
     }
 }

@@ -59,9 +59,16 @@ class FchbDatabasePerformanceReplayTest {
                 ? LocalDate.parse(startDateStr.trim())
                 : null;
 
+        String brokerProp = System.getProperty("broker", "KOTAK_NEO");
+        BrokerChargesCalculator.BrokerModel broker = "ANGEL_ONE".equalsIgnoreCase(brokerProp)
+                ? BrokerChargesCalculator.BrokerModel.ANGEL_ONE
+                : BrokerChargesCalculator.BrokerModel.KOTAK_NEO;
+        BrokerChargesCalculator.setActiveBroker(broker);
+
+        LocalTime entryCutoff = LocalTime.of(10, 15);
         FchbStrategy strategy = new FchbStrategy();
         FchbPositionHandler positionHandler = new FchbPositionHandler();
-        StrategyPerformanceReplayRunner runner = new StrategyPerformanceReplayRunner(initialCapital);
+        StrategyPerformanceReplayRunner runner = new StrategyPerformanceReplayRunner(initialCapital, entryCutoff);
 
         List<DailyReplayReport> dailyReports = new ArrayList<>();
         double currentCapital = initialCapital;
@@ -80,6 +87,7 @@ class FchbDatabasePerformanceReplayTest {
         System.out.println("=========================================================================================================");
         System.out.printf("  Starting Capital: Rs. %,.2f\n", initialCapital);
         System.out.printf("  Target Universe : Top %d Liquid Tradable Stocks (+ NIFTY 50 Benchmark)\n", symbolLimit);
+        System.out.printf("  Broker Model    : %s (%s)\n", broker, broker == BrokerChargesCalculator.BrokerModel.KOTAK_NEO ? "Rs. 0 Brokerage, Statutory Taxes Only" : "Rs. 20/leg");
         System.out.printf("  Filter Start    : %s\n", startDate != null ? startDate : "EARLIEST_AVAILABLE");
         System.out.printf("  Days Limit      : %s\n", maxDays != null ? maxDays : "ALL_AVAILABLE");
         System.out.println("---------------------------------------------------------------------------------------------------------");

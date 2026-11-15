@@ -14,6 +14,7 @@ public interface SimulationCapitalRepository extends JpaRepository<SimulationCap
     Optional<SimulationCapital> findByTradingDate(String tradingDate);
     Optional<SimulationCapital> findTopByOrderByTradingDateDesc();
     Optional<SimulationCapital> findTopByTradingDateLessThanOrderByTradingDateDesc(String tradingDate);
+    java.util.List<SimulationCapital> findAllByOrderByTradingDateDesc();
 
     @Modifying
     @Query("DELETE FROM SimulationCapital c WHERE c.tradingDate = :tradingDate")
