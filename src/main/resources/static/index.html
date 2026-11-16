@@ -2876,19 +2876,8 @@
         try {
           // 1. Fetch Engine Status & Update System Health Chips
           const statusRes = await fetch('/admin/runtime/status');
-          const readinessRes = await fetch('/admin/runtime/readiness');
           
           let wsConnected = false;
-          let isTradingDay = false;
-          let isSessionOpen = false;
-
-          if (readinessRes.ok) {
-            const ready = await readinessRes.json();
-            isTradingDay = ready.tradingDay || false;
-            isSessionOpen = ready.marketSessionOpen || false;
-            wsConnected = ready.websocketConnected || false;
-          }
-
           if (statusRes.ok) {
             const status = await statusRes.json();
             if (status.websocketConnected !== undefined) wsConnected = status.websocketConnected;
@@ -2898,6 +2887,13 @@
               pulseDot.className = wsConnected ? 'live-pulse-dot' : 'live-pulse-dot standby';
             }
           }
+
+          // Check Market Session (IST: Mon-Fri 09:15 - 15:30) with 0ms database overhead
+          const istNow = new Date(new Date().getTime() + (new Date().getTimezoneOffset() * 60000) + (5.5 * 3600000));
+          const istDay = istNow.getDay();
+          const istMinutes = istNow.getHours() * 60 + istNow.getMinutes();
+          const isTradingDay = (istDay >= 1 && istDay <= 5);
+          const isSessionOpen = isTradingDay && (istMinutes >= 555 && istMinutes < 930);
 
           // Update Status Chips with Color Grading
           const wsChip = document.getElementById('chipWebsocket');
