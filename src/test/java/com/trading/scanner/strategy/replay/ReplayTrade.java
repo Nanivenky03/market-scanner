@@ -38,6 +38,9 @@ public class ReplayTrade {
     private double charges;
     private double netPnl;
 
+    private Double peakPrice;
+    private Double troughPrice;
+
     public boolean isProfitable() {
         return netPnl > 0.0;
     }

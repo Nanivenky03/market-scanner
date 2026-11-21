@@ -105,9 +105,15 @@ public class MultiDayReplayReport {
                 count++;
                 String outcome = t.isProfitable() ? "WIN (PROFIT)" : "LOSS (DEFENSE)";
                 String sign = t.getNetPnl() >= 0 ? "+" : "";
-                sb.append(String.format("#%02d | [%s %s] %-10s %s | Entry: Rs. %.2f | Qty: %d | Initial SL: Rs. %.2f | Target: Rs. %.2f\n",
+                double riskPerShare = Math.abs(t.getEntryPrice() - t.getInitialStopLoss());
+                double totalRisk = riskPerShare * t.getQuantity();
+                double pnlR = totalRisk > 0 ? (t.getNetPnl() / totalRisk) : 0.0;
+                double mfeR = (riskPerShare > 0 && t.getPeakPrice() != null) ? ((t.getPeakPrice() - t.getEntryPrice()) / riskPerShare) : 0.0;
+                double maeR = (riskPerShare > 0 && t.getTroughPrice() != null) ? ((t.getEntryPrice() - t.getTroughPrice()) / riskPerShare) : 0.0;
+
+                sb.append(String.format("#%02d | [%s %s] %-10s %s | Entry: Rs. %.2f | Qty: %d | Initial SL: Rs. %.2f | Target: Rs. %.2f | 1R: Rs. %.2f\n",
                         count, day.getTradingDate(), t.getEntryTime().toLocalTime(), t.getSymbol(), t.getDirection(),
-                        t.getEntryPrice(), t.getQuantity(), t.getInitialStopLoss(), t.getTarget1Price()));
+                        t.getEntryPrice(), t.getQuantity(), t.getInitialStopLoss(), t.getTarget1Price(), totalRisk));
 
                 if (t.isTarget1Hit()) {
                     sb.append(String.format("     └─> Target 1 HIT at %s @ Rs. %.2f (Sold 50%%: %d shares) | Stop Ratcheted to Breakeven (Rs. %.2f)\n",
@@ -121,8 +127,12 @@ public class MultiDayReplayReport {
                         t.getFinalExitPrice() != null ? t.getFinalExitPrice() : 0.0,
                         t.getFinalExitQuantity(), t.getExitReason()));
 
-                sb.append(String.format("     └─> Result: Gross P&L = Rs. %.2f | Taxes & Brokerage = -Rs. %.2f | Net Cash P&L = %sRs. %.2f [%s]\n\n",
-                        t.getGrossPnl(), t.getCharges(), sign, t.getNetPnl(), outcome));
+                sb.append(String.format("     └─> Excursion: Peak MFE = Rs. %.2f (+%.2f R) | Max Adverse MAE = Rs. %.2f (-%.2f R)\n",
+                        t.getPeakPrice() != null ? t.getPeakPrice() : t.getEntryPrice(), mfeR,
+                        t.getTroughPrice() != null ? t.getTroughPrice() : t.getEntryPrice(), maeR));
+
+                sb.append(String.format("     └─> Result: Gross P&L = Rs. %.2f | Taxes & Brokerage = -Rs. %.2f | Net Cash P&L = %sRs. %.2f (%+.2f R) [%s]\n\n",
+                        t.getGrossPnl(), t.getCharges(), sign, t.getNetPnl(), pnlR, outcome));
             }
         }
 

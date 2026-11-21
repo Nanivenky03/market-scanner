@@ -141,12 +141,16 @@ public class DatabaseMarketReplayLoader implements AutoCloseable {
 
         Map<String, DailyStockContext> dailyContexts = loadDailyContexts(dateStr, symbolSet);
         CandleBuckets buckets = loadCandles(dayStart, dayEnd, symbolSet);
+        Map<String, Map<Integer, Long>> volumeBaselines = loadVolumeBaselines(dateStr, symbolSet);
+        Map<String, String> sectorMappings = loadSectorMappings();
 
         HistoricalMarketDay day = HistoricalMarketDay.builder()
                 .tradingDate(dateStr)
                 .scenarioTag("DB_REGIME")
                 .scenarioDescription("Production DB Replay for " + dateStr + " (" + symbols.size() + " symbols)")
                 .dailyContexts(dailyContexts)
+                .volumeBaselines(volumeBaselines)
+                .sectorMappings(sectorMappings)
                 .candles1m(buckets.candles1m)
                 .candles5m(buckets.candles5m)
                 .candles15m(buckets.candles15m)
@@ -187,8 +191,45 @@ public class DatabaseMarketReplayLoader implements AutoCloseable {
         return map;
     }
 
+    public Map<String, Map<Integer, Long>> loadVolumeBaselines(String dateStr, Set<String> symbols) {
+        String sql = "SELECT symbol, session_minute, avg_cumulative_volume_20 " +
+                "FROM volume_time_window_baseline " +
+                "WHERE trading_date = ? AND symbol = ANY (?)";
+        Map<String, Map<Integer, Long>> baselines = new HashMap<>();
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setString(1, dateStr);
+            Array arr = connection.createArrayOf("text", symbols.toArray(new String[0]));
+            stmt.setArray(2, arr);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    String sym = rs.getString("symbol");
+                    int minute = rs.getInt("session_minute");
+                    long avgVol = rs.getLong("avg_cumulative_volume_20");
+                    baselines.computeIfAbsent(sym, s -> new HashMap<>()).put(minute, avgVol);
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("Could not load volume baselines for {}: {}", dateStr, e.getMessage());
+        }
+        return baselines;
+    }
+
+    public Map<String, String> loadSectorMappings() {
+        String sql = "SELECT symbol, sector_index_symbol FROM stock_sector_classification WHERE is_active = true";
+        Map<String, String> map = new HashMap<>();
+        try (PreparedStatement stmt = connection.prepareStatement(sql);
+             ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                map.put(rs.getString("symbol"), rs.getString("sector_index_symbol"));
+            }
+        } catch (SQLException e) {
+            log.warn("Could not load sector mappings: {}", e.getMessage());
+        }
+        return map;
+    }
+
     private CandleBuckets loadCandles(String dayStart, String dayEnd, Set<String> symbols) {
-        String sql = "SELECT symbol, exchange, timeframe, candle_time, " +
+        String sql = "SELECT symbol, exchange, timeframe, candle_time, created_at, " +
                 "open_price, high_price, low_price, close_price, volume, " +
                 "vwap, atr_14, rsi_14, body_ratio, upper_wick_ratio, lower_wick_ratio, range_pct " +
                 "FROM market_candles " +
@@ -266,12 +307,17 @@ public class DatabaseMarketReplayLoader implements AutoCloseable {
         String timeStr = rs.getString("candle_time");
         LocalDateTime time = timeStr.length() == 16 ? LocalDateTime.parse(timeStr + ":00") : LocalDateTime.parse(timeStr);
         String tfStr = rs.getString("timeframe");
+        String createdAtStr = rs.getString("created_at");
+        LocalDateTime createdAt = (createdAtStr != null && !createdAtStr.isBlank())
+                ? (createdAtStr.length() == 16 ? LocalDateTime.parse(createdAtStr + ":00") : LocalDateTime.parse(createdAtStr))
+                : time;
 
         return MarketCandle.builder()
                 .symbol(rs.getString("symbol"))
                 .exchange(rs.getString("exchange"))
                 .timeframe(CandleTimeframe.valueOf(tfStr))
                 .candleTime(time)
+                .createdAt(createdAt)
                 .openPrice(getDoubleOrNull(rs, "open_price"))
                 .highPrice(getDoubleOrNull(rs, "high_price"))
                 .lowPrice(getDoubleOrNull(rs, "low_price"))

@@ -35,6 +35,12 @@ public class HistoricalMarketDay {
     @Builder.Default
     private List<MarketCandle> candles15m = new ArrayList<>();
 
+    @Builder.Default
+    private Map<String, Map<Integer, Long>> volumeBaselines = new HashMap<>();
+
+    @Builder.Default
+    private Map<String, String> sectorMappings = new HashMap<>();
+
     // Cached indexes for fast lookup during replay
     private transient Map<String, List<MarketCandle>> candles1mBySymbol;
     private transient Map<String, List<MarketCandle>> candles5mBySymbol;
@@ -79,6 +85,17 @@ public class HistoricalMarketDay {
         return null;
     }
 
+    public List<MarketCandle> get1mCandlesUpTo(String symbol, LocalTime time) {
+        if (candles1mBySymbol == null) {
+            initIndexes();
+        }
+        List<MarketCandle> list = candles1mBySymbol.get(symbol);
+        if (list == null) return Collections.emptyList();
+        return list.stream()
+                .filter(c -> !c.getCandleTime().toLocalTime().isAfter(time))
+                .collect(Collectors.toList());
+    }
+
     public List<MarketCandle> get5mCandlesUpTo(String symbol, LocalTime time) {
         if (candles5mBySymbol == null) {
             initIndexes();
@@ -86,7 +103,7 @@ public class HistoricalMarketDay {
         List<MarketCandle> list = candles5mBySymbol.get(symbol);
         if (list == null) return Collections.emptyList();
         return list.stream()
-                .filter(c -> c.getCandleTime().toLocalTime().isBefore(time))
+                .filter(c -> !c.getCandleTime().toLocalTime().plusMinutes(5).isAfter(time))
                 .collect(Collectors.toList());
     }
 
@@ -97,11 +114,27 @@ public class HistoricalMarketDay {
         List<MarketCandle> list = candles15mBySymbol.get(symbol);
         if (list == null) return Collections.emptyList();
         return list.stream()
-                .filter(c -> c.getCandleTime().toLocalTime().isBefore(time))
+                .filter(c -> !c.getCandleTime().toLocalTime().plusMinutes(15).isAfter(time))
                 .collect(Collectors.toList());
     }
 
     public MarketCandle getNiftyCandle1m(LocalTime time) {
         return get1mCandle("NIFTY", time);
+    }
+
+    public Long getVolumeBaseline(String symbol, int sessionMinute) {
+        if (volumeBaselines == null || symbol == null) return null;
+        Map<Integer, Long> symBaselines = volumeBaselines.get(symbol);
+        if (symBaselines == null) return null;
+        return symBaselines.get(sessionMinute);
+    }
+
+    public String getSector(String symbol) {
+        if (sectorMappings == null || symbol == null) return null;
+        return sectorMappings.get(symbol);
+    }
+
+    public boolean hasFullBaseline() {
+        return volumeBaselines != null && volumeBaselines.size() >= 300;
     }
 }
