@@ -296,16 +296,17 @@ public class AngelOneMarketDataProvider
         }
 
         /**
-         * Historical backfill fetch for exactly one trading session. Unlike the live/EOD fetch, an empty
+         * Historical backfill fetch for one or more consecutive trading sessions. Unlike the live/EOD fetch, an empty
          * response is returned as an empty result (holiday, suspended or unlisted instrument) instead of
          * throwing, and the raw response is returned so it can be archived verbatim.
          */
         public HistoricalOneMinuteFetch fetchHistoricalOneMinuteForBackfill(
                         String symbol,
-                        LocalDate date) {
+                        LocalDate from,
+                        LocalDate to) {
 
                 requireProviderEnabled();
-                validateDateRange(symbol, date, date);
+                validateDateRange(symbol, from, to);
 
                 String normalizedSymbol = normalizeSymbol(symbol);
                 InstrumentMaster instrument = getRequiredInstrument(normalizedSymbol);
@@ -319,8 +320,8 @@ public class AngelOneMarketDataProvider
                                         instrument.getExchange(),
                                         instrument.getBrokerToken(),
                                         INTERVAL_ONE_MINUTE,
-                                        date,
-                                        date);
+                                        from,
+                                        to);
 
                         validateSuccessfulResponse(response, "historical one-minute");
 
@@ -332,7 +333,7 @@ public class AngelOneMarketDataProvider
                         }
 
                         return new HistoricalOneMinuteFetch(
-                                        parseOneMinuteRows(response.data(), instrument, normalizedSymbol, date, date),
+                                        parseOneMinuteRows(response.data(), instrument, normalizedSymbol, from, to),
                                         raw);
 
                 } catch (ProviderException ex) {
@@ -340,7 +341,7 @@ public class AngelOneMarketDataProvider
                 } catch (Exception ex) {
                         throw new ProviderException(
                                         "Failed to fetch Angel One historical 1-minute candles for symbol="
-                                                        + normalizedSymbol + ", date=" + date,
+                                                        + normalizedSymbol + ", from=" + from + ", to=" + to,
                                         ex);
                 }
         }

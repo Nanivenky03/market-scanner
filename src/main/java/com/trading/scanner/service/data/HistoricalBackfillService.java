@@ -90,6 +90,7 @@ public class HistoricalBackfillService {
     private static final int MAX_COOLDOWNS_WITHOUT_PROGRESS = 5;
     /** Retry rounds for symbol-days Angel One rejected as rate limited; the last round records real failures. */
     private static final int MAX_RETRY_ROUNDS = 3;
+    private static final int MAX_DAYS_PER_CALL = 30;
     private static final int DERIVE_THREADS = 3;
     private static final int MAX_PENDING_FINALIZERS = 2;
 
@@ -172,6 +173,8 @@ public class HistoricalBackfillService {
      * @param maxDates   stop after this many sessions (dry runs); null means no limit
      * @param dryRun     fetch and archive raw responses only; write nothing to the database
      * @param retryNoData re-call symbol-days that previously came back empty
+     * @param daysPerCall sessions fetched in one API call per symbol (default 1, at most 30); the response is split
+     *                    by date and every symbol-day is stored and checkpointed on its own
      */
     public record RunRequest(
             Integer sessions,
@@ -179,7 +182,13 @@ public class HistoricalBackfillService {
             List<String> symbols,
             Integer maxDates,
             boolean dryRun,
-            boolean retryNoData) {
+            boolean retryNoData,
+            Integer daysPerCall) {
+
+        public RunRequest(Integer sessions, LocalDate toDate, List<String> symbols, Integer maxDates,
+                          boolean dryRun, boolean retryNoData) {
+            this(sessions, toDate, symbols, maxDates, dryRun, retryNoData, null);
+        }
     }
 
     public record RunStatus(
@@ -344,16 +353,22 @@ public class HistoricalBackfillService {
             pullDailyBars(run, targets, fromDate.minusDays(14), latest);
 
             run.phase = "MINUTE_CANDLES";
+            int daysPerCall = Math.max(1, Math.min(MAX_DAYS_PER_CALL,
+                    run.request.daysPerCall() != null ? run.request.daysPerCall() : 1));
             int sessionIndex = 0;
-            for (LocalDate date : dates) {
+            for (int start = 0; start < dates.size(); start += daysPerCall) {
                 if (shouldStop(run)) {
                     break;
                 }
-                run.currentDate = date;
+                List<LocalDate> chunk = new ArrayList<>(dates.subList(start, Math.min(dates.size(), start + daysPerCall)));
+                run.currentDate = chunk.get(0);
                 List<Future<?>> deriveTasks = new ArrayList<>();
-                Set<String> alreadyHaveCandles = new LinkedHashSet<>(marketCandleRepository
-                        .findDistinctSymbolsByTimeframeAndCandleTimeRange(
-                                CandleTimeframe.ONE_MINUTE, date.atStartOfDay(), date.plusDays(1).atStartOfDay()));
+                Map<LocalDate, Set<String>> alreadyHave = new LinkedHashMap<>();
+                for (LocalDate d : chunk) {
+                    alreadyHave.put(d, new LinkedHashSet<>(marketCandleRepository
+                            .findDistinctSymbolsByTimeframeAndCandleTimeRange(
+                                    CandleTimeframe.ONE_MINUTE, d.atStartOfDay(), d.plusDays(1).atStartOfDay())));
+                }
 
                 List<Target> deferred = new ArrayList<>();
                 for (Target target : targets) {
@@ -361,12 +376,12 @@ public class HistoricalBackfillService {
                         break;
                     }
                     run.currentSymbol = target.symbol();
-                    if (pullMinuteCandles(run, target, date, alreadyHaveCandles, derivePool, deriveTasks, false)) {
+                    if (pullMinuteChunk(run, target, chunk, alreadyHave, derivePool, deriveTasks, false)) {
                         deferred.add(target);
                     }
                 }
-                // Angel One rejects a share of calls as rate limited even far below its documented limits;
-                // those symbol-days get one more attempt at the end of the session instead of being lost.
+                // Calls Angel One rejected as rate limited go back into a queue and are retried in rounds
+                // (with a pause between rounds) instead of being lost.
                 List<Target> pending = deferred;
                 for (int round = 1; round <= MAX_RETRY_ROUNDS && !pending.isEmpty() && !shouldStop(run); round++) {
                     boolean lastRound = round == MAX_RETRY_ROUNDS;
@@ -379,7 +394,7 @@ public class HistoricalBackfillService {
                             break;
                         }
                         run.currentSymbol = target.symbol();
-                        if (pullMinuteCandles(run, target, date, alreadyHaveCandles, derivePool, deriveTasks, lastRound)) {
+                        if (pullMinuteChunk(run, target, chunk, alreadyHave, derivePool, deriveTasks, lastRound)) {
                             stillRejected.add(target);
                         }
                     }
@@ -387,20 +402,21 @@ public class HistoricalBackfillService {
                 }
 
                 if (!run.request.dryRun() && !shouldStop(run)) {
-                    final LocalDate finalDate = date;
-                    final int index = sessionIndex;
+                    final int firstIndex = sessionIndex;
                     pendingFinalizers.acquire();
                     finalizers.add(finalizePool.submit(() -> {
                         try {
                             awaitAll(deriveTasks);
-                            finalizeSession(run, finalDate, index, latest);
+                            for (int i = 0; i < chunk.size(); i++) { // baselines depend on date order
+                                finalizeSession(run, chunk.get(i), firstIndex + i, latest);
+                            }
                         } finally {
                             pendingFinalizers.release();
                         }
                     }));
                 }
-                run.sessionsDone.incrementAndGet();
-                sessionIndex++;
+                run.sessionsDone.addAndGet(chunk.size());
+                sessionIndex += chunk.size();
             }
 
             for (Future<?> f : finalizers) {
@@ -573,69 +589,92 @@ public class HistoricalBackfillService {
     // 1M candles -> market_candles
     // ------------------------------------------------------------------------------------------------
 
-    /** @return true when the call was rate limited and should be retried later in this run */
-    private boolean pullMinuteCandles(Run run, Target target, LocalDate date, Set<String> alreadyHaveCandles,
-                                      ExecutorService derivePool, List<Future<?>> deriveTasks, boolean finalAttempt) {
+    /**
+     * One API call per symbol for a chunk of consecutive sessions. The response is split by date and each
+     * symbol-day is stored, checkpointed and derived on its own, exactly as a one-day call would be.
+     *
+     * @return true when the call was rate limited and should be retried later in this run
+     */
+    private boolean pullMinuteChunk(Run run, Target target, List<LocalDate> chunk,
+                                    Map<LocalDate, Set<String>> alreadyHave,
+                                    ExecutorService derivePool, List<Future<?>> deriveTasks, boolean finalAttempt) {
         String symbol = target.symbol();
-        if (alreadyHaveCandles.contains(symbol)) {
-            run.skippedAlreadyPresent.incrementAndGet();
+        List<LocalDate> needed = new ArrayList<>();
+        for (LocalDate date : chunk) {
+            if (alreadyHave.get(date).contains(symbol)) {
+                run.skippedAlreadyPresent.incrementAndGet();
+                continue;
+            }
+            Optional<com.trading.scanner.model.EodDataEntry> checkpoint =
+                    eodDataEntryRepository.findBySymbolAndExchangeAndTradingDate(symbol, EXCHANGE, date);
+            if (checkpoint.isPresent() && SOURCE.equals(checkpoint.get().getSource())) {
+                boolean wasNoData = checkpoint.get().getActualMinuteCount() != null
+                        && checkpoint.get().getActualMinuteCount() == 0;
+                if (!(wasNoData && run.request.retryNoData())) {
+                    run.skippedAlreadyPresent.incrementAndGet();
+                    continue;
+                }
+            }
+            needed.add(date);
+        }
+        if (needed.isEmpty()) {
             return false;
         }
-        Optional<com.trading.scanner.model.EodDataEntry> checkpoint =
-                eodDataEntryRepository.findBySymbolAndExchangeAndTradingDate(symbol, EXCHANGE, date);
-        if (checkpoint.isPresent() && SOURCE.equals(checkpoint.get().getSource())) {
-            boolean wasNoData = checkpoint.get().getActualMinuteCount() != null
-                    && checkpoint.get().getActualMinuteCount() == 0;
-            if (!(wasNoData && run.request.retryNoData())) {
-                run.skippedAlreadyPresent.incrementAndGet();
-                return false;
-            }
-        }
+        LocalDate from = needed.get(0);
+        LocalDate to = needed.get(needed.size() - 1);
 
         try {
             AngelOneMarketDataProvider.HistoricalOneMinuteFetch fetch = callWithSessionRefresh(run,
-                    () -> provider.fetchHistoricalOneMinuteForBackfill(symbol, date));
+                    () -> provider.fetchHistoricalOneMinuteForBackfill(symbol, from, to));
             run.apiCalls.incrementAndGet();
             onApiSuccess(run);
-            writeRaw(run, Paths.get(date.toString(), symbol + ".json"), fetch.rawResponseJson());
+            String rawName = from.equals(to) ? from.toString() : from + "_" + to;
+            writeRaw(run, Paths.get(rawName, symbol + ".json"), fetch.rawResponseJson());
 
-            List<MarketCandle> candles = fetch.candles();
-            if (run.request.dryRun()) {
-                run.dryRunLog.add(describe(symbol, date, candles));
-                return false;
+            Map<LocalDate, List<MarketCandle>> byDate = new LinkedHashMap<>();
+            for (MarketCandle c : fetch.candles()) {
+                byDate.computeIfAbsent(c.getCandleTime().toLocalDate(), k -> new ArrayList<>()).add(c);
             }
 
-            if (candles.isEmpty()) {
-                run.noData.incrementAndGet();
-                run.noDataLog.add(Map.of("symbol", symbol, "date", date.toString()));
-                eodDataEntryService.complete(symbol, EXCHANGE, date, DataStatus.PARTIAL, 0, 0, 0, 0, 0, 0, SOURCE,
-                        "Angel One returned no candles for this session");
-                return false;
+            for (LocalDate date : needed) {
+                List<MarketCandle> candles = byDate.getOrDefault(date, List.of());
+                if (run.request.dryRun()) {
+                    run.dryRunLog.add(describe(symbol, date, candles));
+                    continue;
+                }
+                if (candles.isEmpty()) {
+                    run.noData.incrementAndGet();
+                    run.noDataLog.add(Map.of("symbol", symbol, "date", date.toString()));
+                    eodDataEntryService.complete(symbol, EXCHANGE, date, DataStatus.PARTIAL, 0, 0, 0, 0, 0, 0, SOURCE,
+                            "Angel One returned no candles for this session");
+                    continue;
+                }
+
+                LocalDateTime now = timeProvider.nowDateTime();
+                List<MarketCandle> toInsert = new ArrayList<>();
+                for (MarketCandle c : candles) {
+                    c.setSource(SOURCE);
+                    c.setQualityStatus(CandleQualityStatus.RECONCILED);
+                    c.setCreatedAt(now);
+                    c.setUpdatedAt(now);
+                    toInsert.add(c);
+                }
+                marketCandleRepository.saveAll(toInsert);
+                run.candlesInserted.addAndGet(toInsert.size());
+
+                eodDataEntryService.complete(symbol, EXCHANGE, date, DataStatus.RECONCILED,
+                        toInsert.size(), toInsert.size(), 0, 0, 0, toInsert.size(), SOURCE,
+                        "Stored as delivered by Angel One historical API; quiet minutes are not inferred");
+
+                final LocalDate finalDate = date;
+                deriveTasks.add(derivePool.submit(() -> deriveSymbolDay(run, target, finalDate, toInsert.size())));
             }
-
-            LocalDateTime now = timeProvider.nowDateTime();
-            List<MarketCandle> toInsert = new ArrayList<>();
-            for (MarketCandle c : candles) {
-                c.setSource(SOURCE);
-                c.setQualityStatus(CandleQualityStatus.RECONCILED);
-                c.setCreatedAt(now);
-                c.setUpdatedAt(now);
-                toInsert.add(c);
-            }
-            marketCandleRepository.saveAll(toInsert);
-            run.candlesInserted.addAndGet(toInsert.size());
-
-            eodDataEntryService.complete(symbol, EXCHANGE, date, DataStatus.RECONCILED,
-                    toInsert.size(), toInsert.size(), 0, 0, 0, toInsert.size(), SOURCE,
-                    "Stored as delivered by Angel One historical API; quiet minutes are not inferred");
-
-            deriveTasks.add(derivePool.submit(() -> deriveSymbolDay(run, target, date, toInsert.size())));
         } catch (Exception ex) {
             if (!finalAttempt && isRateLimit(ex)) {
                 onRateLimit(run);
                 return true;
             }
-            recordFailure(run, symbol, date, ex);
+            recordFailure(run, symbol, from, ex);
         }
         return false;
     }

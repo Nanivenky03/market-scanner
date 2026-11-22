@@ -163,7 +163,7 @@ class HistoricalBackfillServiceTest {
         IllegalStateException ex = assertThrows(IllegalStateException.class, () -> service.start(tcsRequest(1, false)));
         assertTrue(ex.getMessage().contains("live pipeline is active"));
         verify(provider, never()).fetchHistoricalBars(any(), any(), any());
-        verify(provider, never()).fetchHistoricalOneMinuteForBackfill(any(), any());
+        verify(provider, never()).fetchHistoricalOneMinuteForBackfill(any(), any(), any());
     }
 
     @Test
@@ -175,7 +175,7 @@ class HistoricalBackfillServiceTest {
     @Test
     void dryRunArchivesRawResponsesButWritesNothingToTheDatabase() throws Exception {
         when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any())).thenAnswer(inv ->
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any())).thenAnswer(inv ->
                 new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(oneSession(inv.getArgument(1)), "[[\"raw\"]]"));
 
         service.start(tcsRequest(2, true));
@@ -198,7 +198,7 @@ class HistoricalBackfillServiceTest {
     @Test
     void candlesAreStoredAsDeliveredWithADistinctSourceAndNothingIsFabricated() throws Exception {
         when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any())).thenAnswer(inv ->
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any())).thenAnswer(inv ->
                 new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(oneSession(inv.getArgument(1)), "[]"));
         when(candles.findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
                 eq("TCS"), eq("NSE"), eq(CandleTimeframe.ONE_MINUTE), any(), any()))
@@ -234,7 +234,7 @@ class HistoricalBackfillServiceTest {
                 new DailyBarDto("TCS", d2, 20.0, 22.0, 19.0, 21.0, 21.0, 6_000L, "ANGEL_ONE")));
         when(stockPrices.findBySymbolAndDate("TCS", d1)).thenReturn(Optional.of(
                 com.trading.scanner.model.StockPrice.builder().symbol("TCS").date(d1).build()));
-        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any())).thenReturn(
+        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any(), any())).thenReturn(
                 new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(List.of(), "[]"));
 
         service.start(tcsRequest(1, false));
@@ -262,14 +262,14 @@ class HistoricalBackfillServiceTest {
         service.start(tcsRequest(2, false));
         HistoricalBackfillService.RunStatus status = awaitFinished();
 
-        verify(provider, never()).fetchHistoricalOneMinuteForBackfill(any(), any());
+        verify(provider, never()).fetchHistoricalOneMinuteForBackfill(any(), any(), any());
         assertEquals(2, status.skippedAlreadyPresent());
     }
 
     @Test
     void anEmptyResponseIsRecordedAsNoDataAndNotAsAFailureOrAFabricatedCandle() throws Exception {
         when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any())).thenReturn(
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any())).thenReturn(
                 new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(List.of(), "[]"));
 
         service.start(tcsRequest(1, false));
@@ -285,7 +285,7 @@ class HistoricalBackfillServiceTest {
     @Test
     void theRunAbortsAfterRepeatedConsecutiveApiFailuresInsteadOfHammeringTheBroker() throws Exception {
         when(provider.fetchHistoricalBars(any(), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any()))
+        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any(), any()))
                 .thenThrow(new ProviderException("HTTP 403 forbidden"));
         // enough targets and sessions that 25 consecutive failures are reachable
         List<StockUniverse> many = new ArrayList<>();
@@ -315,7 +315,7 @@ class HistoricalBackfillServiceTest {
     void aRateLimitedCallIsRetriedAtTheEndOfTheSessionInsteadOfBeingLost() throws Exception {
         service.setCooldownMillis(1);
         when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any()))
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any()))
                 .thenThrow(new ProviderException(RATE_LIMITED))
                 .thenAnswer(inv -> new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(
                         oneSession(inv.getArgument(1)), "[]"));
@@ -326,14 +326,14 @@ class HistoricalBackfillServiceTest {
         assertEquals("COMPLETED", status.state());
         assertEquals(0, status.failures(), "a rate-limited call that succeeds on retry is not a failure");
         assertEquals(3, status.candlesInserted());
-        verify(provider, times(2)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any());
+        verify(provider, times(2)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any());
     }
 
     @Test
     void persistentRateLimitingCoolsDownThenStopsWithoutCountingAsApiFailures() throws Exception {
         service.setCooldownMillis(1);
         when(provider.fetchHistoricalBars(any(), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any()))
+        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any(), any()))
                 .thenThrow(new ProviderException(RATE_LIMITED));
         List<StockUniverse> many = new ArrayList<>();
         for (int i = 0; i < 80; i++) {
@@ -359,7 +359,7 @@ class HistoricalBackfillServiceTest {
     @Test
     void theDefaultRangeIsAnchoredOnCandlesThisBackfillDidNotWrite() throws Exception {
         when(provider.fetchHistoricalBars(any(), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any())).thenReturn(
+        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any(), any())).thenReturn(
                 new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(List.of(), "[]"));
 
         service.start(new HistoricalBackfillService.RunRequest(3, null, List.of("TCS"), 1, true, false));
@@ -374,7 +374,7 @@ class HistoricalBackfillServiceTest {
     void aSymbolDayRejectedRepeatedlyKeepsGoingBackIntoTheQueueUntilItSucceeds() throws Exception {
         service.setCooldownMillis(1);
         when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any()))
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any()))
                 .thenThrow(new ProviderException(RATE_LIMITED))
                 .thenThrow(new ProviderException(RATE_LIMITED))
                 .thenAnswer(inv -> new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(
@@ -386,14 +386,14 @@ class HistoricalBackfillServiceTest {
         assertEquals("COMPLETED", status.state());
         assertEquals(0, status.failures());
         assertEquals(3, status.candlesInserted());
-        verify(provider, times(3)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any());
+        verify(provider, times(3)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any());
     }
 
     @Test
     void aSymbolDayStillRejectedAfterAllRoundsIsRecordedAsAFailureAndLeftUncheckpointed() throws Exception {
         service.setCooldownMillis(1);
         when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
-        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any()))
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any()))
                 .thenThrow(new ProviderException(RATE_LIMITED));
 
         service.start(tcsRequest(1, false));
@@ -401,8 +401,72 @@ class HistoricalBackfillServiceTest {
 
         assertEquals(1, status.failures());
         // the first pass plus three retry rounds
-        verify(provider, times(4)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any());
+        verify(provider, times(4)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any());
         verify(eodService, never()).complete(any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), anyInt(),
                 anyInt(), anyInt(), any(), any());
+    }
+
+    private List<MarketCandle> sessions(LocalDate... dates) {
+        List<MarketCandle> all = new ArrayList<>();
+        for (LocalDate d : dates) {
+            all.addAll(oneSession(d));
+        }
+        return all;
+    }
+
+    @Test
+    void severalSessionsAreFetchedInOneCallAndSplitByDateWithPerDayCheckpoints() throws Exception {
+        LocalDate d1 = LocalDate.of(2026, 10, 1);
+        LocalDate d2 = LocalDate.of(2026, 10, 2);
+        LocalDate d3 = LocalDate.of(2026, 10, 5);
+        when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any())).thenAnswer(inv ->
+                new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(sessions(d1, d2, d3), "[]"));
+
+        service.start(new HistoricalBackfillService.RunRequest(3, d3, List.of("TCS"), 3, false, false, 3));
+        HistoricalBackfillService.RunStatus status = awaitFinished();
+
+        assertEquals("COMPLETED", status.state());
+        verify(provider, times(1)).fetchHistoricalOneMinuteForBackfill("TCS", d1, d3);
+        assertEquals(9, status.candlesInserted(), "3 sessions x 3 delivered candles");
+        for (LocalDate d : List.of(d1, d2, d3)) {
+            verify(eodService).complete(eq("TCS"), eq("NSE"), eq(d), eq(DataStatus.RECONCILED),
+                    eq(3), eq(3), eq(0), eq(0), eq(0), eq(3), eq(HistoricalBackfillService.SOURCE), anyString());
+            verify(liveCandles).recomputeDerivedData("TCS", "NSE", d);
+        }
+    }
+
+    @Test
+    void inAMultiDayCallOnlyAbsentSymbolDaysAreStoredAndAMissingDateIsRecordedAsNoData() throws Exception {
+        LocalDate d1 = LocalDate.of(2026, 10, 1);
+        LocalDate d2 = LocalDate.of(2026, 10, 2);
+        LocalDate d3 = LocalDate.of(2026, 10, 5);
+        when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
+        // d1 already has TCS candles; the API returns nothing for d3
+        when(candles.findDistinctSymbolsByTimeframeAndCandleTimeRange(any(), eq(d1.atStartOfDay()), any()))
+                .thenReturn(List.of("TCS"));
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any(), any())).thenAnswer(inv ->
+                new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(sessions(d1, d2), "[]"));
+
+        service.start(new HistoricalBackfillService.RunRequest(3, d3, List.of("TCS"), 3, false, false, 3));
+        HistoricalBackfillService.RunStatus status = awaitFinished();
+
+        assertEquals(3, status.candlesInserted(), "only d2 is stored; d1 already existed");
+        assertEquals(1, status.noData(), "d3 came back empty");
+        // the call starts at the first date that is actually needed
+        verify(provider).fetchHistoricalOneMinuteForBackfill("TCS", d2, d3);
+        verify(eodService).complete(eq("TCS"), eq("NSE"), eq(d3), eq(DataStatus.PARTIAL),
+                eq(0), eq(0), eq(0), eq(0), eq(0), eq(0), eq(HistoricalBackfillService.SOURCE), anyString());
+    }
+
+    @Test
+    void daysPerCallCanBeSetFromTheJsonRequestBody() throws Exception {
+        HistoricalBackfillService.RunRequest req = new com.fasterxml.jackson.databind.ObjectMapper()
+                .findAndRegisterModules()
+                .readValue("{\"sessions\":78,\"toDate\":\"2026-10-05\",\"daysPerCall\":10}",
+                        HistoricalBackfillService.RunRequest.class);
+        assertEquals(10, req.daysPerCall());
+        assertEquals(78, req.sessions());
+        assertEquals(LocalDate.of(2026, 10, 5), req.toDate());
     }
 }
