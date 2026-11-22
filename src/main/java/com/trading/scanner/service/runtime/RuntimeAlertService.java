@@ -334,6 +334,27 @@ public class RuntimeAlertService {
                 upsertOpen(alertKey, "HIGH", message, details);
         }
 
+        /**
+         * Pre-market baseline stage processed zero symbols. The stage itself must still complete so the
+         * websocket feed starts; trading stays blocked per symbol because a missing volX rejects candidates.
+         */
+        @Transactional
+        public void reportEmptyVolumeBaselines(
+                        java.time.LocalDate tradingDate,
+                        java.time.LocalDate completedTradingDate,
+                        String message) {
+
+                upsertOpen(
+                                "runtime.premarket.volume_baselines_empty." + tradingDate,
+                                "HIGH",
+                                message,
+                                nullableDetails(
+                                                "tradingDate",
+                                                tradingDate,
+                                                "baselineSourceDate",
+                                                completedTradingDate));
+        }
+
         @Transactional
         public void resolveEodReconciliation(java.time.LocalDate tradingDate) {
                 if (tradingDate != null) {

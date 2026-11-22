@@ -7,6 +7,9 @@ import com.trading.scanner.risk.model.PortfolioMode;
 import com.trading.scanner.repository.RuntimeSettingRepository;
 import com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +21,7 @@ import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class RuntimeSettingService {
 
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
@@ -177,10 +181,10 @@ public class RuntimeSettingService {
     }
 
     @Transactional(readOnly = true)
-    public int retentionCandlesDays() {
+    public int retentionCandlesSessions() {
         return getInt(
-                "retention.candles.days",
-                runtimeAutomationProperties.getDefaults().getRetentionCandlesDays());
+                "retention.candles.sessions",
+                runtimeAutomationProperties.getDefaults().getRetentionCandlesSessions());
     }
 
     @Transactional(readOnly = true)
@@ -215,6 +219,17 @@ public class RuntimeSettingService {
         } catch (Exception ex) {
             return BrokerModel.KOTAK_NEO;
         }
+    }
+
+    /**
+     * The statutory-charges calculator holds one process-wide broker model. Without this wiring the
+     * trading.broker.paper setting was never read and paper P&L silently used a different broker's fees.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void applyConfiguredChargesBroker() {
+        BrokerModel model = activeBrokerModel(PortfolioMode.PAPER);
+        com.trading.scanner.risk.BrokerChargesCalculator.setActiveBroker(model);
+        log.info("[BROKER_MODEL] Statutory charges calculator set to {} (from trading.broker.paper)", model);
     }
 
     @Transactional(readOnly = true)
@@ -291,9 +306,9 @@ public class RuntimeSettingService {
                 String.valueOf(runtimeAutomationProperties.getDefaults().getWebsocketCloseRecheckMinutes()),
                 "INTEGER", "Interval in minutes to recheck websocket closure");
 
-        createdCount += seedIfMissing("retention.candles.days",
-                String.valueOf(runtimeAutomationProperties.getDefaults().getRetentionCandlesDays()),
-                "INTEGER", "Historical retention period for candle records in days");
+        createdCount += seedIfMissing("retention.candles.sessions",
+                String.valueOf(runtimeAutomationProperties.getDefaults().getRetentionCandlesSessions()),
+                "INTEGER", "Historical retention for candles, contexts and baselines, in trading sessions");
 
         createdCount += seedIfMissing("retention.live.signals.days",
                 String.valueOf(runtimeAutomationProperties.getDefaults().getRetentionLiveSignalsDays()),

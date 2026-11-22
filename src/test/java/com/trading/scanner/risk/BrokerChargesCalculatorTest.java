@@ -1,5 +1,7 @@
 package com.trading.scanner.risk;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -7,6 +9,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 
 class BrokerChargesCalculatorTest {
+
+    // These cases assert Angel One brokerage amounts through the process-wide default, so they pin that model
+    // explicitly; the production default is Kotak Neo (Rs 0 brokerage on API orders).
+    @BeforeEach
+    void pinAngelOneModel() {
+        BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.ANGEL_ONE);
+    }
+
+    @AfterEach
+    void restoreDefaultModel() {
+        BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
+    }
 
     @Test
     @DisplayName("Brokerage clamps between minimum Rs. 5.0 and maximum Rs. 20.0 per executed order")
@@ -130,7 +144,7 @@ class BrokerChargesCalculatorTest {
             assertThat(itemizedSell.stampDuty()).isEqualTo(0.0);
             assertThat(itemizedSell.totalCharges()).isCloseTo(sellCharges, within(0.001));
         } finally {
-            BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.ANGEL_ONE);
+            BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
         }
     }
 }

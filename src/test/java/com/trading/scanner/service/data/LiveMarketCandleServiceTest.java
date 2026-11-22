@@ -693,6 +693,41 @@ class LiveMarketCandleServiceTest {
         }
 
         @Test
+        void recomputeOfAPastSessionNeverFeedsTheLiveCache_butTodaysRecomputeDoes() {
+                com.trading.scanner.strategy.cache.StockContextCache cache =
+                                mock(com.trading.scanner.strategy.cache.StockContextCache.class);
+                LiveMarketCandleService withCache = new LiveMarketCandleService(
+                                marketCandleRepository, timeProvider, dailyStockContextService,
+                                intradayIndicatorService, dailyDataStatusService, eventPublisher,
+                                liveMinuteResolutionRepository,
+                                mock(com.trading.scanner.repository.StockPriceRepository.class),
+                                null, cache, null);
+                LocalDate pastDate = LocalDate.of(2026, 8, 17);
+                LocalDate today = LocalDate.of(2026, 11, 20);
+                when(timeProvider.today()).thenReturn(today);
+                when(timeProvider.nowDateTime()).thenReturn(today.atTime(23, 0));
+
+                for (LocalDate date : List.of(pastDate, today)) {
+                        MarketCandle candle = MarketCandle.builder()
+                                        .symbol("ONGC").exchange("NSE").timeframe(CandleTimeframe.ONE_MINUTE)
+                                        .candleTime(date.atTime(9, 15))
+                                        .openPrice(250.0).highPrice(251.0).lowPrice(249.0).closePrice(250.5)
+                                        .volume(1_000L).build();
+                        when(marketCandleRepository
+                                        .findBySymbolAndExchangeAndTimeframeAndCandleTimeBetweenOrderByCandleTimeAsc(
+                                                        eq("ONGC"), eq("NSE"), eq(CandleTimeframe.ONE_MINUTE),
+                                                        eq(date.atTime(9, 15)), eq(date.atTime(15, 29))))
+                                        .thenReturn(List.of(candle));
+                }
+
+                withCache.recomputeDerivedData("ONGC", "NSE", pastDate);
+                verifyNoInteractions(cache);
+
+                withCache.recomputeDerivedData("ONGC", "NSE", today);
+                verify(cache).onCandleFinalized(any(MarketCandle.class));
+        }
+
+        @Test
         void rolloverCompletedMinutes_shouldFinalizeOpenCandleWhenPastMinute() {
                 LocalDateTime tickTime = LocalDateTime.of(2026, 9, 23, 9, 15, 20);
                 LocalDateTime rolloverClockTime = LocalDateTime.of(2026, 9, 23, 9, 16, 5);

@@ -55,6 +55,13 @@ public class PreMarketWorkflowService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.trading.scanner.repository.StockPriceRepository stockPriceRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RuntimeAlertService runtimeAlertService;
+
+    public void setRuntimeAlertService(RuntimeAlertService runtimeAlertService) {
+        this.runtimeAlertService = runtimeAlertService;
+    }
+
     public void setMarketIndexRegistry(com.trading.scanner.service.instrument.MarketIndexRegistry registry) {
         this.marketIndexRegistry = registry;
     }
@@ -366,6 +373,18 @@ public class PreMarketWorkflowService {
                 LocalDate prevDay = tradingCalendar.previousTradingDay(today);
                 VolumeBaselineService.PreCalculationResult baselineResult = volumeBaselineService
                         .preCalculateForCompletedTradingDay(prevDay);
+                if (baselineResult.processedSymbols() == 0) {
+                    // Do not fail the stage: a FAILED stage blocks premarket-live-start and therefore the
+                    // websocket feed and data capture. Trading is blocked per symbol (missing volX rejects).
+                    String warning = "NO VOLUME BASELINES for " + today + ": baseline pre-calculation for " + prevDay
+                            + " processed 0 symbols (" + baselineResult.message()
+                            + "). volX will be missing, so FCHB will reject every candidate today.";
+                    log.error("[BASELINE_EMPTY] {}", warning);
+                    if (runtimeAlertService != null) {
+                        runtimeAlertService.reportEmptyVolumeBaselines(today, prevDay, warning);
+                    }
+                    return "WARNING: " + warning;
+                }
                 return "Morning baselines pre-calculated for " + prevDay + ". processedSymbols="
                         + baselineResult.processedSymbols();
             });

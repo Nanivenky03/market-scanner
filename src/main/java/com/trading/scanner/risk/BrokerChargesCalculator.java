@@ -13,10 +13,12 @@ public final class BrokerChargesCalculator {
         SHOONYA      // Finvasia Shoonya: Rs. 0 Brokerage for life
     }
 
-    private static volatile BrokerModel activeBroker = BrokerModel.ANGEL_ONE;
+    // Execution and statutory friction are modelled on Kotak Neo (Rs 0 API brokerage) by default.
+    // Angel One is the market-data provider only. Startup wires the runtime setting over this default.
+    private static volatile BrokerModel activeBroker = BrokerModel.KOTAK_NEO;
 
     public static void setActiveBroker(BrokerModel model) {
-        activeBroker = (model != null) ? model : BrokerModel.ANGEL_ONE;
+        activeBroker = (model != null) ? model : BrokerModel.KOTAK_NEO;
     }
 
     public static BrokerModel getActiveBroker() {

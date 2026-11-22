@@ -18,5 +18,7 @@ public interface VolumeDailyBaselineRepository extends JpaRepository<VolumeDaily
 
     List<VolumeDailyBaseline> findByTradingDateOrderBySymbolAsc(LocalDate tradingDate);
 
+    long countByTradingDate(LocalDate tradingDate);
+
     long deleteByTradingDateBefore(LocalDate tradingDate);
 }

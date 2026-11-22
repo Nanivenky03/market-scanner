@@ -3,6 +3,8 @@ package com.trading.scanner.repository;
 import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.MarketCandle;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -45,6 +47,18 @@ public interface MarketCandleRepository
                         LocalDateTime to);
 
         long countByTimeframe(CandleTimeframe timeframe);
+
+        @Query("select min(c.candleTime) from MarketCandle c where c.symbol = :symbol and c.timeframe = :timeframe")
+        LocalDateTime findEarliestCandleTime(
+                        @Param("symbol") String symbol,
+                        @Param("timeframe") CandleTimeframe timeframe);
+
+        @Query("select distinct c.symbol from MarketCandle c where c.timeframe = :timeframe "
+                        + "and c.candleTime >= :from and c.candleTime < :to")
+        List<String> findDistinctSymbolsByTimeframeAndCandleTimeRange(
+                        @Param("timeframe") CandleTimeframe timeframe,
+                        @Param("from") LocalDateTime from,
+                        @Param("to") LocalDateTime to);
 
         long countByTimeframeAndSource(
                         CandleTimeframe timeframe,

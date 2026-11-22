@@ -1,6 +1,7 @@
 package com.trading.scanner.service.runtime;
 
 import com.trading.scanner.config.RuntimeAutomationProperties;
+import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.repository.DailyCandleSummaryRepository;
@@ -34,6 +35,7 @@ public class RuntimeHousekeepingService {
         private final RuntimeAutomationProperties runtimeAutomationProperties;
         private final TimeProvider timeProvider;
         private final DailyCandleSummaryRepository dailyCandleSummaryRepository;
+        private final TradingCalendar tradingCalendar;
 
         private volatile HousekeepingResult lastResult;
 
@@ -41,14 +43,14 @@ public class RuntimeHousekeepingService {
         public HousekeepingResult runHousekeeping() {
                 LocalDate today = timeProvider.today();
 
-                LocalDateTime candleCutoff = today.minusDays(
-                                runtimeSettingService
-                                                .retentionCandlesDays())
-                                .atStartOfDay();
-
-                LocalDate contextCutoff = today.minusDays(
-                                runtimeSettingService
-                                                .retentionCandlesDays());
+                // Retention is counted in trading sessions, not calendar days, so a fixed
+                // number of sessions of history always survives regardless of holidays.
+                int retentionSessions = runtimeSettingService.retentionCandlesSessions();
+                LocalDate anchor = tradingCalendar.isTradingDay(today)
+                                ? today
+                                : tradingCalendar.previousTradingDay(today);
+                LocalDate contextCutoff = tradingCalendar.addTradingDays(anchor, -retentionSessions);
+                LocalDateTime candleCutoff = contextCutoff.atStartOfDay();
 
                 LocalDate liveSignalCutoff = today.minusDays(
                                 runtimeSettingService
@@ -95,8 +97,7 @@ public class RuntimeHousekeepingService {
 
                 HousekeepingResult result = new HousekeepingResult(
                                 timeProvider.nowDateTime(),
-                                runtimeSettingService
-                                                .retentionCandlesDays(),
+                                retentionSessions,
                                 runtimeSettingService
                                                 .retentionLiveSignalsDays(),
                                 deletedOneMinute,
@@ -157,7 +158,7 @@ public class RuntimeHousekeepingService {
 
         public record HousekeepingResult(
                         LocalDateTime executedAt,
-                        int candleRetentionDays,
+                        int candleRetentionSessions,
                         int liveSignalRetentionDays,
                         long deletedOneMinuteCandles,
                         long deletedFiveMinuteCandles,

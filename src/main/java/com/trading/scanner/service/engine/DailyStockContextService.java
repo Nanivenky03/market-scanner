@@ -186,7 +186,8 @@ public class DailyStockContextService {
 
                 dailyStockContextRepository.save(context);
 
-                if (stockContextCache != null) {
+                // Contexts built for past sessions (historical backfill) must not replace today's live context.
+                if (stockContextCache != null && tradingDate.equals(timeProvider.today())) {
                         stockContextCache.updateDailyContext(context);
                 }
         }

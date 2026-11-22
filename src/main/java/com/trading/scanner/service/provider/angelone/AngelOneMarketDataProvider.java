@@ -38,6 +38,8 @@ public class AngelOneMarketDataProvider
 
         private static final String INTERVAL_ONE_MINUTE = "ONE_MINUTE";
 
+        private static final com.fasterxml.jackson.databind.ObjectMapper RAW_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
         private static final DateTimeFormatter REQUEST_DATE_TIME_FORMAT = DateTimeFormatter.ofPattern(
                         "yyyy-MM-dd HH:mm");
 
@@ -276,13 +278,91 @@ public class AngelOneMarketDataProvider
                                                                 + to);
                         }
 
+                        return parseOneMinuteRows(
+                                        response.data(), instrument, normalizedSymbol, from, to);
+
+                } catch (ProviderException ex) {
+                        throw ex;
+                } catch (Exception ex) {
+                        throw new ProviderException(
+                                        "Failed to fetch Angel One 1-minute candles for symbol="
+                                                        + normalizedSymbol,
+                                        ex);
+                }
+        }
+
+        /** One-minute candles for a single session plus the raw response payload, kept for debugging. */
+        public record HistoricalOneMinuteFetch(List<MarketCandle> candles, String rawResponseJson) {
+        }
+
+        /**
+         * Historical backfill fetch for exactly one trading session. Unlike the live/EOD fetch, an empty
+         * response is returned as an empty result (holiday, suspended or unlisted instrument) instead of
+         * throwing, and the raw response is returned so it can be archived verbatim.
+         */
+        public HistoricalOneMinuteFetch fetchHistoricalOneMinuteForBackfill(
+                        String symbol,
+                        LocalDate date) {
+
+                requireProviderEnabled();
+                validateDateRange(symbol, date, date);
+
+                String normalizedSymbol = normalizeSymbol(symbol);
+                InstrumentMaster instrument = getRequiredInstrument(normalizedSymbol);
+
+                try {
+                        AngelOneAuthDtos.AngelOneSessionTokens sessionTokens = angelOneSessionService
+                                        .createSessionTokens();
+
+                        AngelOneMarketDtos.AngelOneCandleResponse response = callHistoricalCandleApi(
+                                        sessionTokens.jwtToken(),
+                                        instrument.getExchange(),
+                                        instrument.getBrokerToken(),
+                                        INTERVAL_ONE_MINUTE,
+                                        date,
+                                        date);
+
+                        validateSuccessfulResponse(response, "historical one-minute");
+
+                        String raw = RAW_JSON.writeValueAsString(
+                                        response.data() == null ? List.of() : response.data());
+
+                        if (response.data() == null || response.data().isEmpty()) {
+                                return new HistoricalOneMinuteFetch(List.of(), raw);
+                        }
+
+                        return new HistoricalOneMinuteFetch(
+                                        parseOneMinuteRows(response.data(), instrument, normalizedSymbol, date, date),
+                                        raw);
+
+                } catch (ProviderException ex) {
+                        throw ex;
+                } catch (Exception ex) {
+                        throw new ProviderException(
+                                        "Failed to fetch Angel One historical 1-minute candles for symbol="
+                                                        + normalizedSymbol + ", date=" + date,
+                                        ex);
+                }
+        }
+
+        /**
+         * Parses Angel One one-minute rows exactly as delivered (only the existing OHLC sanity clamp applies).
+         * Shared by the live/EOD fetch and the historical backfill so both read candles identically.
+         */
+        private List<MarketCandle> parseOneMinuteRows(
+                        List<List<Object>> rows,
+                        InstrumentMaster instrument,
+                        String normalizedSymbol,
+                        LocalDate from,
+                        LocalDate to) {
+
                         List<MarketCandle> candles = new ArrayList<>();
 
                         Set<LocalDateTime> seenTimes = new HashSet<>();
 
                         int rowIndex = 0;
 
-                        for (List<Object> row : response.data()) {
+                        for (List<Object> row : rows) {
                                 if (row == null || row.size() < 6) {
                                         throw malformedRow(
                                                         "historical one-minute",
@@ -391,15 +471,6 @@ public class AngelOneMarketDataProvider
                                         .sorted(Comparator.comparing(
                                                         MarketCandle::getCandleTime))
                                         .toList();
-
-                } catch (ProviderException ex) {
-                        throw ex;
-                } catch (Exception ex) {
-                        throw new ProviderException(
-                                        "Failed to fetch Angel One 1-minute candles for symbol="
-                                                        + normalizedSymbol,
-                                        ex);
-                }
         }
 
         private void requireProviderEnabled() {

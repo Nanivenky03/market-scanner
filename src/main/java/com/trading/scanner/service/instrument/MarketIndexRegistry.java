@@ -67,6 +67,11 @@ public class MarketIndexRegistry {
         register(new IndexDefinition("NIFTY SMLCAP 100", "99926032", "NIFTY SMLCAP 100", IndexCategory.BENCHMARK, "NIFTY SMALLCAP 100"));
         register(new IndexDefinition("MIDCPNIFTY", "99926074", "NIFTY MID SELECT", IndexCategory.BENCHMARK, "NIFTY MID SELECT"));
 
+        // Nifty 50 ETF used as the volume-bearing proxy for the Nifty 50 (the spot index carries zero volume,
+        // so it can never yield a real VWAP). It is an ordinary NSE equity (token 10576) and is registered
+        // here only so it is subscribed, persisted and reconciled like the other benchmark series.
+        register(new IndexDefinition("NIFTYBEES", "10576", "NIFTYBEES-EQ", IndexCategory.BENCHMARK));
+
         // 2. Core Sectoral Indices
         register(new IndexDefinition("NIFTY BANK", "99926009", "Nifty Bank", IndexCategory.SECTORAL, "BANKNIFTY"));
         register(new IndexDefinition("NIFTY IT", "99926008", "Nifty IT", IndexCategory.SECTORAL, "NIFTYIT"));

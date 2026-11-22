@@ -17,10 +17,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class RiskEngineTest {
 
+    @org.junit.jupiter.api.AfterEach
+    void restoreDefaultBrokerModel() {
+        BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
+    }
+
+
     private RiskEngine riskEngine;
 
     @BeforeEach
     void setUp() {
+        // Friction expectations in this class are Angel One based (Rs 20/order); pin it explicitly.
+        BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.ANGEL_ONE);
         riskEngine = new RiskEngine();
         riskEngine.initializePortfolio(PortfolioMode.PAPER, 30000.0, LocalDate.of(2026, 10, 11));
         riskEngine.initializePortfolio(PortfolioMode.LIVE, 30000.0, LocalDate.of(2026, 10, 11));

@@ -51,7 +51,7 @@ class RuntimeSettingServiceTest {
         defaultProperties.setHousekeepingTime("05:30");
         defaultProperties.setWebsocketIdleCloseMinutes(10);
         defaultProperties.setWebsocketCloseRecheckMinutes(10);
-        defaultProperties.setRetentionCandlesDays(60);
+        defaultProperties.setRetentionCandlesSessions(150);
         defaultProperties.setRetentionLiveSignalsDays(60);
 
         liveProperties = new RuntimeAutomationProperties.Live();
@@ -96,27 +96,27 @@ class RuntimeSettingServiceTest {
 
     @Test
     void getInt_shouldReturnValueFromDatabaseWhenPresent() {
-        when(repository.findByNameAndIsActiveTrue("retention.candles.days"))
+        when(repository.findByNameAndIsActiveTrue("retention.candles.sessions"))
                 .thenReturn(Optional.of(RuntimeSetting.builder()
-                        .name("retention.candles.days")
-                        .value("60")
+                        .name("retention.candles.sessions")
+                        .value("200")
                         .valueType("INTEGER")
                         .isActive(true)
                         .build()));
 
-        int result = service.retentionCandlesDays();
+        int result = service.retentionCandlesSessions();
 
-        assertEquals(60, result);
+        assertEquals(200, result);
     }
 
     @Test
     void getInt_shouldFallbackToPropertiesWhenMissingInDatabase() {
-        when(repository.findByNameAndIsActiveTrue("retention.candles.days"))
+        when(repository.findByNameAndIsActiveTrue("retention.candles.sessions"))
                 .thenReturn(Optional.empty());
 
-        int result = service.retentionCandlesDays();
+        int result = service.retentionCandlesSessions();
 
-        assertEquals(60, result);
+        assertEquals(150, result);
     }
 
     @Test
@@ -257,5 +257,30 @@ class RuntimeSettingServiceTest {
         assertEquals("0 0 7 * * MON-FRI", service.morningMaintenanceCron());
         assertEquals("0 10,20,30,40,50 8 * * MON-FRI", service.preMarketCatchupCron());
         assertEquals("5 * 9-15 * * MON-FRI", service.minuteRolloverCron());
+    }
+
+    @Test
+    void applyConfiguredChargesBroker_wiresThePaperBrokerSettingIntoTheChargesCalculator() {
+        com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel before =
+                com.trading.scanner.risk.BrokerChargesCalculator.getActiveBroker();
+        try {
+            when(repository.findByNameAndIsActiveTrue("trading.broker.paper"))
+                    .thenReturn(Optional.of(RuntimeSetting.builder()
+                            .name("trading.broker.paper").value("ANGEL_ONE").valueType("STRING").isActive(true).build()));
+
+            service.applyConfiguredChargesBroker();
+
+            assertEquals(com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel.ANGEL_ONE,
+                    com.trading.scanner.risk.BrokerChargesCalculator.getActiveBroker());
+
+            when(repository.findByNameAndIsActiveTrue("trading.broker.paper")).thenReturn(Optional.empty());
+            service.applyConfiguredChargesBroker();
+
+            assertEquals(com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel.KOTAK_NEO,
+                    com.trading.scanner.risk.BrokerChargesCalculator.getActiveBroker(),
+                    "with no setting the default execution broker is Kotak Neo");
+        } finally {
+            com.trading.scanner.risk.BrokerChargesCalculator.setActiveBroker(before);
+        }
     }
 }

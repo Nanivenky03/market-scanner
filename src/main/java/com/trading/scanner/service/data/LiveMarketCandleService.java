@@ -876,7 +876,8 @@ public class LiveMarketCandleService {
                                 CandleTimeframe.FIFTEEN_MINUTE,
                                 15);
 
-                if (stockContextCache != null && !candles.isEmpty()) {
+                // Only today's recompute may touch the live cache; a historical date would clear it.
+                if (stockContextCache != null && tradingDate.equals(timeProvider.today())) {
                         for (MarketCandle c : candles) {
                                 stockContextCache.onCandleFinalized(c);
                         }
@@ -951,6 +952,12 @@ public class LiveMarketCandleService {
                 }
 
                 MarketCandle calculated = applyCommonIndicators(derived);
+
+                // A recompute/repair of already-closed candles must never feed the live cache or fire live
+                // strategy events; only the live finalize path (emitSignal=true) does.
+                if (!emitSignal) {
+                        return;
+                }
 
                 if (stockContextCache != null && calculated != null) {
                         stockContextCache.onCandleFinalized(calculated);

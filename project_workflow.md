@@ -33,8 +33,9 @@ This document is the authoritative developer, tester, and architecture guide for
       - Automated `isTradable` Promotion Gate: Step 4 (`premarket-universe-sync`) of `PreMarketWorkflowService` automatically promotes active stocks to `isTradable = true` when previous-day EOD is complete and historical daily bars in `stock_prices` $\ge 20$. Strictly protects all sector and benchmark indices as `isTradable = false`.
       - Automated Post-Market PostgreSQL Backup (`DatabaseBackupService`): Executes compressed binary dumps (`pg_dump -Fc`) to `DB_BACKUP_DIR` (`backups/mithron_prod_YYYY-MM-DD.dump`) upon successful completion of the daily EOD reconciliation workflow. Tracked via workflow stage `POSTMARKET_DATABASE_BACKUP` (`postmarket-database-backup`). Automatically purges older dumps beyond 10-file rolling retention. Exposed via admin REST API `POST /api/v1/admin/backup/create`.
       - Dynamic Dual-Broker Runtime Control: Independent `trading.broker.live` and `trading.broker.paper` keys in `runtime_setting` (defaulting to `'KOTAK_NEO'`).
-      - Extended 60-Day Data Retention Window: Extended `retention.candles.days` and `retention.live.signals.days` from 30 to 60 days.
+      - Data retention: 60 calendar days until v2.5.9. From v2.6.0 retention is counted in trading sessions (`retention.candles.sessions`=150, Flyway V038); `retention.live.signals.days` is unchanged. Purging runs in the 07:00 `premarket-housekeeping` stage.
       - Simulation Capital Seeding: Configured `simulation.initial.capital` = `'50000.00'` in `runtime_setting`.
+    * V2.6.0: Evidence Rebuild (live volX from cache candles with no fallback, session-based retention, historical backfill service, replay through the live conductor, Kotak default charges, NIFTYBEES benchmark series). See `evidence_log.md`.
     * V2.5.6: Multi-Timeframe TWAP & Day Open Macro Engine, Graceful Backfill Sanitization & Minimalist Autonomous Console UI:
       - Multi-Timeframe In-Memory Baseline Engine: `MasterMarketFilterService` and `StockContextCache` calculate and maintain running Session TWAP (sum(High + Low + Close)/3 / N) and 09:15 Session Day Open for zero-volume spot indices across multiple timeframes (1M, 5M, 15M). Evaluates bullish regime when Close > TWAP and Close >= Day Open, eliminating all null VWAP errors on NIFTY 50 and sector benchmarks. Multi-timeframe strategies subscribe autonomously via marketState.forTimeframe(tf).
       - Resilient Historical Backfill Sanitization & As-Is Persistence: `AngelOneMarketDataProvider` sanitizes post-closing settlement adjustments and rounding discrepancies on index daily bars (high = max(high, close), low = min(low, close)) instead of throwing batch-crashing fatal exceptions. `EodHistoricalBackfillService` wraps individual daily bar persistence in isolated exception handlers, ensuring valid historical days are permanently saved to stock_prices and eliminating infinite retry loops.
@@ -372,7 +373,7 @@ Strategies operate as **pure decision functions**, decoupled from application ti
   1. `firstCandleRangePct >= 0.15%` and `<= 3.0%` (guards against dead opens and unmanageably wide stops).
   2. `firstCandleBullish == true` (positive opening sentiment required).
   3. All 5 1M candles present and finalized in cache.
-  4. `firstCandleTurnover >= ₹1,00,00,000` (₹1 Crore): $\text{Volume} \times \frac{H+L+C}{3} \ge 10,000,000$. Replaces rigid share-count floor; price-agnostic liquidity proof.
+  4. `firstCandleTurnover >= ₹25,00,000` (₹25 lakh): `firstCandleVolume * firstCandleClose`. [CORRECTED 2026-11-22: this section previously said ₹1 Crore; the code uses ₹25 lakh.]
 - **Two-Factor Volume Model (Institutional Normalization):**
   - **Factor A (Mandatory Hard Gate):** Time-normalized $\text{VOL\_X} \ge 1.8\times$ (relative to 20-day historical baseline curve for this exact 5M interval). If fails $\to$ **RED** (Disqualified).
   - **Factor B (Time-Weighted Quality Gate — YELLOW Factor Only):**
@@ -976,7 +977,7 @@ Direct empirical replay executed across all 22 trading sessions (2026-10-06 to 2
     - Automated `isTradable` Promotion Gate: Step 4 (`premarket-universe-sync`) of `PreMarketWorkflowService` automatically promotes active stocks to `isTradable = true` when previous-day EOD is complete and historical daily bars in `stock_prices` $\ge 20$. Strictly protects all sector and benchmark indices as `isTradable = false`.
     - Automated Post-Market PostgreSQL Database Backup (`DatabaseBackupService`): Executes compressed binary dumps (`pg_dump -Fc`) to `DB_BACKUP_DIR` (`backups/mithron_prod_YYYY-MM-DD.dump`) upon successful completion of the daily EOD reconciliation workflow. Tracked via workflow stage `POSTMARKET_DATABASE_BACKUP` (`postmarket-database-backup`). Automatically purges older dumps beyond 10-file rolling retention. Exposed via admin REST API `POST /api/v1/admin/backup/create`.
     - Dynamic Dual-Broker Runtime Control: Independent `trading.broker.live` and `trading.broker.paper` keys in `runtime_setting` (defaulting to `'KOTAK_NEO'`).
-    - Extended 60-Day Data Retention Window: Extended `retention.candles.days` and `retention.live.signals.days` from 30 to 60 days.
+    - Data retention is counted in trading sessions from v2.6.0 (see the V2.4.9 note above).
     - Baseline Simulation Capital Seeding: Configured `simulation.initial.capital` = `'50000.00'` in `runtime_setting`.
     - Verified State: **481 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
 - [x] **Version 2.4: Live Data Simulation Order Engine (Production Paper Trading Conductor)** `[COMPLETED & EMPIRICALLY VALIDATED]`

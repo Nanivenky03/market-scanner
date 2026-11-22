@@ -70,4 +70,14 @@ class MarketIndexRegistryTest {
         assertFalse(registry.isRegisteredIndex("NON_EXISTENT_INDEX"));
         assertFalse(registry.getByCanonicalSymbol("NON_EXISTENT_INDEX").isPresent());
     }
+
+    @Test
+    void shouldRegisterNiftyBeesAsVolumeBearingBenchmarkProxy() {
+        assertTrue(registry.isRegisteredIndex("NIFTYBEES"));
+        MarketIndexRegistry.IndexDefinition def = registry.getByCanonicalSymbol("NIFTYBEES").orElseThrow();
+        assertEquals("10576", def.brokerToken());
+        assertEquals("NSE", def.exchange());
+        assertEquals(MarketIndexRegistry.IndexCategory.BENCHMARK, def.category());
+        assertEquals("NIFTYBEES", registry.getByToken("10576").orElseThrow().canonicalSymbol());
+    }
 }

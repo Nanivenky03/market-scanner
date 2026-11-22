@@ -6,7 +6,7 @@ import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.model.StockSectorClassification;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
-import com.trading.scanner.service.engine.LiveVolumeMetricsService;
+import com.trading.scanner.service.engine.VolumeBaselineService;
 import com.trading.scanner.service.instrument.MarketIndexRegistry;
 import com.trading.scanner.service.instrument.SectorClassificationSyncService;
 import com.trading.scanner.strategy.model.StockContext;
@@ -19,6 +19,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -39,6 +40,7 @@ public class StockContextCache {
     private static final int MAX_1M_WINDOW = 30;
     private static final int MAX_5M_WINDOW = 75;
     private static final int MAX_15M_WINDOW = 25;
+    private static final int SESSION_MINUTES = 375;
 
     private final MarketCandleRepository marketCandleRepository;
     private final DailyStockContextRepository dailyStockContextRepository;
@@ -46,10 +48,10 @@ public class StockContextCache {
     private final MarketIndexRegistry marketIndexRegistry;
 
     @Autowired(required = false)
-    private LiveVolumeMetricsService liveVolumeMetricsService;
+    private VolumeBaselineService volumeBaselineService;
 
-    public void setLiveVolumeMetricsService(LiveVolumeMetricsService liveVolumeMetricsService) {
-        this.liveVolumeMetricsService = liveVolumeMetricsService;
+    public void setVolumeBaselineService(VolumeBaselineService volumeBaselineService) {
+        this.volumeBaselineService = volumeBaselineService;
     }
 
     private final Map<String, SymbolCacheEntry> cache = new ConcurrentHashMap<>();
@@ -238,27 +240,24 @@ public class StockContextCache {
             }
         }
 
-        // Time-normalized relative volume (VolX) calculation
+        // Time-normalized relative volume (VolX): today's cumulative volume from this cache's own finalized 1M
+        // candles divided by the stored 20-day baseline for the same session minute. There is deliberately no
+        // fallback heuristic or default: a missing baseline or candle leaves volX null and Gate 2 rejects.
         Double volX = null;
-        if (liveVolumeMetricsService != null && latest1m != null && latest1m.getCandleTime() != null) {
-            try {
-                com.trading.scanner.service.engine.VolumeBaselineService.VolumeMetrics metrics =
-                        liveVolumeMetricsService.currentMetrics(symbol, exchange, tradingDate, latest1m.getCandleTime());
-                if (metrics != null && metrics.volX() != null) {
-                    volX = metrics.volX();
+        if (volumeBaselineService != null && !c1m.isEmpty()) {
+            LocalDateTime asOf = !c5m.isEmpty()
+                    ? c5m.get(c5m.size() - 1).getCandleTime().plusMinutes(4)
+                    : c1m.get(c1m.size() - 1).getCandleTime();
+            Integer sessionMinute = volumeBaselineService.sessionMinute(asOf);
+            if (sessionMinute != null) {
+                try {
+                    VolumeBaselineService.VolumeMetrics metrics = volumeBaselineService.calculateCurrentVolumeMetrics(
+                            symbol, exchange, tradingDate, asOf, entry.cumulativeVolumeThrough(sessionMinute));
+                    volX = metrics != null ? metrics.volX() : null;
+                } catch (Exception ex) {
+                    log.warn("[VOLX_UNAVAILABLE] symbol={} asOf={}: {}", symbol, asOf, ex.getMessage());
                 }
-            } catch (Exception ex) {
-                log.debug("VolX calculation fallback for {}: {}", symbol, ex.getMessage());
             }
-        }
-        if (volX == null && !c5m.isEmpty() && daily != null && daily.getFirstCandleVolume() != null && daily.getFirstCandleVolume() > 0) {
-            MarketCandle cur5m = c5m.get(c5m.size() - 1);
-            if (cur5m != null && cur5m.getVolume() != null) {
-                volX = (cur5m.getVolume() * 3.0) / daily.getFirstCandleVolume();
-            }
-        }
-        if (volX == null) {
-            volX = 2.5; // Institutional baseline default for paper execution
         }
 
         // Sector Context Lookup
@@ -367,8 +366,32 @@ public class StockContextCache {
             this.exchange = exchange;
         }
 
+        // Volume per session minute (09:15 = 0) for the whole day. The 1M window above is only 30 candles,
+        // which cannot yield a cumulative volume once the session passes 09:45.
+        private final AtomicLongArray sessionMinuteVolume = new AtomicLongArray(SESSION_MINUTES);
+
+        private void recordSessionVolume(MarketCandle candle) {
+            if (candle.getCandleTime() == null || candle.getVolume() == null || candle.getVolume() < 0) {
+                return;
+            }
+            int minute = (int) java.time.Duration.between(
+                    candle.getCandleTime().toLocalDate().atTime(LocalTime.of(9, 15)), candle.getCandleTime()).toMinutes();
+            if (minute >= 0 && minute < SESSION_MINUTES) {
+                sessionMinuteVolume.set(minute, candle.getVolume());
+            }
+        }
+
+        long cumulativeVolumeThrough(int sessionMinute) {
+            long total = 0L;
+            for (int i = 0; i <= Math.min(sessionMinute, SESSION_MINUTES - 1); i++) {
+                total += sessionMinuteVolume.get(i);
+            }
+            return total;
+        }
+
         void addCandle(MarketCandle candle) {
             if (candle.getTimeframe() == CandleTimeframe.ONE_MINUTE) {
+                recordSessionVolume(candle);
                 updateRef(c1mRef, candle, MAX_1M_WINDOW);
             } else if (candle.getTimeframe() == CandleTimeframe.FIVE_MINUTE) {
                 updateRef(c5mRef, candle, MAX_5M_WINDOW);
@@ -382,6 +405,7 @@ public class StockContextCache {
                 return;
             }
             if (timeframe == CandleTimeframe.ONE_MINUTE) {
+                candles.forEach(this::recordSessionVolume);
                 bulkUpdateRef(c1mRef, candles, MAX_1M_WINDOW);
             } else if (timeframe == CandleTimeframe.FIVE_MINUTE) {
                 bulkUpdateRef(c5mRef, candles, MAX_5M_WINDOW);

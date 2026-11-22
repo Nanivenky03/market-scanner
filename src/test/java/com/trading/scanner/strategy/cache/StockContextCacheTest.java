@@ -5,6 +5,7 @@ import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.MarketCandle;
 import com.trading.scanner.repository.DailyStockContextRepository;
 import com.trading.scanner.repository.MarketCandleRepository;
+import com.trading.scanner.service.engine.VolumeBaselineService;
 import com.trading.scanner.strategy.model.StockContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -193,5 +194,61 @@ class StockContextCacheTest {
         assertEquals(25250.0, ctx.latestNiftyCandle().getClosePrice());
         assertNotNull(ctx.niftyVwapDistancePercent());
         assertEquals(1.0, ctx.niftyVwapDistancePercent(), 0.001);
+    }
+
+    private MarketCandle candle(CandleTimeframe tf, int hour, int minute, long volume) {
+        return MarketCandle.builder()
+                .symbol("INFY").exchange("NSE").timeframe(tf)
+                .candleTime(today.atTime(hour, minute))
+                .openPrice(1490.0).highPrice(1500.0).lowPrice(1485.0).closePrice(1495.0)
+                .volume(volume).build();
+    }
+
+    @Test
+    void volX_isCumulativeVolumeOverStoredBaseline_forTheLatestFiveMinuteBoundary() {
+        VolumeBaselineService baselines = org.mockito.Mockito.mock(VolumeBaselineService.class);
+        org.mockito.Mockito.when(baselines.sessionMinute(today.atTime(9, 34))).thenReturn(19);
+        org.mockito.Mockito.when(baselines.calculateCurrentVolumeMetrics(
+                org.mockito.ArgumentMatchers.eq("INFY"), org.mockito.ArgumentMatchers.eq("NSE"),
+                org.mockito.ArgumentMatchers.eq(today), org.mockito.ArgumentMatchers.eq(today.atTime(9, 34)),
+                org.mockito.ArgumentMatchers.eq(1_000L)))
+                .thenReturn(new VolumeBaselineService.VolumeMetrics(1_000L, 19, 500L, 2.0));
+        cache.setVolumeBaselineService(baselines);
+
+        // Nothing before 09:15 and nothing after the 5M boundary may count; 20 one-minute candles of 50 each.
+        cache.onCandleFinalized(candle(CandleTimeframe.ONE_MINUTE, 9, 8, 7_777L));
+        for (int m = 15; m <= 34; m++) {
+            cache.onCandleFinalized(candle(CandleTimeframe.ONE_MINUTE, 9, m, 50L));
+        }
+        cache.onCandleFinalized(candle(CandleTimeframe.ONE_MINUTE, 9, 35, 9_999L));
+        cache.onCandleFinalized(candle(CandleTimeframe.FIVE_MINUTE, 9, 30, 250L));
+
+        StockContext ctx = cache.getStockContext("INFY", "NSE", today).orElseThrow();
+        assertEquals(2.0, ctx.volX());
+    }
+
+    @Test
+    void volX_isNullWhenNoBaselineExists_neverDefaultedTo2_5() {
+        VolumeBaselineService baselines = org.mockito.Mockito.mock(VolumeBaselineService.class);
+        org.mockito.Mockito.when(baselines.sessionMinute(today.atTime(9, 34))).thenReturn(19);
+        org.mockito.Mockito.when(baselines.calculateCurrentVolumeMetrics(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new VolumeBaselineService.VolumeMetrics(100L, 19, null, null));
+        cache.setVolumeBaselineService(baselines);
+
+        cache.onCandleFinalized(candle(CandleTimeframe.ONE_MINUTE, 9, 34, 100L));
+        cache.onCandleFinalized(candle(CandleTimeframe.FIVE_MINUTE, 9, 30, 100L));
+
+        assertNull(cache.getStockContext("INFY", "NSE", today).orElseThrow().volX());
+    }
+
+    @Test
+    void volX_isNullWhenBaselineServiceIsUnavailable() {
+        cache.onCandleFinalized(candle(CandleTimeframe.ONE_MINUTE, 9, 34, 100L));
+        cache.onCandleFinalized(candle(CandleTimeframe.FIVE_MINUTE, 9, 30, 100L));
+
+        assertNull(cache.getStockContext("INFY", "NSE", today).orElseThrow().volX());
     }
 }

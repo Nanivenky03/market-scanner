@@ -31,12 +31,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class FchbRealDataScenarioIntegrationTest {
 
+        @org.junit.jupiter.api.AfterEach
+        void restoreDefaultBrokerModel() {
+                com.trading.scanner.risk.BrokerChargesCalculator.setActiveBroker(com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
+        }
+
+
         private FchbStrategy strategy;
         private FchbPositionHandler positionHandler;
         private RiskEngine riskEngine;
 
         @BeforeEach
         void setUp() {
+                // Friction expectations here are Angel One based (Rs 20/order); pin it explicitly.
+                com.trading.scanner.risk.BrokerChargesCalculator.setActiveBroker(com.trading.scanner.risk.BrokerChargesCalculator.BrokerModel.ANGEL_ONE);
                 strategy = new FchbStrategy();
                 positionHandler = new FchbPositionHandler();
                 riskEngine = new RiskEngine();

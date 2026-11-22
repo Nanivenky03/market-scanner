@@ -1,5 +1,6 @@
 package com.trading.scanner.service.runtime;
 
+import com.trading.scanner.calendar.TradingCalendar;
 import com.trading.scanner.config.RuntimeAutomationProperties;
 import com.trading.scanner.config.TimeProvider;
 import com.trading.scanner.model.CandleTimeframe;
@@ -55,6 +56,9 @@ class RuntimeHousekeepingServiceTest {
         @Mock
         private TimeProvider timeProvider;
 
+        @Mock
+        private TradingCalendar tradingCalendar;
+
         @InjectMocks
         private RuntimeHousekeepingService service;
 
@@ -66,7 +70,9 @@ class RuntimeHousekeepingServiceTest {
                 when(timeProvider.today()).thenReturn(today);
                 when(timeProvider.nowDateTime())
                                 .thenReturn(LocalDateTime.of(2026, 6, 24, 5, 30));
-                when(runtimeSettingService.retentionCandlesDays()).thenReturn(30);
+                when(runtimeSettingService.retentionCandlesSessions()).thenReturn(150);
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+                when(tradingCalendar.addTradingDays(today, -150)).thenReturn(cutoff);
                 when(runtimeSettingService.retentionLiveSignalsDays()).thenReturn(30);
 
                 when(marketCandleRepository.deleteByTimeframeAndCandleTimeBefore(
@@ -97,7 +103,7 @@ class RuntimeHousekeepingServiceTest {
 
                 RuntimeHousekeepingService.HousekeepingResult result = service.runHousekeeping();
 
-                assertEquals(30, result.candleRetentionDays());
+                assertEquals(150, result.candleRetentionSessions());
                 assertEquals(30, result.liveSignalRetentionDays());
                 assertEquals(100L, result.deletedOneMinuteCandles());
                 assertEquals(20L, result.deletedFiveMinuteCandles());
@@ -109,5 +115,28 @@ class RuntimeHousekeepingServiceTest {
                 assertEquals(9L, result.deletedVolumeDailyBaselines());
                 assertEquals(18L, result.deletedVolumeTimeWindowBaselines());
                 assertEquals(5, result.clearedFrameBufferEntries());
+        }
+
+        @Test
+        void runHousekeeping_onANonTradingDayCountsSessionsBackFromThePreviousSession() {
+                LocalDate saturday = LocalDate.of(2026, 11, 21);
+                LocalDate friday = LocalDate.of(2026, 11, 20);
+                LocalDate cutoff = LocalDate.of(2026, 4, 17);
+
+                when(timeProvider.today()).thenReturn(saturday);
+                when(timeProvider.nowDateTime()).thenReturn(saturday.atTime(7, 0));
+                when(runtimeSettingService.retentionCandlesSessions()).thenReturn(150);
+                when(runtimeSettingService.retentionLiveSignalsDays()).thenReturn(60);
+                when(tradingCalendar.isTradingDay(saturday)).thenReturn(false);
+                when(tradingCalendar.previousTradingDay(saturday)).thenReturn(friday);
+                when(tradingCalendar.addTradingDays(friday, -150)).thenReturn(cutoff);
+                when(webSocketFrameCaptureService.clear())
+                                .thenReturn(new WebSocketFrameCaptureService.ClearResult(0, "cleared"));
+
+                service.runHousekeeping();
+
+                org.mockito.Mockito.verify(marketCandleRepository).deleteByTimeframeAndCandleTimeBefore(
+                                CandleTimeframe.ONE_MINUTE, cutoff.atStartOfDay());
+                org.mockito.Mockito.verify(volumeTimeWindowBaselineRepository).deleteByTradingDateBefore(cutoff);
         }
 }

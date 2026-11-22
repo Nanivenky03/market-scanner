@@ -68,7 +68,7 @@ class FchbDatabasePerformanceReplayTest {
         LocalTime entryCutoff = LocalTime.of(10, 15);
         FchbStrategy strategy = new FchbStrategy();
         FchbPositionHandler positionHandler = new FchbPositionHandler();
-        StrategyPerformanceReplayRunner runner = new StrategyPerformanceReplayRunner(initialCapital, entryCutoff);
+        StrategyPerformanceReplayRunner runner = new StrategyPerformanceReplayRunner(initialCapital);
 
         List<DailyReplayReport> dailyReports = new ArrayList<>();
         double currentCapital = initialCapital;
@@ -199,7 +199,7 @@ class FchbDatabasePerformanceReplayTest {
             this.entryCutoff = entryCutoff;
             this.currentCapital = initialCapital;
             this.peakCapital = initialCapital;
-            this.runner = new StrategyPerformanceReplayRunner(initialCapital, entryCutoff);
+            this.runner = new StrategyPerformanceReplayRunner(initialCapital);
             this.positionHandler = new FchbPositionHandler();
             this.strategy = new FchbStrategy() {
                 @Override

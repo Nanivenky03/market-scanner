@@ -316,5 +316,15 @@ When restarting the production application via `Restart-Mithron.bat`:
   `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c "C:\Users\venka\OneDrive\Desktop\Restart-Mithron.bat"' }`
   or have the user run `Restart-Mithron.bat` directly on the host laptop as Administrator.
 
+29. Documentation is part of the change
+Every release updates the md files with what was found, fixed or decided (`evidence_log.md` is the dated record; `mithron.md`, `mithron_strategies.md` and `project_workflow.md` are the design). Statements that became wrong are corrected in the same change. Facts need an evidence source; never document a plausible assumption as a fact.
 
+30. Replay is the production code
+The historical replay must drive the same classes live uses. Do not duplicate or reimplement strategy, volX, market-state, entry, exit or accounting logic in tests. A live/replay difference is fixed once, in production code.
+
+31. Historical and derived data
+Raw candles and daily bars are stored as delivered and are independent: neither is used to correct or validate the other. Never fabricate a candle for a quiet minute; thin symbols legitimately have fewer than 375 candles per day. Existing rows are never overwritten by a backfill. A job that finds nothing to process must raise an alert but must not block the feed or the pipeline; trading stays blocked per symbol through fail-closed gates.
+
+32. Testing command
+Use `mvn clean test` for every verification run. Tests that assert broker-specific fees must pin the broker model explicitly instead of relying on the process default (Kotak Neo).
 

@@ -448,6 +448,109 @@ class PreMarketWorkflowServiceTest {
         }
 
         @Test
+        void runPreMarketDataPipeline_whenNoBaselinesProcessed_staysSuccessfulButRaisesAlert() {
+                when(tradingCalendar.isTradingDay(today)).thenReturn(true);
+                when(tradingCalendar.previousTradingDay(today)).thenReturn(prevDay);
+                when(workflowStatusService.isSuccessfulActiveDailyWorkflow(
+                                WorkflowStatusService.TRADING_DAY_INIT,
+                                WorkflowStatusService.PREMARKET_GROUP,
+                                today.toString())).thenReturn(true);
+                when(workflowStatusService.isSuccessfulActiveDailyWorkflow(
+                                WorkflowStatusService.PREMARKET_HOUSEKEEPING,
+                                WorkflowStatusService.PREMARKET_GROUP,
+                                today.toString())).thenReturn(true);
+
+                UUID catId = UUID.randomUUID();
+                UUID uniId = UUID.randomUUID();
+                UUID refId = UUID.randomUUID();
+
+                when(workflowStatusService.prepareForDaily(
+                                eq(WorkflowStatusService.PREMARKET_CATALOG_SYNC),
+                                eq(WorkflowStatusService.PREMARKET_GROUP),
+                                eq(today.toString()),
+                                isNull()))
+                                .thenReturn(workflow(catId, WorkflowStatusService.PREMARKET_CATALOG_SYNC,
+                                                WorkflowStatus.Status.READY));
+
+                when(workflowStatusService.prepareForDaily(
+                                eq(WorkflowStatusService.PREMARKET_UNIVERSE_SYNC),
+                                eq(WorkflowStatusService.PREMARKET_GROUP),
+                                eq(today.toString()),
+                                eq(catId)))
+                                .thenReturn(workflow(uniId, WorkflowStatusService.PREMARKET_UNIVERSE_SYNC,
+                                                WorkflowStatus.Status.READY));
+
+                when(workflowStatusService.prepareForDaily(
+                                eq(WorkflowStatusService.PREMARKET_MORNING_REFERENCE),
+                                eq(WorkflowStatusService.PREMARKET_GROUP),
+                                eq(today.toString()),
+                                eq(uniId)))
+                                .thenReturn(workflow(refId, WorkflowStatusService.PREMARKET_MORNING_REFERENCE,
+                                                WorkflowStatus.Status.READY));
+
+                when(workflowStatusService.markRunning(any(UUID.class)))
+                                .thenAnswer(inv -> workflow(inv.getArgument(0), "stage",
+                                                WorkflowStatus.Status.RUNNING));
+                when(workflowStatusService.markSuccess(any(UUID.class), anyString()))
+                                .thenAnswer(inv -> workflow(inv.getArgument(0), "stage",
+                                                WorkflowStatus.Status.SUCCESS));
+
+                // Catalog sync mocks
+                when(angelOneProperties.enabled()).thenReturn(true);
+                when(catalogSyncService.syncNseCatalog())
+                                .thenReturn(new AngelOneInstrumentCatalogSyncService.CatalogSyncResult(
+                                                500, 500, 20, 0, 0, true, "Success"));
+                when(instrumentMasterSyncService.ensureRequiredMarketReferences()).thenReturn(0);
+                when(instrumentTokenSyncService.syncActiveInstruments())
+                                .thenReturn(new InstrumentTokenSyncService.TokenSyncResult(
+                                                50, 50, 50, 0, List.of(), "All mapped"));
+
+                // Universe sync mocks
+                StockUniverse tcs = StockUniverse.builder().symbol("TCS").exchange(Exchange.NSE).isActive(true)
+                                .isTradable(true).build();
+                StockUniverse infy = StockUniverse.builder().symbol("INFY").exchange(Exchange.NSE).isActive(true)
+                                .isTradable(true).build();
+                StockUniverse delisted = StockUniverse.builder().symbol("OLDCO").exchange(Exchange.NSE).isActive(true)
+                                .isTradable(true).build();
+
+                when(stockUniverseRepository.findAll()).thenReturn(List.of(tcs, infy, delisted));
+
+                InstrumentMaster tcsMaster = InstrumentMaster.builder().symbol("TCS").exchange("NSE").isActive(true)
+                                .build();
+                InstrumentMaster infyMaster = InstrumentMaster.builder().symbol("INFY").exchange("NSE").isActive(true)
+                                .build();
+                InstrumentMaster delistedMaster = InstrumentMaster.builder().symbol("OLDCO").exchange("NSE")
+                                .isActive(false).build();
+
+                when(instrumentMasterRepository.findBySymbolAndExchange("TCS", "NSE"))
+                                .thenReturn(Optional.of(tcsMaster));
+                when(instrumentMasterRepository.findBySymbolAndExchange("INFY", "NSE"))
+                                .thenReturn(Optional.of(infyMaster));
+                when(instrumentMasterRepository.findBySymbolAndExchange("OLDCO", "NSE"))
+                                .thenReturn(Optional.of(delistedMaster));
+
+                // EOD completeness: TCS complete, INFY missing/incomplete
+                when(eodDataEntryService.isSuccessful("TCS", "NSE", prevDay)).thenReturn(true);
+                when(eodDataEntryService.isSuccessful("INFY", "NSE", prevDay)).thenReturn(false);
+                when(stockPriceRepository.countBySymbolAndDateLessThanEqual(anyString(), any())).thenReturn(20L);
+
+                // Morning reference mock
+                when(volumeBaselineService.preCalculateForCompletedTradingDay(prevDay))
+                                .thenReturn(new VolumeBaselineService.PreCalculationResult(prevDay, today, 0, 0, 0,
+                                                0, "No daily contexts for previous day"));
+                RuntimeAlertService alerts = mock(RuntimeAlertService.class);
+                service.setRuntimeAlertService(alerts);
+
+                PreMarketWorkflowService.WorkflowResult result = service.runPreMarketDataPipeline();
+
+                // A FAILED stage would block premarket-live-start and with it the websocket feed.
+                assertEquals("COMPLETE", result.status());
+                assertEquals(WorkflowStatusService.PREMARKET_MORNING_REFERENCE, result.stage());
+                verify(alerts).reportEmptyVolumeBaselines(eq(today), eq(prevDay), contains("NO VOLUME BASELINES"));
+                verify(workflowStatusService).markSuccess(eq(refId), contains("WARNING"));
+        }
+
+        @Test
         void runPreMarketDataPipeline_autoPromotesEligibleStockAndProtectsIndices() {
                 when(tradingCalendar.isTradingDay(today)).thenReturn(true);
                 when(tradingCalendar.previousTradingDay(today)).thenReturn(prevDay);

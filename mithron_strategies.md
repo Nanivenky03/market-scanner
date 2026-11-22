@@ -68,7 +68,8 @@ GAP_DOWN day (gap < -0.75%):
 Before 09:15 AM:       No activity
 09:15 AM to 09:30 AM:  Opening range building only. No signals.
 09:30 AM:              All strategies become active
-After 10:30 AM:        FCHB signals stop (09:30 AM to 10:30 AM entry window). Strict cutoff eliminates midday chop/decay.
+After 10:15 AM (candle start): FCHB signals stop. The entry window is 09:30–10:15 by 5M candle START time, so the
+                       last evaluated candle starts at 10:15 and closes at 10:20 (FchbStrategy.ENTRY_WINDOW_END). Strict cutoff eliminates midday chop/decay.
 After 12:30 PM:        ORB signals stop.
 After 01:00 PM:        VWAP Pullback continues.
 02:45 PM:              Begin closing positions
@@ -885,7 +886,7 @@ Note on Volume Normalization & Turnover Floor:
 
 ---
 
-## Entry Signal Detection (5M candle close, 09:30 AM to 10:30 AM)
+## Entry Signal Detection (5M candle close; candles starting 09:30 to 10:15)
 
 Operates as a pure decision function (`FchbStrategy.evaluate(StockContext, MarketState)`):
 
@@ -914,8 +915,9 @@ ALL conditions must pass:
 7. Master Market Filter: Nifty 5M Close > Nifty VWAP
    Evaluated from MarketState. Master market filter must be active.
 
-8. Morning Entry Window: 09:30 AM to 10:30 AM
-   Signals stop strictly at 10:30 AM before midday volume decay and chop set in. Forensic replay proved that trades entered after 10:30 AM generated a dismal 16.7% win rate and severely drained account capital. Restricting entries to 09:30–10:30 AM locks in high-momentum expansion.
+8. Morning Entry Window: 5M candles starting 09:30 to 10:15 (decision between 09:35 and 10:20)
+   [CORRECTED 2026-11-22: earlier text said 10:30; the code has always used a 10:15 candle-start cutoff.]
+   Signals stop before midday volume decay and chop set in. An early (now contaminated, see evidence_log.md) replay suggested trades entered after 10:30 AM generated a dismal 16.7% win rate and severely drained account capital. Restricting entries to 09:30–10:30 AM locks in high-momentum expansion.
 
 9. Traffic-Light Admission Gate:
    - Evaluates the 7 Quality Gates (BO_%, VOL_X, Nifty distance, 15M trend context, Day type, Opening vol ratio, Upper circuit room).
@@ -998,7 +1000,8 @@ Broker-Specific Brokerage Comparison:
     • A 3-leg trade (Entry, Target 1 partial, Runner exit) incurs up to Rs. 60 in raw brokerage + GST.
     • Average friction per trade: ~Rs. 45 - Rs. 55.
   - Kotak Neo (BrokerModel.KOTAK_NEO - RECOMMENDED):
-    • Rs. 0.00 Brokerage on automated API intraday orders under Trade Free Youth / Plan.
+    • Rs. 0.00 Brokerage on API orders on all plans (confirmed on Kotak's official pricing page; manual orders cost Rs 10 or 0.05%).
+      [CORRECTED 2026-11-22: an earlier "Youth plan only" claim was wrong.]
     • Incurs strictly universal statutory government charges.
     • Average friction per trade: ~Rs. 15.29.
     • Saves Rs. 30 - Rs. 40 in pure alpha per round-trip trade (+3.28% return on capital saved in 23 days!).
@@ -1073,8 +1076,8 @@ Filter 13 — Share Price Ceiling (<= Rs. 5,000):
   currentClose <= 5000.0
   Excludes ultra-high ticket stocks where lot size = 1 or minimum position size constraints distort risk-adjusted sizing.
 
-Filter 14 — Entry Window Cutoff (09:30 AM to 10:30 AM):
-  Signal must fire between 09:30 AM and 10:30 AM. No new entries permitted after 10:30 AM to avoid late-morning low-volatility chop.
+Filter 14 — Entry Window Cutoff (5M candle start 09:30 to 10:15):
+  Signal must come from a 5M candle starting between 09:30 and 10:15 (closing 09:35 to 10:20). No new entries afterwards.
 ```
 
 ---

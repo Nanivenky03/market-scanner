@@ -1,55 +1,86 @@
 package com.trading.scanner.strategy.replay;
 
-import com.trading.scanner.execution.OrderExecutionService;
+import com.trading.scanner.calendar.TradingCalendar;
+import com.trading.scanner.config.TimeProvider;
+import com.trading.scanner.execution.LiveStrategyExecutionConductor;
+import com.trading.scanner.model.CandleTimeframe;
 import com.trading.scanner.model.DailyStockContext;
 import com.trading.scanner.model.MarketCandle;
+import com.trading.scanner.model.SimulatedPosition;
+import com.trading.scanner.model.VolumeTimeWindowBaseline;
 import com.trading.scanner.position.PositionManagerService;
+import com.trading.scanner.repository.DailyStockContextRepository;
+import com.trading.scanner.repository.MarketCandleRepository;
+import com.trading.scanner.repository.StockPriceRepository;
+import com.trading.scanner.repository.VolumeDailyBaselineRepository;
+import com.trading.scanner.repository.VolumeTimeWindowBaselineRepository;
 import com.trading.scanner.risk.BrokerChargesCalculator;
-import com.trading.scanner.risk.RiskEngine;
 import com.trading.scanner.risk.model.PortfolioMode;
-import com.trading.scanner.risk.model.RiskEvaluationResult;
+import com.trading.scanner.service.engine.VolumeBaselineService;
 import com.trading.scanner.strategy.Strategy;
 import com.trading.scanner.strategy.StrategyPositionHandler;
+import com.trading.scanner.strategy.cache.StockContextCache;
+import com.trading.scanner.strategy.engine.MasterMarketFilterService;
+import com.trading.scanner.strategy.fchb.FchbStrategy;
 import com.trading.scanner.strategy.model.*;
-import com.trading.scanner.util.PriceTickUtil;
+import org.mockito.Mockito;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.*;
+import java.util.function.Consumer;
+
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.when;
 
 /**
- * Universal In-Memory Replay Runner for evaluating any Strategy across the 8-day real market regime dataset.
- * Directly leverages production PositionManagerService, RiskEngine, and BrokerChargesCalculator.
+ * Replays historical days through the SAME production classes that run live: the candle-finalized event
+ * handler of {@link LiveStrategyExecutionConductor}, {@link StockContextCache}, {@link MasterMarketFilterService},
+ * {@link FchbStrategy}, the position handler, RiskEngine, PositionManagerService and OrderExecutionService.
+ *
+ * Only the clock, the candle source (historical rows instead of the websocket) and the persistence layer
+ * (in-memory repositories) are replaced. There is no replay-specific strategy, volX, market-state, entry or
+ * exit logic here: any behaviour difference from live must be fixed in the production class, not here.
  */
 public class StrategyPerformanceReplayRunner {
 
+    /** Order in which a 1M bar's extremes are presented as ticks. Live tick order inside a bar is unknowable. */
+    public enum IntrabarOrder { ADVERSE_FIRST, FAVORABLE_FIRST }
+
+    /** One 5M entry decision, offered to an optional observer for diagnostics (funnels, audits). */
+    public record Decision(LocalDateTime decisionTime, String symbol, StockContext context,
+                           MarketState marketState, StrategyEvaluation evaluation) {}
+
+    private static final LocalTime SESSION_START = LocalTime.of(9, 15);
+    private static final LocalTime SESSION_END = LocalTime.of(15, 30);
+    private static final LocalTime HARD_CLOSE_SWEEP = LocalTime.of(14, 55);
+    private static final String EXCHANGE = "NSE";
+    private static final String BENCHMARK = "NIFTY";
+
     private final double initialCapital;
-    private final LocalTime entryWindowStart = LocalTime.of(9, 30);
-    private final LocalTime entryWindowEnd;
-    private final LocalTime eodSquareOffTime = LocalTime.of(15, 25);
+    private final IntrabarOrder intrabarOrder;
+    private Consumer<Decision> decisionObserver;
 
     public StrategyPerformanceReplayRunner() {
-        this(50000.0, LocalTime.of(10, 15));
+        this(50000.0);
     }
 
     public StrategyPerformanceReplayRunner(double initialCapital) {
-        this(initialCapital, LocalTime.of(10, 15));
+        this(initialCapital, IntrabarOrder.ADVERSE_FIRST);
     }
 
-    public StrategyPerformanceReplayRunner(double initialCapital, LocalTime entryWindowEnd) {
+    public StrategyPerformanceReplayRunner(double initialCapital, IntrabarOrder intrabarOrder) {
         this.initialCapital = initialCapital;
-        this.entryWindowEnd = entryWindowEnd;
+        this.intrabarOrder = intrabarOrder;
         String brokerProp = System.getProperty("broker", "KOTAK_NEO");
-        if ("ANGEL_ONE".equalsIgnoreCase(brokerProp)) {
-            BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.ANGEL_ONE);
-        } else {
-            BrokerChargesCalculator.setActiveBroker(BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
-        }
+        BrokerChargesCalculator.setActiveBroker("ANGEL_ONE".equalsIgnoreCase(brokerProp)
+                ? BrokerChargesCalculator.BrokerModel.ANGEL_ONE
+                : BrokerChargesCalculator.BrokerModel.KOTAK_NEO);
     }
 
-    public LocalTime getEntryWindowEnd() {
-        return entryWindowEnd;
+    public void setDecisionObserver(Consumer<Decision> decisionObserver) {
+        this.decisionObserver = decisionObserver;
     }
 
     public MultiDayReplayReport replayAllDays(Strategy strategy, StrategyPositionHandler positionHandler) {
@@ -111,337 +142,297 @@ public class StrategyPerformanceReplayRunner {
                 .build();
     }
 
-    private record CandidateProposal(
-            String symbol,
-            StrategyProposal proposal,
-            MarketCandle latest5m,
-            MarketCandle current1m,
-            double confidenceScore,
-            double volX
-    ) {}
+    /** Mutable replay clock handed to every production class that asks for the time. */
+    private static final class ReplayClock implements TimeProvider {
+        private final LocalDate date;
+        private volatile LocalDateTime now;
+
+        ReplayClock(LocalDate date) {
+            this.date = date;
+            this.now = date.atTime(SESSION_START);
+        }
+
+        void set(LocalDateTime now) {
+            this.now = now;
+        }
+
+        @Override
+        public LocalDate today() {
+            return date;
+        }
+
+        @Override
+        public LocalDateTime nowDateTime() {
+            return now;
+        }
+    }
 
     public DailyReplayReport replayDay(Strategy strategy, StrategyPositionHandler positionHandler,
                                       HistoricalMarketDay day, double startingCapital) {
+        if (!(strategy instanceof FchbStrategy fchb)) {
+            throw new IllegalArgumentException("Replay drives the production FCHB conductor; got " + strategy);
+        }
         LocalDate tradingDate = LocalDate.parse(day.getTradingDate());
+        ReplayClock clock = new ReplayClock(tradingDate);
 
-        // Initialize real production OrderExecutionService, RiskEngine, and PositionManagerService via isolated context
-        TestReplayExecutionContext execContext = new TestReplayExecutionContext(positionHandler, startingCapital, tradingDate);
-        PositionManagerService positionManager = execContext.getPositionManagerService();
-        RiskEngine riskEngine = execContext.getRiskEngine();
+        TestReplayExecutionContext exec = new TestReplayExecutionContext(positionHandler, startingCapital, tradingDate);
+        PositionManagerService positions = exec.getPositionManagerService();
 
-        Map<String, ReplayTrade> activeTrades = new HashMap<>();
-        List<ReplayTrade> completedTrades = new ArrayList<>();
-        List<RejectedSignalAudit> rejectedSignals = new ArrayList<>();
-        Set<String> tradedSymbolsToday = new HashSet<>();
+        TradingCalendar calendar = Mockito.mock(TradingCalendar.class);
+        when(calendar.isTradingDay(any())).thenReturn(true);
 
-        int totalSignals = 0;
-        int macroFilterRejections = 0;
-        int frictionRejections = 0;
-        int riskCapRejections = 0;
+        StockContextCache cache = new StockContextCache(
+                Mockito.mock(MarketCandleRepository.class), Mockito.mock(DailyStockContextRepository.class));
+        cache.setVolumeBaselineService(baselineService(day, calendar, clock));
+        for (DailyStockContext daily : day.getDailyContexts().values()) {
+            cache.updateDailyContext(daily);
+        }
 
-        List<LocalTime> timeline = day.getDistinct1mTimes();
-        double runningNiftySum = 0.0;
-        int runningNiftyCount = 0;
+        MasterMarketFilterService marketFilter = new MasterMarketFilterService(
+                Mockito.mock(MarketCandleRepository.class), clock, cache);
 
-        for (LocalTime time : timeline) {
-            MarketCandle nifty1m = day.getNiftyCandle1m(time);
-            if (nifty1m == null) {
-                continue;
+        LiveStrategyExecutionConductor conductor = new LiveStrategyExecutionConductor(
+                cache, fchb, marketFilter, exec.getOrderExecutionService(), positions,
+                exec.getOrderAdapter(), exec.getLockManager(), clock, calendar);
+
+        Map<LocalTime, List<MarketCandle>> oneMin = byStartTime(day.getCandles1m());
+        Map<LocalTime, List<MarketCandle>> fiveMin = byStartTime(day.getCandles5m());
+        Map<LocalTime, List<MarketCandle>> fifteenMin = byStartTime(day.getCandles15m());
+
+        Map<String, Double> lastClose = new HashMap<>();
+        Map<String, LocalDateTime> entryTimes = new HashMap<>();
+        Map<String, LocalDateTime> exitTimes = new HashMap<>();
+        Set<String> target1Seen = new HashSet<>();
+        Map<String, Double> peakSeen = new HashMap<>();
+
+        for (LocalTime minute = SESSION_START; minute.isBefore(SESSION_END); minute = minute.plusMinutes(1)) {
+            LocalDateTime minuteStart = tradingDate.atTime(minute);
+            List<MarketCandle> candlesThisMinute = sortedBenchmarkFirst(oneMin.get(minute));
+
+            // 1. Ticks inside the minute drive stop-loss triggers, Target 1 and peak tracking (production path).
+            for (MarketCandle c : candlesThisMinute) {
+                if (positions.getPosition(PortfolioMode.PAPER, c.getSymbol()) == null) {
+                    continue;
+                }
+                double adverse = c.getLowPrice();
+                double favorable = c.getHighPrice();
+                double first = intrabarOrder == IntrabarOrder.ADVERSE_FIRST ? adverse : favorable;
+                double second = intrabarOrder == IntrabarOrder.ADVERSE_FIRST ? favorable : adverse;
+                conductor.processIncomingTick(c.getSymbol(), EXCHANGE, first, minuteStart);
+                conductor.processIncomingTick(c.getSymbol(), EXCHANGE, second, minuteStart);
+                notePositionState(positions, c.getSymbol(), target1Seen, peakSeen);
             }
 
-            double tp = (nifty1m.getHighPrice() + nifty1m.getLowPrice() + nifty1m.getClosePrice()) / 3.0;
-            runningNiftySum += tp;
-            runningNiftyCount++;
+            // 2. The minute closes: candles finalize in production order (1M, then 5M, then 15M) per symbol,
+            //    the benchmark first (it is queued ahead of stocks live), then stocks alphabetically.
+            LocalTime close = minute.plusMinutes(1);
+            LocalDateTime closeTime = tradingDate.atTime(close);
+            clock.set(closeTime);
 
-            double niftyPrice = nifty1m.getClosePrice();
-            double niftyVwap = nifty1m.getVwap() != null ? nifty1m.getVwap() : (runningNiftySum / runningNiftyCount);
-            double niftyDistPct = ((niftyPrice - niftyVwap) / niftyVwap) * 100.0;
-            boolean niftyAboveVwap = niftyPrice > niftyVwap;
-            MarketState.MarketRegime regime = niftyAboveVwap ? MarketState.MarketRegime.BULLISH : MarketState.MarketRegime.BEARISH;
-            MarketState marketState = new MarketState(tradingDate, nifty1m.getCandleTime(),
-                    niftyPrice, niftyVwap, niftyDistPct, niftyAboveVwap, regime, true, "Historical Replay");
+            boolean fiveBoundary = close.getMinute() % 5 == 0;
+            boolean fifteenBoundary = close.getMinute() % 15 == 0;
+            Map<String, MarketCandle> oneNow = bySymbol(candlesThisMinute);
+            Map<String, MarketCandle> fiveNow = fiveBoundary ? bySymbol(fiveMin.get(close.minusMinutes(5))) : Map.of();
+            Map<String, MarketCandle> fifteenNow = fifteenBoundary ? bySymbol(fifteenMin.get(close.minusMinutes(15))) : Map.of();
 
-            // -------------------------------------------------------------
-            // 1. POSITION MANAGEMENT: Evaluate active positions via PositionManagerService
-            // -------------------------------------------------------------
-            List<String> currentActiveSymbols = new ArrayList<>(activeTrades.keySet());
-            for (String symbol : currentActiveSymbols) {
-                MarketCandle current1m = day.get1mCandle(symbol, time);
-                if (current1m == null) continue;
-                double currentLtp = current1m.getClosePrice();
+            Set<String> symbolsThisMinute = new TreeSet<>(benchmarkFirstComparator());
+            symbolsThisMinute.addAll(oneNow.keySet());
+            symbolsThisMinute.addAll(fiveNow.keySet());
+            symbolsThisMinute.addAll(fifteenNow.keySet());
 
-                List<MarketCandle> candles5m = day.get5mCandlesUpTo(symbol, time);
-                MarketCandle latest5m = candles5m.isEmpty() ? null : candles5m.get(candles5m.size() - 1);
-                Double latest5mAtr = (latest5m != null && latest5m.getAtr14() != null) ? latest5m.getAtr14() : 5.0;
-
-                PositionSnapshot posBefore = positionManager.getPosition(PortfolioMode.PAPER, symbol);
-                if (posBefore != null) {
-                    ReplayTrade trade = activeTrades.get(symbol);
-                    boolean isShort = "SHORT".equalsIgnoreCase(posBefore.positionSide()) || "SELL".equalsIgnoreCase(posBefore.positionSide());
-
-                    double highPrice = current1m.getHighPrice() != null ? current1m.getHighPrice() : currentLtp;
-                    double lowPrice = current1m.getLowPrice() != null ? current1m.getLowPrice() : currentLtp;
-
-                    double firstTick = isShort ? lowPrice : highPrice;
-                    double secondTick = isShort ? highPrice : lowPrice;
-
-                    // Tick 1: Check favorable target / trail extreme
-                    PositionAction action1 = positionManager.processTick(PortfolioMode.PAPER, symbol, firstTick, time);
-                    handleReplayAction(action1, posBefore, trade, firstTick, current1m, completedTrades, activeTrades, execContext);
-
-                    // Tick 2: Check adverse stop loss extreme if still open
-                    if (activeTrades.containsKey(symbol)) {
-                        posBefore = positionManager.getPosition(PortfolioMode.PAPER, symbol);
-                        PositionAction action2 = positionManager.processTick(PortfolioMode.PAPER, symbol, secondTick, time);
-                        handleReplayAction(action2, posBefore, trade, secondTick, current1m, completedTrades, activeTrades, execContext);
+            for (String symbol : symbolsThisMinute) {
+                boolean isIndex = BENCHMARK.equals(symbol);
+                MarketCandle c1 = oneNow.get(symbol);
+                if (c1 != null) {
+                    lastClose.put(symbol, c1.getClosePrice());
+                    cache.onCandleFinalized(c1);
+                    conductor.onCandleFinalized(new CandleFinalizedEvent(
+                            symbol, EXCHANGE, CandleTimeframe.ONE_MINUTE, c1.getCandleTime(), c1, isIndex));
+                    notePositionState(positions, symbol, target1Seen, peakSeen);
+                }
+                MarketCandle c5 = fiveNow.get(symbol);
+                if (c5 != null) {
+                    cache.onCandleFinalized(c5);
+                    if (decisionObserver != null && !isIndex) {
+                        observeDecision(cache, marketFilter, fchb, tradingDate, closeTime, symbol);
                     }
-
-                    // Candle Close: Evaluate structural close / wind-down if still open
-                    if (activeTrades.containsKey(symbol)) {
-                        posBefore = positionManager.getPosition(PortfolioMode.PAPER, symbol);
-                        PositionAction action3 = positionManager.processMinuteCandleClose(PortfolioMode.PAPER, symbol, current1m, latest5mAtr, time);
-                        handleReplayAction(action3, posBefore, trade, currentLtp, current1m, completedTrades, activeTrades, execContext);
+                    boolean hadPosition = positions.getPosition(PortfolioMode.PAPER, symbol) != null;
+                    conductor.onCandleFinalized(new CandleFinalizedEvent(
+                            symbol, EXCHANGE, CandleTimeframe.FIVE_MINUTE, c5.getCandleTime(), c5, isIndex));
+                    if (!hadPosition && positions.getPosition(PortfolioMode.PAPER, symbol) != null) {
+                        entryTimes.put(symbol, closeTime);
                     }
+                }
+                MarketCandle c15 = fifteenNow.get(symbol);
+                if (c15 != null) {
+                    cache.onCandleFinalized(c15);
                 }
             }
 
-            // -------------------------------------------------------------
-            // 2. STRATEGY ENTRY: Evaluate new breakout proposals on 5M boundary
-            // -------------------------------------------------------------
-            boolean isEntryMinute = !time.isBefore(entryWindowStart)
-                    && !time.isAfter(entryWindowEnd)
-                    && (time.getMinute() % 5 == 0);
-
-            if (isEntryMinute) {
-                List<CandidateProposal> candidates = new ArrayList<>();
-
-                for (String symbol : day.getDailyContexts().keySet()) {
-                    if (positionManager.getPosition(PortfolioMode.PAPER, symbol) != null || tradedSymbolsToday.contains(symbol)) {
-                        continue;
-                    }
-
-                    DailyStockContext daily = day.getDailyContext(symbol);
-                    if (daily == null || Boolean.TRUE.equals(daily.getSkipToday())) {
-                        continue;
-                    }
-
-                    MarketCandle current1m = day.get1mCandle(symbol, time);
-                    if (current1m == null) continue;
-
-                    List<MarketCandle> candles5m = day.get5mCandlesUpTo(symbol, time);
-                    if (candles5m.isEmpty()) continue;
-                    MarketCandle latest5m = candles5m.get(candles5m.size() - 1);
-
-                    List<MarketCandle> candles15m = day.get15mCandlesUpTo(symbol, time);
-
-                    // Dynamic volX calculation using production VolumeBaselineService time-window baseline
-                    int sessionMinute = (int) java.time.Duration.between(LocalTime.of(9, 15), time).toMinutes();
-                    Long baselineAvg = day.getVolumeBaseline(symbol, sessionMinute);
-                    Double volX = null;
-                    if (baselineAvg != null && baselineAvg > 0) {
-                        long cumVol = 0L;
-                        for (MarketCandle c : day.get1mCandlesUpTo(symbol, time)) {
-                            if (c.getVolume() != null) cumVol += c.getVolume();
-                        }
-                        volX = cumVol / (double) baselineAvg;
-                    }
-                    // Diagnostic S0 Rule: Never fall back to the old volX formula.
-                    // If baselineAvg is missing/null, volX remains null and Gate 2 rejects via VOL_X_MISSING.
-
-                    // Gate 8: Upper circuit limit room check
-                    Map<String, String> parameters = new HashMap<>();
-                    if (daily.getPrevDayClose() != null && daily.getPrevDayClose() > 0) {
-                        double upperCircuit = PriceTickUtil.roundTarget(daily.getPrevDayClose() * 1.20, false, 0.05);
-                        parameters.put("upperCircuit", String.valueOf(upperCircuit));
-                    }
-
-                    StockContext stockContext = new StockContext(symbol, "NSE", tradingDate, daily,
-                            Collections.emptyList(), candles5m, candles15m, false, volX);
-
-                    StrategyEvaluation eval = strategy.evaluate(stockContext, marketState, parameters);
-                    if (!eval.isQualified()) {
-                        if (eval.failedConditions().contains("NIFTY_VWAP_FILTER")) {
-                            macroFilterRejections++;
-                            rejectedSignals.add(RejectedSignalAudit.builder()
-                                    .tradingDate(day.getTradingDate())
-                                    .time(time)
-                                    .symbol(symbol)
-                                    .price(current1m.getClosePrice())
-                                    .rejectionStage("STRATEGY_GATE")
-                                    .reason("NIFTY_BELOW_VWAP")
-                                    .details(String.format("Nifty=%.1f < VWAP=%.1f (dist=%.2f%%)", niftyPrice, niftyVwap, niftyDistPct))
-                                    .build());
-                        }
-                    } else if (eval.proposal() != null) {
-                        candidates.add(new CandidateProposal(symbol, eval.proposal(), latest5m, current1m, eval.confidenceScore(), volX));
-                    }
+            // Record exits observed this minute (position was open before the minute, gone now).
+            for (String symbol : entryTimes.keySet()) {
+                if (!exitTimes.containsKey(symbol) && positions.getPosition(PortfolioMode.PAPER, symbol) == null) {
+                    exitTimes.put(symbol, closeTime);
                 }
+            }
 
-                // Sort candidates by latest 5M candle createdAt timestamp (matching live WebSocket arrival order)
-                candidates.sort((c1, c2) -> {
-                    LocalDateTime t1 = c1.latest5m().getCreatedAt();
-                    LocalDateTime t2 = c2.latest5m().getCreatedAt();
-                    if (t1 != null && t2 != null && !t1.equals(t2)) {
-                        return t1.compareTo(t2);
-                    }
-                    return Double.compare(c2.volX(), c1.volX());
-                });
-
-                // Route candidates through real OrderExecutionService in sorted arrival order
-                for (CandidateProposal cand : candidates) {
-                    totalSignals++;
-                    StrategyProposal proposal = cand.proposal();
-                    String symbol = cand.symbol();
-                    MarketCandle current1m = cand.current1m();
-
-                    OrderExecutionService.ExecutionResult execRes = execContext.processCandidateProposal(proposal);
-
-                    if (execRes.accepted() && execRes.executedQuantity() >= 2) {
-                        int qty = execRes.executedQuantity();
-                        double fillPrice = execRes.executedPrice();
-                        double stopLoss = execRes.structuralStopLoss();
-                        double target1 = execRes.reAnchoredTarget1();
-                        tradedSymbolsToday.add(symbol);
-
-                        double entryTurnover = qty * fillPrice;
-                        double buyCharges = BrokerChargesCalculator.calculateBuyLegCharges(entryTurnover);
-
-                        ReplayTrade trade = ReplayTrade.builder()
-                                .tradeId(symbol + "-" + day.getTradingDate() + "-" + time)
-                                .symbol(symbol)
-                                .direction("BUY")
-                                .entryTime(current1m.getCandleTime())
-                                .entryPrice(fillPrice)
-                                .quantity(qty)
-                                .initialStopLoss(stopLoss)
-                                .target1Price(target1)
-                                .grossPnl(0.0)
-                                .charges(buyCharges)
-                                .netPnl(-buyCharges)
-                                .build();
-                        activeTrades.put(symbol, trade);
-
-                    } else {
-                        String reason = execRes.rejectionReason();
-                        if ("EXCESSIVE_FRICTION_DRAG".equals(reason)) {
-                            frictionRejections++;
-                        } else if ("PORTFOLIO_OPEN_RISK_CAP_EXCEEDED".equals(reason)
-                                || "MAX_CONCURRENT_POSITIONS_REACHED".equals(reason)
-                                || "DAILY_LOSS_KILL_SWITCH_TRIGGERED".equals(reason)) {
-                            riskCapRejections++;
-                        }
-
-                        rejectedSignals.add(RejectedSignalAudit.builder()
-                                .tradingDate(day.getTradingDate())
-                                .time(time)
-                                .symbol(symbol)
-                                .price(proposal.entryPrice())
-                                .rejectionStage("ORDER_EXECUTION_ENGINE")
-                                .reason(reason)
-                                .details(String.format("1R Risk=Rs.%.1f, Stop=Rs.%.2f, Target=Rs.%.2f, volX=%.2f",
-                                        (proposal.entryPrice() - proposal.initialStopLoss()), proposal.initialStopLoss(), proposal.initialTarget(), cand.volX()))
-                                .build());
-                    }
+            // 3. End-of-day hard close sweep (same rule as MarketScheduler.scheduledEodHardCloseSweep).
+            if (close.equals(HARD_CLOSE_SWEEP)) {
+                for (PositionSnapshot open : new ArrayList<>(positions.getActivePositions(PortfolioMode.PAPER).values())) {
+                    double price = lastClose.getOrDefault(open.symbol(), open.entryPrice());
+                    exec.executeTacticalExit(open.symbol(), price, "SCHEDULED_EOD_HARD_CLOSE_SWEEP");
+                    exitTimes.putIfAbsent(open.symbol(), closeTime);
                 }
             }
         }
 
-        // Aggregate daily metrics
-        double dayGross = 0.0;
-        double dayCharges = 0.0;
-        double dayNet = 0.0;
-        int winCount = 0;
-        int lossCount = 0;
+        return buildReport(day, startingCapital, exec, entryTimes, exitTimes, target1Seen, peakSeen);
+    }
 
-        for (ReplayTrade t : completedTrades) {
-            dayGross += t.getGrossPnl();
-            dayCharges += t.getCharges();
-            dayNet += t.getNetPnl();
-            if (t.isProfitable()) {
-                winCount++;
+    private void observeDecision(StockContextCache cache, MasterMarketFilterService marketFilter, FchbStrategy fchb,
+                                 LocalDate tradingDate, LocalDateTime decisionTime, String symbol) {
+        Optional<StockContext> context = cache.getStockContext(symbol, EXCHANGE, tradingDate);
+        if (context.isEmpty()) {
+            return;
+        }
+        MarketState state = marketFilter.evaluateCurrentState(tradingDate);
+        StrategyEvaluation evaluation = fchb.evaluate(context.get(), state, Collections.emptyMap());
+        decisionObserver.accept(new Decision(decisionTime, symbol, context.get(), state, evaluation));
+    }
+
+    private void notePositionState(PositionManagerService positions, String symbol,
+                                   Set<String> target1Seen, Map<String, Double> peakSeen) {
+        PositionSnapshot snap = positions.getPosition(PortfolioMode.PAPER, symbol);
+        if (snap == null) {
+            return;
+        }
+        if (snap.target1Booked()) {
+            target1Seen.add(symbol);
+        }
+        if (snap.peakPrice() != null) {
+            peakSeen.merge(symbol, snap.peakPrice(), Math::max);
+        }
+    }
+
+    private DailyReplayReport buildReport(HistoricalMarketDay day, double startingCapital,
+                                          TestReplayExecutionContext exec,
+                                          Map<String, LocalDateTime> entryTimes,
+                                          Map<String, LocalDateTime> exitTimes,
+                                          Set<String> target1Seen, Map<String, Double> peakSeen) {
+        List<ReplayTrade> trades = new ArrayList<>();
+        double gross = 0.0;
+        double charges = 0.0;
+        double net = 0.0;
+        int wins = 0;
+        int losses = 0;
+
+        List<SimulatedPosition> closed = new ArrayList<>(exec.getCompletedPositions());
+        closed.sort(Comparator.comparing(SimulatedPosition::getSymbol));
+        for (SimulatedPosition p : closed) {
+            double g = p.getGrossPnl() != null ? p.getGrossPnl() : 0.0;
+            double ch = p.getStatutoryCharges() != null ? p.getStatutoryCharges() : 0.0;
+            double n = p.getNetPnl() != null ? p.getNetPnl() : g - ch;
+            trades.add(ReplayTrade.builder()
+                    .tradeId(p.getSymbol() + "-" + day.getTradingDate())
+                    .symbol(p.getSymbol())
+                    .direction("BUY")
+                    .entryTime(entryTimes.get(p.getSymbol()))
+                    .entryPrice(p.getEntryPrice() != null ? p.getEntryPrice() : 0.0)
+                    .quantity(p.getInitialQuantity() != null ? p.getInitialQuantity() : 0)
+                    .initialStopLoss(p.getInitialStopLoss() != null ? p.getInitialStopLoss() : 0.0)
+                    .target1Price(p.getInitialTarget() != null ? p.getInitialTarget() : 0.0)
+                    .target1Hit(target1Seen.contains(p.getSymbol()))
+                    .finalExitPrice(p.getExitPrice())
+                    .finalExitTime(exitTimes.get(p.getSymbol()))
+                    .exitReason(p.getExitReason())
+                    .grossPnl(g)
+                    .charges(ch)
+                    .netPnl(n)
+                    .peakPrice(peakSeen.get(p.getSymbol()))
+                    .troughPrice(p.getTroughPrice())
+                    .build());
+            gross += g;
+            charges += ch;
+            net += n;
+            if (n > 0.0) {
+                wins++;
             } else {
-                lossCount++;
+                losses++;
             }
         }
-
-        double endingCapital = startingCapital + dayNet;
 
         return DailyReplayReport.builder()
                 .tradingDate(day.getTradingDate())
                 .scenarioTag(day.getScenarioTag())
                 .scenarioDescription(day.getScenarioDescription())
                 .startingCapital(startingCapital)
-                .endingCapital(endingCapital)
-                .grossPnl(dayGross)
-                .totalCharges(dayCharges)
-                .netPnl(dayNet)
-                .totalSignals(totalSignals)
-                .executedTrades(completedTrades.size())
-                .winTrades(winCount)
-                .lossTrades(lossCount)
-                .trades(completedTrades)
-                .rejectedSignals(rejectedSignals)
-                .macroFilterRejections(macroFilterRejections)
-                .frictionRejections(frictionRejections)
-                .riskCapRejections(riskCapRejections)
+                .endingCapital(startingCapital + net)
+                .grossPnl(gross)
+                .totalCharges(charges)
+                .netPnl(net)
+                .totalSignals(trades.size())
+                .executedTrades(trades.size())
+                .winTrades(wins)
+                .lossTrades(losses)
+                .trades(trades)
+                .rejectedSignals(new ArrayList<>())
                 .build();
     }
 
-    private void handleReplayAction(PositionAction action, PositionSnapshot posBefore, ReplayTrade trade,
-                                    double executedPrice, MarketCandle current1m,
-                                    List<ReplayTrade> completedTrades, Map<String, ReplayTrade> activeTrades,
-                                    TestReplayExecutionContext execContext) {
-        if (action == null || trade == null || posBefore == null) {
-            return;
+    private VolumeBaselineService baselineService(HistoricalMarketDay day, TradingCalendar calendar, TimeProvider clock) {
+        VolumeTimeWindowBaselineRepository repo = Mockito.mock(VolumeTimeWindowBaselineRepository.class);
+        when(repo.findBySymbolAndExchangeAndTradingDateAndSessionMinute(anyString(), anyString(), any(), anyInt()))
+                .thenAnswer(inv -> {
+                    Long avg = day.getVolumeBaseline(inv.getArgument(0), inv.getArgument(3));
+                    return avg == null
+                            ? Optional.empty()
+                            : Optional.of(VolumeTimeWindowBaseline.builder().avgCumulativeVolume20(avg).build());
+                });
+        return new VolumeBaselineService(
+                Mockito.mock(DailyStockContextRepository.class),
+                Mockito.mock(StockPriceRepository.class),
+                Mockito.mock(MarketCandleRepository.class),
+                Mockito.mock(VolumeDailyBaselineRepository.class),
+                repo, calendar, clock);
+    }
+
+    private static Map<LocalTime, List<MarketCandle>> byStartTime(List<MarketCandle> candles) {
+        Map<LocalTime, List<MarketCandle>> map = new HashMap<>();
+        for (MarketCandle c : candles) {
+            map.computeIfAbsent(c.getCandleTime().toLocalTime(), k -> new ArrayList<>()).add(c);
         }
-        if (action.type() == PositionAction.ActionType.PARTIAL_EXIT) {
-            int initialQty = trade.getQuantity();
-            int exitQty = (int) Math.round(initialQty * 0.5);
-            exitQty = Math.max(1, Math.min(posBefore.currentQuantity() - 1, exitQty));
+        return map;
+    }
 
-            execContext.executeTarget1PartialExit(trade.getSymbol(), executedPrice);
-
-            if (exitQty > 0) {
-                double sellTurnover = exitQty * executedPrice;
-                double gross = (executedPrice - trade.getEntryPrice()) * exitQty;
-                double sellCharges = BrokerChargesCalculator.calculateSellLegCharges(sellTurnover);
-                double net = gross - sellCharges;
-
-                trade.setTarget1Hit(true);
-                trade.setTarget1ExitPrice(executedPrice);
-                trade.setTarget1ExitTime(current1m.getCandleTime());
-                trade.setTarget1Quantity(exitQty);
-                trade.setGrossPnl(trade.getGrossPnl() + gross);
-                trade.setCharges(trade.getCharges() + sellCharges);
-                trade.setNetPnl(trade.getNetPnl() + net);
-            }
-        } else if (action.type() == PositionAction.ActionType.FULL_EXIT) {
-            if (action.reason() != null && action.reason().contains("STOP_LOSS")) {
-                execContext.handleRestingStopLossFilled(trade.getSymbol(), posBefore, executedPrice);
-            } else {
-                execContext.executeTacticalExit(trade.getSymbol(), executedPrice, action.reason());
-            }
-
-            int exitQty = posBefore.currentQuantity();
-            double sellTurnover = exitQty * executedPrice;
-            double gross = (executedPrice - trade.getEntryPrice()) * exitQty;
-            double sellCharges = BrokerChargesCalculator.calculateSellLegCharges(sellTurnover);
-            double net = gross - sellCharges;
-
-            trade.setFinalExitPrice(executedPrice);
-            trade.setFinalExitTime(current1m.getCandleTime());
-            trade.setFinalExitQuantity(exitQty);
-            trade.setExitReason(action.reason());
-            double peak = posBefore.peakPrice() != null ? Math.max(posBefore.peakPrice(), executedPrice) : executedPrice;
-            double trough = posBefore.troughPrice() != null ? Math.min(posBefore.troughPrice(), executedPrice) : executedPrice;
-            trade.setPeakPrice(peak);
-            trade.setTroughPrice(trough);
-            trade.setGrossPnl(trade.getGrossPnl() + gross);
-            trade.setCharges(trade.getCharges() + sellCharges);
-            trade.setNetPnl(trade.getNetPnl() + net);
-
-            completedTrades.add(trade);
-            activeTrades.remove(posBefore.symbol());
+    private static Map<String, MarketCandle> bySymbol(List<MarketCandle> candles) {
+        Map<String, MarketCandle> map = new HashMap<>();
+        if (candles != null) {
+            candles.forEach(c -> map.put(c.getSymbol(), c));
         }
+        return map;
+    }
+
+    private static List<MarketCandle> sortedBenchmarkFirst(List<MarketCandle> candles) {
+        if (candles == null) {
+            return List.of();
+        }
+        List<MarketCandle> sorted = new ArrayList<>(candles);
+        sorted.sort(Comparator.comparing(MarketCandle::getSymbol, benchmarkFirstComparator()));
+        return sorted;
+    }
+
+    private static Comparator<String> benchmarkFirstComparator() {
+        return (a, b) -> {
+            if (a.equals(b)) {
+                return 0;
+            }
+            if (BENCHMARK.equals(a)) {
+                return -1;
+            }
+            if (BENCHMARK.equals(b)) {
+                return 1;
+            }
+            return a.compareTo(b);
+        };
     }
 }

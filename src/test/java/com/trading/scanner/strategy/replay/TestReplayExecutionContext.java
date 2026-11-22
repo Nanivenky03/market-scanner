@@ -123,6 +123,10 @@ public class TestReplayExecutionContext {
         );
     }
 
+    public StripedSymbolLockManager getLockManager() {
+        return lockManager;
+    }
+
     public OrderExecutionService getOrderExecutionService() {
         return orderExecutionService;
     }

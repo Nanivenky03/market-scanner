@@ -52,8 +52,8 @@ public class AngelOneApiExecutor {
         @Value("${provider.angelone.rate.search.ms:1000}")
         private long searchRateMs = 1000L;
 
-        @Value("${provider.angelone.rate.historical.ms:400}")
-        private long historicalRateMs = 400L;
+        @Value("${provider.angelone.rate.historical.ms:500}")
+        private long historicalRateMs = 500L;
 
         @Value("${provider.angelone.rate.instrument-master.ms:1000}")
         private long instrumentMasterRateMs = 1000L;

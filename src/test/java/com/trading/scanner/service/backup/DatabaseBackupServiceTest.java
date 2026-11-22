@@ -53,7 +53,6 @@ class DatabaseBackupServiceTest {
         ReflectionTestUtils.setField(service, "datasourceUrl", "jdbc:postgresql://localhost:5432/testdb");
         ReflectionTestUtils.setField(service, "datasourceUsername", "postgres");
         ReflectionTestUtils.setField(service, "datasourcePassword", "postgres");
-        ReflectionTestUtils.setField(service, "activeProfile", "dev");
 
         // The process execution will fail because pg_dump executable is fake,
         // but the directory must have been created successfully prior to process invocation!
@@ -61,5 +60,12 @@ class DatabaseBackupServiceTest {
 
         assertTrue(Files.exists(nonExistent), "Backup directory must be automatically created");
         assertFalse(result.success());
+    }
+
+    @Test
+    @DisplayName("GIVEN a prod database WHEN naming the dump THEN the file name carries the database name, not the profile")
+    void testBackupFileNameUsesDatabaseName() {
+        assertEquals("mithron_prod_2026-11-22.dump",
+                DatabaseBackupService.backupFileName("mithron_prod", "2026-11-22"));
     }
 }

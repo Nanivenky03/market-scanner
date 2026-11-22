@@ -1,7 +1,7 @@
 # Mithron: Personal Systematic Trading & Market Analysis Engine
 
-Last audited: 2026-11-12  
-Status: **Version 2.5.6 Production-Hardened** (Multi-Timeframe TWAP & Day Open In-Memory Baseline for Zero-Volume Indices, Resilient EOD Backfill Sanitization with As-Is Persistence, V3.0 Minimalist Autonomous Trading Console UI — 489 unit & integration tests passing).
+Last audited: 2026-11-22  
+Status: **Version 2.6.0 Evidence-Rebuild release** (builds on 2.5.9; see `evidence_log.md` for what changed and why). Previous status: **Version 2.5.6 Production-Hardened** (Multi-Timeframe TWAP & Day Open In-Memory Baseline for Zero-Volume Indices, Resilient EOD Backfill Sanitization with As-Is Persistence, V3.0 Minimalist Autonomous Trading Console UI — 489 unit & integration tests passing).
 
 ---
 
@@ -113,7 +113,7 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
   - First Strategy Proving Ground: FCHB (First Candle High Breakout)
     • Opening Reference (09:15–09:19 AM): 5 1M candles define FCH, FCL, close, volume, range (0.15%–3.0%), and bullishness (close > open).
     • Volume Normalization: Standardized on time-normalized VOL_X >= 1.8 (rigid Rs. 1 Crore floor and 2.0x opening volume multiplier removed to avoid penalizing mid-caps or block-trade opens).
-    • Signal Detection (5M closes, 09:30–10:30 AM window): Close > FCH, BO_% <= 0.8%, VOL_X >= 1.8, 5M RSI 55–72, Close > VWAP, 15M Close > 15M VWAP, strong bullish candle (body >= 0.60, upper wick <= 0.25). Entries capped at 10:30 AM to avoid late-morning decay.
+    • Signal Detection (5M candles starting 09:30–10:15, i.e. decisions 09:35–10:20): Close > FCH, BO_% <= 0.8%, VOL_X >= 1.8, 5M RSI 55–72, Close > VWAP, 15M Close > 15M VWAP, strong bullish candle (body >= 0.60, upper wick <= 0.25). Entries capped at 10:30 AM to avoid late-morning decay.
     • Traffic-Light Quality Gate: Red / Yellow / Green matrix replaces opaque 0–100 scoring. Trades 1–3 permit up to 2 YELLOWs (0 RED). Trades 4–5 demand ALL GREEN (0 RED, 0 YELLOW).
     • Execution Model: Immediate Market Order on 5M signal confirmation (entry price = next 1M candle open price).
     • Single-Order State Machine: Resting STOPLOSS_MARKET order placed on broker exchange at firstCandleLow × 0.995. Trailing stops adjusted in-place via modifyOrder(orderId, newTriggerPrice). Early structural exits convert resting order via modifyOrder(orderId, orderType="MARKET"), completely eliminating reverse-position race condition.
@@ -214,9 +214,14 @@ V2.0 — Strategy Intelligence & First Strategy Vertical Slice     [NEXT MILESTO
         * Automated Tradability Promotion Gate: At 08:00 AM in Step 4 (`premarket-universe-sync`) of `PreMarketWorkflowService`, verifies previous-day EOD completion and `stock_prices` count $\ge 20$. Automatically promotes eligible active equities to `isTradable = true`. Strictly protects all indices (`MarketIndexRegistry`) as `isTradable = false` to prevent trade execution on benchmark/sector index scrips.
         * Automated Post-Market PostgreSQL Database Backup (`DatabaseBackupService`): Runs native compressed custom-format dumps (`pg_dump -Fc`) to configured directory (`DB_BACKUP_DIR`, e.g. `backups/mithron_prod_YYYY-MM-DD.dump`). Integrated into EOD reconciliation workflow via new stage `POSTMARKET_DATABASE_BACKUP` (`postmarket-database-backup`) in `WorkflowStatusService`. Enforces 10-file rolling retention policy (purges older dumps). Exposed via admin REST API `POST /api/v1/admin/backup/create`.
         * Dynamic Dual-Broker Runtime Control: Independent `trading.broker.live` and `trading.broker.paper` keys in `runtime_setting` (defaulting to `'KOTAK_NEO'`), allowing paper trading simulations and live broker routing to use independent statutory friction and order engines.
-        * Extended 60-Day Data Retention Window: Extended `retention.candles.days` and `retention.live.signals.days` from 30 to 60 days.
+        * Data retention: was 60 calendar days. Since v2.6.0 candle, context, baseline and data-status retention is counted in TRADING SESSIONS (`retention.candles.sessions`, default 150, Flyway V038); `retention.live.signals.days` stays 60 days. Housekeeping runs from the 07:00 `premarket-housekeeping` stage (the 05:30 `housekeeping.time` setting is not wired to any scheduler).
         * Simulation Capital Seeding: Seeded baseline `simulation.initial.capital` = `'50000.00'` in `runtime_setting`.
         * Verified State: **481 unit & integration tests passing (100% pass rate, 0 failures, 0 errors, 1 skipped)**.
+      - V2.6.0 Evidence Rebuild: COMPLETED & VERIFIED (514 tests via `mvn clean test`; details and evidence in `evidence_log.md`):
+        * Live volX now computed from the cache's own 1M candles over the stored baseline, with no fallback or default (the live snapshot volume path was dead since ~Oct 1).
+        * Retention counted in trading sessions (150); zero-symbol baseline stage succeeds but alerts; Kotak Neo is the default execution broker model and `trading.broker.paper` is applied at startup; DB dumps are named after the database; NIFTYBEES registered as a benchmark series.
+        * Historical backfill service (admin endpoints under `/admin/runtime/historical-backfill`): 1M candles one session per call, daily bars into `stock_prices`, stored as delivered, checkpointed, rate-limited, with derived data computed through the production code.
+        * Replay runner drives the real live conductor/cache/market filter, so live and replay share one code path.
 
 V3.0 - Advanced Risk & Research Laboratory  [RISK + RESEARCH]
   - Extend the V2 baseline risk and position management with advanced portfolio controls and risk policies

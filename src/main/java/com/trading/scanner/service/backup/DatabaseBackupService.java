@@ -55,9 +55,6 @@ public class DatabaseBackupService {
     @Value("${spring.datasource.password:postgres}")
     private String datasourcePassword;
 
-    @Value("${spring.profiles.active:dev}")
-    private String activeProfile;
-
     public record BackupResult(
             boolean success,
             String filePath,
@@ -85,7 +82,7 @@ public class DatabaseBackupService {
             DatabaseConnectionDetails db = parseConnectionDetails(datasourceUrl);
 
             String dateStr = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
-            String fileName = String.format("mithron_%s_%s.dump", activeProfile, dateStr);
+            String fileName = backupFileName(db.databaseName(), dateStr);
             Path targetFile = targetDir.resolve(fileName);
 
             List<String> command = new ArrayList<>(List.of(
@@ -150,6 +147,14 @@ public class DatabaseBackupService {
             log.error("[BACKUP] Exception occurred while executing database backup: {}", ex.getMessage(), ex);
             return new BackupResult(false, null, 0, 0, 0, "Backup error: " + ex.getMessage());
         }
+    }
+
+    /**
+     * Names the file after the database actually dumped (e.g. mithron_prod), never after the Spring
+     * profile, so a prod dump can never be mistaken for a dev dump.
+     */
+    static String backupFileName(String databaseName, String dateIso) {
+        return databaseName + "_" + dateIso + ".dump";
     }
 
     /**
