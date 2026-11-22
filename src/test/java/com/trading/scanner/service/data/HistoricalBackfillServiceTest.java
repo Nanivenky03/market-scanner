@@ -99,7 +99,7 @@ class HistoricalBackfillServiceTest {
                 .thenReturn(List.of(StockUniverse.builder().symbol("TCS").build()));
         stockPrices = mock(StockPriceRepository.class);
         candles = mock(MarketCandleRepository.class);
-        when(candles.findEarliestCandleTime(eq("NIFTY"), any())).thenReturn(LocalDate.of(2026, 10, 6).atTime(9, 15));
+        when(candles.findEarliestCandleTimeExcludingSource(eq("NIFTY"), any(), eq(HistoricalBackfillService.SOURCE))).thenReturn(LocalDate.of(2026, 10, 6).atTime(9, 15));
         when(candles.findDistinctSymbolsByTimeframeAndCandleTimeRange(any(), any(), any())).thenReturn(List.of());
         when(candles.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
         eodEntries = mock(EodDataEntryRepository.class);
@@ -306,5 +306,67 @@ class HistoricalBackfillServiceTest {
     void sessionExpiryIsRecognisedSoTheSessionCanBeRefreshed() {
         assertTrue(HistoricalBackfillService.isSessionProblem(new ProviderException("fetch failed. message=Invalid Token, errorcode=AG8001")));
         assertFalse(HistoricalBackfillService.isSessionProblem(new ProviderException("HTTP 403 forbidden")));
+    }
+
+    private static final String RATE_LIMITED =
+            "Angel One API request failed after retries for endpoint=HISTORICAL_CANDLE (Angel One rate limit exceeded)";
+
+    @Test
+    void aRateLimitedCallIsRetriedAtTheEndOfTheSessionInsteadOfBeingLost() throws Exception {
+        service.setCooldownMillis(1);
+        when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any()))
+                .thenThrow(new ProviderException(RATE_LIMITED))
+                .thenAnswer(inv -> new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(
+                        oneSession(inv.getArgument(1)), "[]"));
+
+        service.start(tcsRequest(1, false));
+        HistoricalBackfillService.RunStatus status = awaitFinished();
+
+        assertEquals("COMPLETED", status.state());
+        assertEquals(0, status.failures(), "a rate-limited call that succeeds on retry is not a failure");
+        assertEquals(3, status.candlesInserted());
+        verify(provider, times(2)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any());
+    }
+
+    @Test
+    void persistentRateLimitingCoolsDownThenStopsWithoutCountingAsApiFailures() throws Exception {
+        service.setCooldownMillis(1);
+        when(provider.fetchHistoricalBars(any(), any(), any())).thenReturn(List.of());
+        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any()))
+                .thenThrow(new ProviderException(RATE_LIMITED));
+        List<StockUniverse> many = new ArrayList<>();
+        for (int i = 0; i < 80; i++) {
+            many.add(StockUniverse.builder().symbol("S" + i).build());
+        }
+        when(universe.findByIsActiveTrueOrderBySymbolAsc()).thenReturn(many);
+
+        service.start(new HistoricalBackfillService.RunRequest(2, LocalDate.of(2026, 10, 2), null, 1, false, false));
+        HistoricalBackfillService.RunStatus status = awaitFinished();
+
+        assertEquals("ABORTED", status.state());
+        assertTrue(status.message().contains("kept rate limiting"), status.message());
+        verify(candles, never()).saveAll(anyList());
+    }
+
+    @Test
+    void rateLimitMessagesAreRecognised() {
+        assertTrue(HistoricalBackfillService.isRateLimit(new ProviderException(RATE_LIMITED)));
+        assertTrue(HistoricalBackfillService.isRateLimit(new RuntimeException("x", new ProviderException("AB1021 Too many requests"))));
+        assertFalse(HistoricalBackfillService.isRateLimit(new ProviderException("HTTP 403 forbidden")));
+    }
+
+    @Test
+    void theDefaultRangeIsAnchoredOnCandlesThisBackfillDidNotWrite() throws Exception {
+        when(provider.fetchHistoricalBars(any(), any(), any())).thenReturn(List.of());
+        when(provider.fetchHistoricalOneMinuteForBackfill(any(), any())).thenReturn(
+                new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(List.of(), "[]"));
+
+        service.start(new HistoricalBackfillService.RunRequest(3, null, List.of("TCS"), 1, true, false));
+        HistoricalBackfillService.RunStatus status = awaitFinished();
+
+        // earliest non-backfill NIFTY candle is 2026-10-06, so the range ends on the prior session (2026-10-05 in
+        // the weekday-only test calendar) and 3 sessions reach back to 2026-10-01
+        assertEquals(LocalDate.of(2026, 10, 1), status.fromDate());
     }
 }

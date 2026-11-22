@@ -48,10 +48,12 @@ public interface MarketCandleRepository
 
         long countByTimeframe(CandleTimeframe timeframe);
 
-        @Query("select min(c.candleTime) from MarketCandle c where c.symbol = :symbol and c.timeframe = :timeframe")
-        LocalDateTime findEarliestCandleTime(
+        @Query("select min(c.candleTime) from MarketCandle c where c.symbol = :symbol "
+                        + "and c.timeframe = :timeframe and c.source <> :excludedSource")
+        LocalDateTime findEarliestCandleTimeExcludingSource(
                         @Param("symbol") String symbol,
-                        @Param("timeframe") CandleTimeframe timeframe);
+                        @Param("timeframe") CandleTimeframe timeframe,
+                        @Param("excludedSource") String excludedSource);
 
         @Query("select distinct c.symbol from MarketCandle c where c.timeframe = :timeframe "
                         + "and c.candleTime >= :from and c.candleTime < :to")

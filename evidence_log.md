@@ -88,6 +88,14 @@ Behaviour:
 
 Expected effort: ~41,000 1M calls at 2 per second is about 6-9 hours; derived-data computation runs in parallel and baselines add up to ~3.5 hours.
 
+### 5b. First run on prod (2026-11-22) and v2.6.1
+
+- Dry run (TCS, RELIANCE, NIFTYBEES, NIFTY x 2 sessions): every symbol-day returned the full 375 candles; NIFTYBEES carries real volume, NIFTY volume is 0; raw responses archived.
+- Full run: about 40 symbol-days per minute, but ~18% of calls were rejected with "Angel One rate limit exceeded" at a steady ~9 per minute, escalating to 25 in a row after ~50 minutes, which aborted the v2.6.0 run (4 of 78 new sessions stored; everything stored is intact and checkpointed). Our load (~1 call/s, ~3,300 attempts in the hour) was well under the documented getCandleData limits (3/s, 180/min, 5,000/h), and other SmartAPI users report the same rejections far below the documented limits, so this looks like server-side throttling and not our pacing.
+- v2.6.0 flaw found: with no explicit `toDate`, a restarted run anchored on the earliest candle in the DB, which after the first run was a backfilled one, so it would have extended the range further into the past. v2.6.1 anchors on the earliest candle NOT written by the backfill. Until v2.6.1 is deployed always pass `"toDate":"2026-10-05"`.
+- v2.6.1: rate-limited calls are deferred and retried at the end of the session instead of being lost; 5 rate-limit rejections in a row trigger a cool-down (3 min x number of cool-downs without progress); the run aborts only after 5 cool-downs with not one success. Rate-limit rejections no longer count toward the 25-consecutive-failure abort.
+- Do not restart or redeploy the app while a run is active: derived data (5M/15M candles, contexts) for symbol-days still in flight would not be redone on resume.
+
 ## 6. Open items and known issues (not fixed in v2.6.0)
 
 1. Rule 5A/5B fire on a 1M-close sampled every 5 minutes, not on a completed 5M close (live and replay agree; the spec does not).

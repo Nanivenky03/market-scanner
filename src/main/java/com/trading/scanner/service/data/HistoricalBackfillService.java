@@ -84,6 +84,10 @@ public class HistoricalBackfillService {
     private static final int MIN_SESSIONS_FOR_BASELINE = 20;
     private static final int FULL_BASELINE_SYMBOLS = 450;
     private static final int MAX_CONSECUTIVE_FAILURES = 25;
+    /** Consecutive rate-limit rejections that trigger a cool-down instead of hammering on. */
+    private static final int RATE_LIMIT_BURST = 5;
+    /** Cool-downs in a row with not one successful call between them before the run gives up. */
+    private static final int MAX_COOLDOWNS_WITHOUT_PROGRESS = 5;
     private static final int DERIVE_THREADS = 3;
     private static final int MAX_PENDING_FINALIZERS = 2;
 
@@ -115,6 +119,12 @@ public class HistoricalBackfillService {
     private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
     private final ExecutorService runExecutor = Executors.newSingleThreadExecutor(r -> daemon(r, "hist-backfill-run"));
     private volatile Run current;
+    /** Base cool-down after a rate-limit burst; multiplied by the number of cool-downs without progress. */
+    private volatile long cooldownMillis = 180_000L;
+
+    void setCooldownMillis(long cooldownMillis) {
+        this.cooldownMillis = cooldownMillis;
+    }
 
     public HistoricalBackfillService(
             TradingCalendar tradingCalendar,
@@ -217,6 +227,9 @@ public class HistoricalBackfillService {
         final AtomicLong noData = new AtomicLong();
         final AtomicLong failures = new AtomicLong();
         final AtomicInteger consecutiveFailures = new AtomicInteger();
+        final AtomicInteger rateLimitStreak = new AtomicInteger();
+        final AtomicInteger cooldownsWithoutProgress = new AtomicInteger();
+        final AtomicLong rateLimitDeferrals = new AtomicLong();
         final Queue failureLog = new Queue();
         final Queue noDataLog = new Queue();
         final Queue dryRunLog = new Queue();
@@ -298,7 +311,10 @@ public class HistoricalBackfillService {
             Files.createDirectories(run.rawRoot);
 
             LocalDate latest = tradingCalendar.previousTradingDay(timeProvider.today());
-            LocalDateTime earliestNifty = marketCandleRepository.findEarliestCandleTime("NIFTY", CandleTimeframe.ONE_MINUTE);
+            // The default end point is anchored on the earliest candle NOT written by this backfill, so starting the
+            // run again resumes the same range instead of extending it further into the past.
+            LocalDateTime earliestNifty = marketCandleRepository.findEarliestCandleTimeExcludingSource(
+                    "NIFTY", CandleTimeframe.ONE_MINUTE, SOURCE);
             LocalDate toDate = run.request.toDate() != null
                     ? run.request.toDate()
                     : (earliestNifty != null
@@ -337,12 +353,24 @@ public class HistoricalBackfillService {
                         .findDistinctSymbolsByTimeframeAndCandleTimeRange(
                                 CandleTimeframe.ONE_MINUTE, date.atStartOfDay(), date.plusDays(1).atStartOfDay()));
 
+                List<Target> deferred = new ArrayList<>();
                 for (Target target : targets) {
                     if (shouldStop(run)) {
                         break;
                     }
                     run.currentSymbol = target.symbol();
-                    pullMinuteCandles(run, target, date, alreadyHaveCandles, derivePool, deriveTasks);
+                    if (pullMinuteCandles(run, target, date, alreadyHaveCandles, derivePool, deriveTasks, false)) {
+                        deferred.add(target);
+                    }
+                }
+                // Angel One rejects a share of calls as rate limited even far below its documented limits;
+                // those symbol-days get one more attempt at the end of the session instead of being lost.
+                for (Target target : deferred) {
+                    if (shouldStop(run)) {
+                        break;
+                    }
+                    run.currentSymbol = target.symbol();
+                    pullMinuteCandles(run, target, date, alreadyHaveCandles, derivePool, deriveTasks, true);
                 }
 
                 if (!run.request.dryRun() && !shouldStop(run)) {
@@ -450,20 +478,37 @@ public class HistoricalBackfillService {
     // ------------------------------------------------------------------------------------------------
 
     private void pullDailyBars(Run run, List<Target> targets, LocalDate from, LocalDate to) {
+        List<Target> deferred = new ArrayList<>();
         for (Target target : targets) {
             if (shouldStop(run)) {
                 return;
             }
             run.currentSymbol = target.symbol();
+            if (pullDailyBarsFor(run, target, from, to, false)) {
+                deferred.add(target);
+            }
+        }
+        for (Target target : deferred) { // one more attempt for every call Angel One rejected for rate limiting
+            if (shouldStop(run)) {
+                return;
+            }
+            run.currentSymbol = target.symbol();
+            pullDailyBarsFor(run, target, from, to, true);
+        }
+    }
+
+    /** @return true when the call was rate limited and should be retried later in this run */
+    private boolean pullDailyBarsFor(Run run, Target target, LocalDate from, LocalDate to, boolean finalAttempt) {
+        {
             try {
                 List<DailyBarDto> bars = callWithSessionRefresh(run,
                         () -> provider.fetchHistoricalBars(target.symbol(), from, to));
                 run.apiCalls.incrementAndGet();
-                run.consecutiveFailures.set(0);
+                onApiSuccess(run);
                 writeRaw(run, Paths.get("daily", target.symbol() + ".json"), bars);
 
                 if (run.request.dryRun() || bars == null) {
-                    continue;
+                    return false;
                 }
                 for (DailyBarDto bar : bars) {
                     if (bar == null || bar.tradingDate() == null) {
@@ -486,8 +531,13 @@ public class HistoricalBackfillService {
                     run.dailyBarsInserted.incrementAndGet();
                 }
             } catch (Exception ex) {
+                if (!finalAttempt && isRateLimit(ex)) {
+                    onRateLimit(run);
+                    return true;
+                }
                 recordFailure(run, target.symbol(), null, ex);
             }
+            return false;
         }
     }
 
@@ -495,12 +545,13 @@ public class HistoricalBackfillService {
     // 1M candles -> market_candles
     // ------------------------------------------------------------------------------------------------
 
-    private void pullMinuteCandles(Run run, Target target, LocalDate date, Set<String> alreadyHaveCandles,
-                                   ExecutorService derivePool, List<Future<?>> deriveTasks) {
+    /** @return true when the call was rate limited and should be retried later in this run */
+    private boolean pullMinuteCandles(Run run, Target target, LocalDate date, Set<String> alreadyHaveCandles,
+                                      ExecutorService derivePool, List<Future<?>> deriveTasks, boolean finalAttempt) {
         String symbol = target.symbol();
         if (alreadyHaveCandles.contains(symbol)) {
             run.skippedAlreadyPresent.incrementAndGet();
-            return;
+            return false;
         }
         Optional<com.trading.scanner.model.EodDataEntry> checkpoint =
                 eodDataEntryRepository.findBySymbolAndExchangeAndTradingDate(symbol, EXCHANGE, date);
@@ -509,7 +560,7 @@ public class HistoricalBackfillService {
                     && checkpoint.get().getActualMinuteCount() == 0;
             if (!(wasNoData && run.request.retryNoData())) {
                 run.skippedAlreadyPresent.incrementAndGet();
-                return;
+                return false;
             }
         }
 
@@ -517,13 +568,13 @@ public class HistoricalBackfillService {
             AngelOneMarketDataProvider.HistoricalOneMinuteFetch fetch = callWithSessionRefresh(run,
                     () -> provider.fetchHistoricalOneMinuteForBackfill(symbol, date));
             run.apiCalls.incrementAndGet();
-            run.consecutiveFailures.set(0);
+            onApiSuccess(run);
             writeRaw(run, Paths.get(date.toString(), symbol + ".json"), fetch.rawResponseJson());
 
             List<MarketCandle> candles = fetch.candles();
             if (run.request.dryRun()) {
                 run.dryRunLog.add(describe(symbol, date, candles));
-                return;
+                return false;
             }
 
             if (candles.isEmpty()) {
@@ -531,7 +582,7 @@ public class HistoricalBackfillService {
                 run.noDataLog.add(Map.of("symbol", symbol, "date", date.toString()));
                 eodDataEntryService.complete(symbol, EXCHANGE, date, DataStatus.PARTIAL, 0, 0, 0, 0, 0, 0, SOURCE,
                         "Angel One returned no candles for this session");
-                return;
+                return false;
             }
 
             LocalDateTime now = timeProvider.nowDateTime();
@@ -552,8 +603,13 @@ public class HistoricalBackfillService {
 
             deriveTasks.add(derivePool.submit(() -> deriveSymbolDay(run, target, date, toInsert.size())));
         } catch (Exception ex) {
+            if (!finalAttempt && isRateLimit(ex)) {
+                onRateLimit(run);
+                return true;
+            }
             recordFailure(run, symbol, date, ex);
         }
+        return false;
     }
 
     private Map<String, Object> describe(String symbol, LocalDate date, List<MarketCandle> candles) {
@@ -690,8 +746,8 @@ public class HistoricalBackfillService {
         run.failureLog.add(entry);
         run.failures.incrementAndGet();
         log.warn("[HIST_BACKFILL] failed symbol={} date={}: {}", symbol, date, message);
-        if (untradableInstrument) {
-            return; // a missing instrument is a data issue, not a sign the session or rate limit is broken
+        if (untradableInstrument || isRateLimit(ex)) {
+            return; // a missing instrument is a data issue; rate limiting is handled by cool-downs, not aborts
         }
         if (run.consecutiveFailures.incrementAndGet() >= MAX_CONSECUTIVE_FAILURES) {
             run.aborted = true;
@@ -699,6 +755,54 @@ public class HistoricalBackfillService {
                     + "). Stopping to avoid hammering Angel One; fix the cause and start again to resume.";
             log.error("[HIST_BACKFILL] run={} aborted: {}", run.runId, run.message);
         }
+    }
+
+    static boolean isRateLimit(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            String m = t.getMessage() == null ? "" : t.getMessage().toLowerCase(Locale.ROOT);
+            if (m.contains("rate limit") || m.contains("ab1021") || m.contains("too many requests")
+                    || m.contains("exceeding access rate")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void onApiSuccess(Run run) {
+        run.consecutiveFailures.set(0);
+        run.rateLimitStreak.set(0);
+        run.cooldownsWithoutProgress.set(0);
+    }
+
+    /** A burst of rate-limit rejections triggers a cool-down; many cool-downs with no success abort the run. */
+    private void onRateLimit(Run run) {
+        run.rateLimitDeferrals.incrementAndGet();
+        if (run.rateLimitStreak.incrementAndGet() < RATE_LIMIT_BURST) {
+            return;
+        }
+        run.rateLimitStreak.set(0);
+        int cooldowns = run.cooldownsWithoutProgress.incrementAndGet();
+        if (cooldowns > MAX_COOLDOWNS_WITHOUT_PROGRESS) {
+            run.aborted = true;
+            run.message = "Angel One kept rate limiting through " + MAX_COOLDOWNS_WITHOUT_PROGRESS
+                    + " cool-downs without a single success. Stopping; start again later to resume.";
+            log.error("[HIST_BACKFILL] run={} aborted: {}", run.runId, run.message);
+            return;
+        }
+        long waitMillis = cooldownMillis * cooldowns;
+        run.message = "Rate limited by Angel One; cooling down " + (waitMillis / 1000) + "s (cool-down "
+                + cooldowns + "/" + MAX_COOLDOWNS_WITHOUT_PROGRESS + ")";
+        log.warn("[HIST_BACKFILL] run={} {}", run.runId, run.message);
+        long until = System.currentTimeMillis() + waitMillis;
+        while (System.currentTimeMillis() < until && !run.stopRequested) {
+            try {
+                Thread.sleep(Math.min(1_000L, Math.max(1L, until - System.currentTimeMillis())));
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        run.message = "";
     }
 
     private static void awaitAll(List<Future<?>> tasks) {
