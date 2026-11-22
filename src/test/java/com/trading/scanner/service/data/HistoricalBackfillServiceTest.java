@@ -369,4 +369,40 @@ class HistoricalBackfillServiceTest {
         // the weekday-only test calendar) and 3 sessions reach back to 2026-10-01
         assertEquals(LocalDate.of(2026, 10, 1), status.fromDate());
     }
+
+    @Test
+    void aSymbolDayRejectedRepeatedlyKeepsGoingBackIntoTheQueueUntilItSucceeds() throws Exception {
+        service.setCooldownMillis(1);
+        when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any()))
+                .thenThrow(new ProviderException(RATE_LIMITED))
+                .thenThrow(new ProviderException(RATE_LIMITED))
+                .thenAnswer(inv -> new AngelOneMarketDataProvider.HistoricalOneMinuteFetch(
+                        oneSession(inv.getArgument(1)), "[]"));
+
+        service.start(tcsRequest(1, false));
+        HistoricalBackfillService.RunStatus status = awaitFinished();
+
+        assertEquals("COMPLETED", status.state());
+        assertEquals(0, status.failures());
+        assertEquals(3, status.candlesInserted());
+        verify(provider, times(3)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any());
+    }
+
+    @Test
+    void aSymbolDayStillRejectedAfterAllRoundsIsRecordedAsAFailureAndLeftUncheckpointed() throws Exception {
+        service.setCooldownMillis(1);
+        when(provider.fetchHistoricalBars(eq("TCS"), any(), any())).thenReturn(List.of());
+        when(provider.fetchHistoricalOneMinuteForBackfill(eq("TCS"), any()))
+                .thenThrow(new ProviderException(RATE_LIMITED));
+
+        service.start(tcsRequest(1, false));
+        HistoricalBackfillService.RunStatus status = awaitFinished();
+
+        assertEquals(1, status.failures());
+        // the first pass plus three retry rounds
+        verify(provider, times(4)).fetchHistoricalOneMinuteForBackfill(eq("TCS"), any());
+        verify(eodService, never()).complete(any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), anyInt(),
+                anyInt(), anyInt(), any(), any());
+    }
 }

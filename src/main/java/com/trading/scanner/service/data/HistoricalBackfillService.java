@@ -88,6 +88,8 @@ public class HistoricalBackfillService {
     private static final int RATE_LIMIT_BURST = 5;
     /** Cool-downs in a row with not one successful call between them before the run gives up. */
     private static final int MAX_COOLDOWNS_WITHOUT_PROGRESS = 5;
+    /** Retry rounds for symbol-days Angel One rejected as rate limited; the last round records real failures. */
+    private static final int MAX_RETRY_ROUNDS = 3;
     private static final int DERIVE_THREADS = 3;
     private static final int MAX_PENDING_FINALIZERS = 2;
 
@@ -365,12 +367,23 @@ public class HistoricalBackfillService {
                 }
                 // Angel One rejects a share of calls as rate limited even far below its documented limits;
                 // those symbol-days get one more attempt at the end of the session instead of being lost.
-                for (Target target : deferred) {
-                    if (shouldStop(run)) {
-                        break;
+                List<Target> pending = deferred;
+                for (int round = 1; round <= MAX_RETRY_ROUNDS && !pending.isEmpty() && !shouldStop(run); round++) {
+                    boolean lastRound = round == MAX_RETRY_ROUNDS;
+                    if (round > 1) {
+                        pauseBetweenRounds(run);
                     }
-                    run.currentSymbol = target.symbol();
-                    pullMinuteCandles(run, target, date, alreadyHaveCandles, derivePool, deriveTasks, true);
+                    List<Target> stillRejected = new ArrayList<>();
+                    for (Target target : pending) {
+                        if (shouldStop(run)) {
+                            break;
+                        }
+                        run.currentSymbol = target.symbol();
+                        if (pullMinuteCandles(run, target, date, alreadyHaveCandles, derivePool, deriveTasks, lastRound)) {
+                            stillRejected.add(target);
+                        }
+                    }
+                    pending = stillRejected;
                 }
 
                 if (!run.request.dryRun() && !shouldStop(run)) {
@@ -488,13 +501,28 @@ public class HistoricalBackfillService {
                 deferred.add(target);
             }
         }
-        for (Target target : deferred) { // one more attempt for every call Angel One rejected for rate limiting
-            if (shouldStop(run)) {
-                return;
+        List<Target> pending = deferred;
+        for (int round = 1; round <= MAX_RETRY_ROUNDS && !pending.isEmpty() && !shouldStop(run); round++) {
+            boolean lastRound = round == MAX_RETRY_ROUNDS;
+            if (round > 1) {
+                pauseBetweenRounds(run);
             }
-            run.currentSymbol = target.symbol();
-            pullDailyBarsFor(run, target, from, to, true);
+            List<Target> stillRejected = new ArrayList<>();
+            for (Target target : pending) { // calls Angel One rejected for rate limiting go back in the queue
+                if (shouldStop(run)) {
+                    return;
+                }
+                run.currentSymbol = target.symbol();
+                if (pullDailyBarsFor(run, target, from, to, lastRound)) {
+                    stillRejected.add(target);
+                }
+            }
+            pending = stillRejected;
         }
+    }
+
+    private void pauseBetweenRounds(Run run) {
+        sleepUnlessStopped(run, cooldownMillis);
     }
 
     /** @return true when the call was rate limited and should be retried later in this run */
@@ -793,6 +821,11 @@ public class HistoricalBackfillService {
         run.message = "Rate limited by Angel One; cooling down " + (waitMillis / 1000) + "s (cool-down "
                 + cooldowns + "/" + MAX_COOLDOWNS_WITHOUT_PROGRESS + ")";
         log.warn("[HIST_BACKFILL] run={} {}", run.runId, run.message);
+        sleepUnlessStopped(run, waitMillis);
+        run.message = "";
+    }
+
+    private static void sleepUnlessStopped(Run run, long waitMillis) {
         long until = System.currentTimeMillis() + waitMillis;
         while (System.currentTimeMillis() < until && !run.stopRequested) {
             try {
@@ -802,7 +835,6 @@ public class HistoricalBackfillService {
                 break;
             }
         }
-        run.message = "";
     }
 
     private static void awaitAll(List<Future<?>> tasks) {
